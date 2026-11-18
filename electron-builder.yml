@@ -1,0 +1,39 @@
+# The desktop app packaged (npm run package): an installer and a zip for Windows x64, in release/.
+# The app's own files (its archive) are the Electron side only. The built page (the engine's TypeScript in it) and the
+# editor's own models sit beside them in the resources folder: the app needs nothing else installed.
+appId: com.top-race.editor
+productName: Top Race Editor
+copyright: Copyright © 2026 Alberto Wollmann Dietrich
+artifactName: top-race-editor-${version}-${os}-${arch}.${ext}
+# (the editor is in English: Chromium's other languages left out)
+electronLanguages: [en-US]
+directories:
+  output: release
+  buildResources: desktop/resources
+files:
+  - package.json
+  - desktop/*.mjs
+  - desktop/*.cjs
+  - "!desktop/launch.mjs"
+extraResources:
+  - from: dist
+    to: dist
+    filter: ["**/*", "!**/*.map"]
+  # (the editor's own models, their one catalogue and the games' scripts: the objects a track lays of them, by the
+  # engine window)
+  - from: models
+    to: models
+    filter: ["*.glb", "catalogue.json", "scripts/**/*"]
+win:
+  icon: desktop/resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Top Race Editor
+publish: null

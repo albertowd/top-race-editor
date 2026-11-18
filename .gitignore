@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.scannerwork/
+*.tsbuildinfo
+.env
+.cache/
+
+# the packaged app (npm run package)
+release/
+
+# what the engine's tests by hand made, to look at
+test-out/

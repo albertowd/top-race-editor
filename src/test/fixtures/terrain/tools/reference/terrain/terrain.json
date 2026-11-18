@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "place": {
+    "location": "tools/reference/elevation/location.json"
+  },
+  "image": {
+    "file": "tools/reference/surroundings/image.png",
+    "area_x_z": [[-60.0, 60.0], [-50.0, 50.0]],
+    "metres_a_pixel": 1.0
+  },
+  "photo": {
+    "file": "source/textures/photo.png",
+    "size_m": 64.0
+  },
+  "heights": {
+    "files": ["tools/reference/elevation/heights_*.json"],
+    "offset_m": 9.6
+  },
+  "buildings": {
+    "files": ["tools/reference/elevation/osm_*.json"],
+    "buffer_m": 4.0
+  },
+  "grid": {
+    "area_x_z": [[-80.0, 80.0], [-70.0, 70.0]],
+    "cell_m": 10.0
+  },
+  "filters": {
+    "picture_trees": {
+      "lum": 75.0,
+      "sd": 12.0
+    },
+    "photo_trees": {
+      "lum": 84.0,
+      "sd": 13.0
+    },
+    "tree_near_m": 3.0,
+    "tree_share": 0.3,
+    "over_m": 1.5,
+    "opening_m": 35.0,
+    "wide_over_m": 4.0,
+    "wide_opening_m": 90.0,
+    "fills_m": [20.0, 40.0, 80.0],
+    "enough_a_cell": 0.16,
+    "areas": [
+      {
+        "kind": "ground",
+        "ring": [[-70.0, 50.0], [-55.0, 50.0], [-55.0, 63.0], [-70.0, 63.0]]
+      },
+      {
+        "kind": "not_ground",
+        "ring": [[40.0, 30.0], [60.0, 30.0], [50.0, 45.0]]
+      }
+    ]
+  },
+  "edits": [
+    {
+      "type": "raster",
+      "file": "bump.npz"
+    },
+    {
+      "type": "offset",
+      "ring": [[-10.0, -10.0], [5.0, -10.0], [5.0, 0.0], [-10.0, 0.0]],
+      "by": -0.8,
+      "ease_m": 4.0
+    },
+    {
+      "type": "flat",
+      "ring": [[30.0, 10.0], [50.0, 10.0], [50.0, 25.0], [30.0, 25.0]],
+      "at": [40.0, 17.0],
+      "plus": 0.3,
+      "slope": [0.01, -0.02],
+      "ease_m": 3.0
+    },
+    {
+      "type": "smooth",
+      "ring": [[-30.0, -40.0], [-10.0, -40.0], [-10.0, -25.0], [-30.0, -25.0]],
+      "sigma_m": 3.0,
+      "ease_m": 2.0
+    },
+    {
+      "type": "offset",
+      "ring": [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]],
+      "by": 9.0,
+      "off": true
+    }
+  ]
+}
