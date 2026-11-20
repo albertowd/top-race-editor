@@ -59,7 +59,7 @@ export function kindOf(kind: unknown): KerbKind {
 export const DASH = 0.5;
 export const GAP = 0.5;
 /** metres: a ramp + concrete rumble's concrete, behind its ramp, unless it says */
-export const BACK = 0.5;
+export const BACK = 0.75;
 /** metres from a road's end over which its rows turn into its end row (as the track's roads.py) */
 export const END_BLEND = 4;
 /** where a road turns tighter than it is wide, its inner side at most this much of the curve's radius */
@@ -69,7 +69,8 @@ export const TURN_BASE = 0.2;
 
 export const LINE_PAD = 0.2;
 export const LINE_WIDTH = 0.12;
-export const KERB_WIDTH = 1;
+/** metres a rumble is wide, unless it says (a new one's width) */
+export const KERB_WIDTH = 0.6;
 export const KERB_TAPER = 2;
 export const RUNOFF_WIDTH = 2;
 export const RUNOFF_EASE = 8;

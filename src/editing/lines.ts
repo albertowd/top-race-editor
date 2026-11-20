@@ -105,8 +105,8 @@ export function pitFromRoads(lines: RacingLines, paths: { X: number[]; Z: number
 
 // ---------------------------------------------------------------- edits (on drafts)
 
-/** The pit line's ends put on the fast line, where it leaves and joins it, their handles along it (as long as they
- * were). */
+/** The pit line's ends put on the fast line, where it leaves and joins it; their handles as they are set (the way it
+ * leaves and joins, and how hard: edited as any node's), one of none along the fast line END_HANDLE long. */
 export function keepPitOn(lines: RacingLines | undefined): void {
   const fast = lines?.fast;
   const pit = lines?.pit;
@@ -115,14 +115,12 @@ export function keepPitOn(lines: RacingLines | undefined): void {
   const b = pointAlong(fast, pit.joins);
   const first = pit.curve[0] as WallNode;
   const last = pit.curve[pit.curve.length - 1] as WallNode;
-  const lo = Math.hypot(first.out[0], first.out[1]) || END_HANDLE;
-  const li = Math.hypot(last.in[0], last.in[1]) || END_HANDLE;
   first.p = a.p;
   first.in = [0, 0];
-  first.out = [a.t[0] * lo, a.t[1] * lo];
+  if (Math.hypot(first.out[0], first.out[1]) < 1e-6) first.out = [a.t[0] * END_HANDLE, a.t[1] * END_HANDLE];
   last.p = b.p;
   last.out = [0, 0];
-  last.in = [-b.t[0] * li, -b.t[1] * li];
+  if (Math.hypot(last.in[0], last.in[1]) < 1e-6) last.in = [-b.t[0] * END_HANDLE, -b.t[1] * END_HANDLE];
 }
 
 /** The fork (FORK) or the merge (MERGE) moved along the fast line to the point of it nearest (x, z). */
@@ -167,17 +165,19 @@ export function addLineNode(lay: LayoutObjects, kind: LineKind, x: number, z: nu
     return 1;
   }
   const c = line.curve;
-  // (a pit line's ends are the fast line's: a node between them only)
+  // (a pit line's ends are the fast line's: a node between them only, where it is clicked; on it, the curve split
+  // there, its shape kept; off it, into the piece nearest)
   if (kind === 'pit') {
     const near = nearestOnWall(line, x, z);
-    if (near.d > tol) {
-      // (off it: into the piece nearest, as the wall's own adding would at its end)
-      const i = Math.min(Math.max(near.seg + 1, 1), c.length - 1);
+    let i: number;
+    if (near.d <= tol && near.t > 0 && near.t < 1) i = splitWall(line, near.seg, near.t);
+    else {
+      i = Math.min(Math.max(near.seg + 1, 1), c.length - 1);
       c.splice(i, 0, { p: [x, z], in: [0, 0], out: [0, 0] });
       smoothWall(line, i);
-      keepPitOn(lines);
-      return i;
     }
+    keepPitOn(lines);
+    return i;
   }
   const before = c.length;
   const i = addNode(line, x, z, tol);

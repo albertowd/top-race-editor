@@ -246,7 +246,9 @@ export const PROFILES: Record<string, Profile> = {
   },
 };
 /** metres of concrete behind a ramp + concrete rumble's ramp, unless it says */
-export const BACK = 0.5;
+export const BACK = 0.75;
+/** metres a rumble is wide, unless it says */
+export const KERB_W = 0.6;
 /** a ramp + concrete rumble: one piece, its ramp (across, up, v), then the concrete back down across its back */
 const RAMP_CONCRETE = {
   ramp: [
@@ -628,7 +630,7 @@ export function kerbGeometry(
   ground?: (x: number, z: number) => number,
 ): KerbMesh[] {
   const kind = kindOf(k);
-  const wRamp = k.width ?? 1;
+  const wRamp = k.width ?? KERB_W;
   let pts: [number, number, number][];
   let uM: number;
   let mat: string;
@@ -999,8 +1001,8 @@ export const CHECKER_ROWS = 2;
 export const CHECKER_IN = 0.3;
 /** metres the start line's front is ahead of the middle of the grid's first slot (a kart's nose and a little more) */
 export const START_AHEAD = 1.5;
-/** metres wide a solid start line is, along the road */
-export const START_LINE_W = 0.3;
+/** metres wide a solid start line is, along the road: as the roads' edge lines are */
+export const START_LINE_W = LINE_W;
 /** metres either way across the road the start line is looked for, from where it crosses the road's middle */
 const ACROSS_REACH = 20;
 

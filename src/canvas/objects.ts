@@ -472,7 +472,8 @@ function drawLines(f: ObjectsFrame) {
     if (!me) continue;
     const hs = 4 * px;
     for (const [j, n] of line.curve.entries()) {
-      if (kind === 'pit' && (j === 0 || j === line.curve.length - 1)) continue;
+      // (a pit line's ends: their handles (the way it leaves and joins), their places the fork's and merge's diamonds)
+      const end = kind === 'pit' && (j === 0 || j === line.curve.length - 1);
       g.strokeStyle = '#cfe6ff';
       g.lineWidth = px;
       for (const h of ['in', 'out'] as const) {
@@ -486,6 +487,7 @@ function drawLines(f: ObjectsFrame) {
         g.fillStyle = picked?.j === j && picked.h === h ? '#ffffff' : '#cfe6ff';
         g.fill();
       }
+      if (end) continue;
       g.fillStyle = picked?.j === j && !picked.h ? '#ffffff' : PICKED;
       g.fillRect(n.p[0] - hs, n.p[1] - hs, hs * 2, hs * 2);
     }

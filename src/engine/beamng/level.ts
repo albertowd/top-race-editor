@@ -606,7 +606,8 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
   const tiles = (await exists(shapes))
     ? (await files.list(shapes)).filter((f) => f.startsWith('grass_') && f.endsWith('.dae'))
     : [];
-  if (state.grass !== grassKey || !tiles.length) {
+  // (made again when what it hangs on changed, or its tiles are gone: none made last time, none to be gone)
+  if (state.grass !== grassKey || (!tiles.length && state.grassTiles !== 0)) {
     const blades = await bladesTexture();
     await put(`${grassDir}/blades.png`, blades.png);
     await put(`${grassDir}/blades_opacity.png`, blades.opacity);
@@ -629,6 +630,7 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
       if (!clumps.has(f.slice('grass_'.length, -'.dae'.length))) await files.remove?.(`${shapes}/${f}`);
     for (const [key, mesh] of clumps) await put(`${shapes}/grass_${key}.dae`, writeDae([mesh]));
     state.grass = grassKey;
+    state.grassTiles = clumps.size;
     log(`  grass: ${at.length} clumps`);
   } else {
     keep(`${grassDir}/blades.png`);
@@ -786,7 +788,7 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
   }
   for (const f of Object.keys(texState)) if (!written.has(`${texDir}/${f}`)) delete texState[f];
   for (const k of Object.keys(state))
-    if (!['format', 'grass', 'textures'].includes(k) && !stems.includes(k)) delete state[k];
+    if (!['format', 'grass', 'grassTiles', 'textures'].includes(k) && !stems.includes(k)) delete state[k];
   await put(`${shapes}/main.materials.json`, JSON.stringify(materials, null, 1));
 
   /** A model's shape as the level's object: in the level (its MissionGroup), or in a race's prefab (tag: whose). */

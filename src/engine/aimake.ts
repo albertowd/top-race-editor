@@ -181,8 +181,10 @@ export function aiLineOf(
         brake,
         ((way[i] as number) * (v[i] as number) ** 2) / r / 9.81,
         r,
-        side(lx, lz),
+        // (AC's left first: towards (fz, -fx), the other side of the roads' left, as the recorded lines have it;
+        // the other way round, AC finds the grid off its road and its karts stop)
         side(-lx, -lz),
+        side(lx, lz),
         camber,
         way[i] as number,
         -hx / nm,

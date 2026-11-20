@@ -24,6 +24,28 @@ function oval(): RacingLine {
 }
 
 describe('a racing line made an AI line', () => {
+  it('has the road to AC’s left first: towards (fz, -fx), as the recorded lines have it', () => {
+    // (a straight up +z at x 30 on a road from x 28 to 36: AC's left, +x, 6 m; its right 2 m)
+    const line: RacingLine = {
+      curve: [
+        { p: [30, -100], in: [0, 0], out: [0, 50] },
+        { p: [30, 100], in: [0, -50], out: [0, 0] },
+      ],
+      closed: false,
+    };
+    const ai = aiLineOf(
+      line,
+      () => 0,
+      (x) => x >= 28 && x <= 36,
+      STEP,
+    );
+    const mid = Math.floor(ai.along.length / 2);
+    expect(ai.extra[mid * 18 + 13]).toBeCloseTo(0, 6);
+    expect(ai.extra[mid * 18 + 15]).toBeCloseTo(1, 6);
+    expect(ai.extra[mid * 18 + 5]).toBeCloseTo(6, 0);
+    expect(ai.extra[mid * 18 + 6]).toBeCloseTo(2, 0);
+  });
+
   it('is driven round the oval as a kart would', () => {
     const line = oval();
     const flat = () => 0.5;

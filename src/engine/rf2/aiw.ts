@@ -105,7 +105,8 @@ export const AUX_SPOTS = 8;
 const PATHS = ['FASTEST', 'LEFT', 'RIGHT'] as const;
 const PATH_TIME = [1, 1.05, 1.05];
 
-// (aimake's 18 values a point: its speed, the road to the side of (-wz, wx) and to the other, the floor's normal, its way)
+// (aimake's 18 values a point: its speed, the road to the side of (wz, -wx) (AC's left) and to the other, the floor's
+// normal, its way)
 const E = 18;
 const SPEED = 0;
 const SIDE_A = 5;
@@ -219,9 +220,9 @@ function denseOf(ai: AiLine, closed: boolean, axes: Axes): Dense {
     const dir = (v: V3) => sub(axes(...add(at, v)), p);
     const nm = unit(dir([e(NORMAL), e(NORMAL + 1), e(NORMAL + 2)]));
     const w = unit(dir([e(WAY), e(WAY + 1), e(WAY + 2)]));
-    // (aimake's first side is towards (-wz, wx) of its way: which of rFactor's it is, its perp told)
+    // (aimake's first side is towards (wz, -wx) of its way: which of rFactor's it is, its perp told)
     const flat = Math.hypot(e(WAY), e(WAY + 2)) || 1;
-    const a = dir([-e(WAY + 2) / flat, 0, e(WAY) / flat]);
+    const a = dir([e(WAY + 2) / flat, 0, -e(WAY) / flat]);
     const right = dot(a, cross(nm, w)) > 0;
     P.push(p);
     N.push(nm);

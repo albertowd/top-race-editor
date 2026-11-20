@@ -1,5 +1,5 @@
 // A layout's racing lines edited (lines.ts, and through the objects' edits): the pit line's ends kept on the fast line
-// where it leaves and joins it, their handles along it; the fork and the merge dragged along the fast line; the pit
+// where it leaves and joins it, their handles as given; the fork and the merge dragged along the fast line; the pit
 // line following the fast line moved; nodes added and taken away, as many kept as a line needs.
 import { describe, expect, it } from 'vitest';
 import type { LayoutObjects, RacingLine, TrackObjects, WallNode } from '../domain/types';
@@ -40,7 +40,7 @@ function layout(): LayoutObjects {
 const objectsOf = (lay: LayoutObjects): TrackObjects => ({ version: 3, layouts: { a: lay }, objects: [], marks: [] });
 
 describe('the racing lines', () => {
-  it('keeps the pit line’s ends on the fast line where it leaves and joins it, their handles along it', () => {
+  it('keeps the pit line’s ends on the fast line where it leaves and joins it, new handles along it', () => {
     const lay = layout();
     const pit = lay.lines?.pit as RacingLine;
     const fast = lay.lines?.fast as RacingLine;
@@ -120,5 +120,47 @@ describe('the racing lines', () => {
     const o = objectsOf(lay);
     expect(removeObject(o, 'a', { kind: 'fast', i: 0, j: -1 })).toBe(true);
     expect(lay.lines).toBeUndefined();
+  });
+
+  it('adds a pit line’s node where it is clicked on it, between its ends, its shape kept', () => {
+    const lay = layout();
+    const pit = lay.lines?.pit as RacingLine;
+    const before = wallPath(pit, 0.25);
+    // (a point on its curve, a third of the way along)
+    const k = Math.round(before.P.length / 3);
+    const [x, z] = before.P[k] as [number, number];
+    const i = addLineNode(lay, 'pit', x, z, 0.5) as number;
+    expect(i).toBeGreaterThan(0);
+    expect(i).toBeLessThan(pit.curve.length - 1);
+    expect(pit.curve[i]?.p[0]).toBeCloseTo(x, 1);
+    expect(pit.curve[i]?.p[1]).toBeCloseTo(z, 1);
+    expect(wallPath(pit, 0.25).length).toBeCloseTo(before.length, 0);
+    // (its ends still the fork and the merge)
+    const fm = forkAndMerge(lay.lines);
+    expect(pit.curve[0]?.p[0]).toBeCloseTo(fm?.fork[0] as number, 9);
+    expect(pit.curve.at(-1)?.p[0]).toBeCloseTo(fm?.merge[0] as number, 9);
+  });
+
+  it('keeps the way and the pull a pit line’s ends are given, their places on the fast line', async () => {
+    const { moveObjectHandle } = await import('./objects');
+    const lay = layout();
+    const o = objectsOf(lay);
+    const pit = lay.lines?.pit as RacingLine;
+    const first = pit.curve[0] as WallNode;
+    // (its fork's handle turned out and made longer, by dragging its end)
+    const aim: [number, number] = [first.p[0] + 6, first.p[1] + 8];
+    moveObjectHandle(o, { kind: 'pit', i: 0, j: 0, h: 'out' }, aim[0], aim[1], false, 'a');
+    expect(first.out[0]).toBeCloseTo(6, 6);
+    expect(first.out[1]).toBeCloseTo(8, 6);
+    // (the fork dragged along the fast line: there, its handle as given)
+    const ahead = pointAlong(lay.lines?.fast as RacingLine, 20).p;
+    const fm = forkAndMerge(lay.lines) as { fork: [number, number] };
+    moveObject(o, 'a', { kind: 'pit', i: 0, j: FORK }, ahead[0] - fm.fork[0], ahead[1] - fm.fork[1], false);
+    expect(first.p[0]).toBeCloseTo(ahead[0], 1);
+    expect(first.out).toEqual([6, 8]);
+    // (one with none: along the fast line)
+    first.out = [0, 0];
+    keepPitOn(lay.lines);
+    expect(Math.hypot(...first.out)).toBeGreaterThan(0);
   });
 });

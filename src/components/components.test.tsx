@@ -162,7 +162,7 @@ describe('lines and rumbles', () => {
     expect(screen.getByLabelText('Dashes')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Add Right Rumble' }));
     await userEvent.selectOptions(screen.getByLabelText('Rumble kind'), 'ramp_concrete');
-    expect(screen.getByLabelText('Concrete')).toHaveValue(0.5);
+    expect(screen.getByLabelText('Concrete')).toHaveValue(0.75);
     const lines = screen.getByRole('region', { name: 'Lines' });
     await userEvent.click(within(lines).getAllByRole('row')[1].querySelector('td') as HTMLElement);
     expect(ed.get().sel).toMatchObject({ line: 0, kerb: -1 });

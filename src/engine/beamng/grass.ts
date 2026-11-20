@@ -95,43 +95,93 @@ export function grassPlaces(
   photo: (texture: string) => Picture | undefined,
   line: [number, number][],
 ): [number, number, number][] {
-  // (the triangles grass grows on or that keep it off: their corners, uvs, which, their photo)
-  const T: number[] = [];
-  const UV: number[] = [];
-  const isGrass: boolean[] = [];
-  const pic: (Picture | undefined)[] = [];
-  for (const meshes of models)
-    for (const m of meshes) {
-      const mat = (m.material ? lib[m.material] : undefined) ?? {};
-      if (!(m.grass || mat.covers_grass) || !m.visible) continue;
-      const p = m.grass && mat.colour ? photo(mat.colour) : undefined;
-      for (let f = 0; f < m.f.length; f += 3) {
-        const c = [m.f[f] as number, m.f[f + 1] as number, m.f[f + 2] as number];
-        if (c[0] === c[1] || c[1] === c[2] || c[0] === c[2]) continue;
-        for (const k of c) {
-          T.push(m.v[k * CORNER] as number, m.v[k * CORNER + 1] as number, m.v[k * CORNER + 2] as number);
-          UV.push(m.v[k * CORNER + 6] as number, m.v[k * CORNER + 7] as number);
-        }
-        isGrass.push(m.grass);
-        pic.push(p);
-      }
-    }
-  if (!isGrass.some(Boolean) || !line.length) return [];
-  const nt = isGrass.length;
-  // (the triangles by 4 m cells)
-  const CELL = 4;
-  const grid = new Map<string, number[]>();
-  for (let t = 0; t < nt; t++) {
-    const xs = [T[t * 9] as number, T[t * 9 + 3] as number, T[t * 9 + 6] as number];
-    const zs = [T[t * 9 + 2] as number, T[t * 9 + 5] as number, T[t * 9 + 8] as number];
-    for (let gx = Math.floor(Math.min(...xs) / CELL); gx <= Math.floor(Math.max(...xs) / CELL); gx++)
-      for (let gz = Math.floor(Math.min(...zs) / CELL); gz <= Math.floor(Math.max(...zs) / CELL); gz++) {
-        const key = `${gx},${gz}`;
-        const l = grid.get(key);
-        if (l) l.push(t);
-        else grid.set(key, [t]);
-      }
+  // (none grows anywhere, or no line to grow along: nothing looked at, as a track's millions of triangles would be)
+  if (!line.length) return [];
+  const meshes = models
+    .flat()
+    .filter((m) => m.visible && (m.grass || (m.material ? lib[m.material]?.covers_grass : false)));
+  if (!meshes.some((m) => m.grass)) return [];
+  // (where the clumps can be: within BAND of the line's points)
+  let [x0, x1, z0, z1] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (const p of line) {
+    x0 = Math.min(x0, p[0]);
+    x1 = Math.max(x1, p[0]);
+    z0 = Math.min(z0, p[1]);
+    z1 = Math.max(z1, p[1]);
   }
+  [x0, x1, z0, z1] = [x0 - BAND, x1 + BAND, z0 - BAND, z1 + BAND];
+  // (the triangles grass grows on or that keep it off, reaching in there: which mesh and face each, read from the mesh
+  // itself, not copied)
+  const pics = meshes.map((m) => {
+    const colour = m.material ? lib[m.material]?.colour : undefined;
+    return m.grass && colour ? photo(colour) : undefined;
+  });
+  const reaches = (m: TrackMesh, f: number) => {
+    const a = m.f[f] as number;
+    const b = m.f[f + 1] as number;
+    const c = m.f[f + 2] as number;
+    if (a === b || b === c || a === c) return false;
+    const ax = m.v[a * CORNER] as number;
+    const bx = m.v[b * CORNER] as number;
+    const cx = m.v[c * CORNER] as number;
+    const az = m.v[a * CORNER + 2] as number;
+    const bz = m.v[b * CORNER + 2] as number;
+    const cz = m.v[c * CORNER + 2] as number;
+    return (
+      Math.max(ax, bx, cx) >= x0 &&
+      Math.min(ax, bx, cx) <= x1 &&
+      Math.max(az, bz, cz) >= z0 &&
+      Math.min(az, bz, cz) <= z1
+    );
+  };
+  let nt = 0;
+  for (const m of meshes) for (let f = 0; f < m.f.length; f += 3) if (reaches(m, f)) nt++;
+  const triMesh = new Int32Array(nt);
+  const triFace = new Int32Array(nt);
+  nt = 0;
+  meshes.forEach((m, mi) => {
+    for (let f = 0; f < m.f.length; f += 3)
+      if (reaches(m, f)) {
+        triMesh[nt] = mi;
+        triFace[nt++] = f;
+      }
+  });
+  /** a triangle's corner's number (0 1 2: x y z; 6 7: u v) */
+  const corner = (t: number, c: number, i: number) => {
+    const m = meshes[triMesh[t] as number] as TrackMesh;
+    return m.v[(m.f[(triFace[t] as number) + c] as number) * CORNER + i] as number;
+  };
+  // (their corners, x y z each, as the meshes keep them: 32-bit, so none changed)
+  const T = new Float32Array(nt * 9);
+  for (let t = 0; t < nt; t++)
+    for (let c = 0; c < 3; c++) for (let i = 0; i < 3; i++) T[t * 9 + c * 3 + i] = corner(t, c, i);
+  // (the triangles by 4 m cells over there, a cell's in order: cellStart[k] to cellStart[k + 1] of cellTris)
+  const CELL = 4;
+  const gx0 = Math.floor(x0 / CELL);
+  const gz0 = Math.floor(z0 / CELL);
+  const ncx = Math.floor(x1 / CELL) - gx0 + 1;
+  const ncz = Math.floor(z1 / CELL) - gz0 + 1;
+  const cellsOf = (t: number, each: (k: number) => void) => {
+    const [ax, bx, cx] = [T[t * 9] as number, T[t * 9 + 3] as number, T[t * 9 + 6] as number];
+    const [az, bz, cz] = [T[t * 9 + 2] as number, T[t * 9 + 5] as number, T[t * 9 + 8] as number];
+    const i0 = Math.max(Math.floor(Math.min(ax, bx, cx) / CELL) - gx0, 0);
+    const i1 = Math.min(Math.floor(Math.max(ax, bx, cx) / CELL) - gx0, ncx - 1);
+    const j0 = Math.max(Math.floor(Math.min(az, bz, cz) / CELL) - gz0, 0);
+    const j1 = Math.min(Math.floor(Math.max(az, bz, cz) / CELL) - gz0, ncz - 1);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) each(j * ncx + i);
+  };
+  const cellStart = new Int32Array(ncx * ncz + 1);
+  for (let t = 0; t < nt; t++)
+    cellsOf(t, (k) => {
+      cellStart[k + 1]++;
+    });
+  for (let k = 0; k < ncx * ncz; k++) cellStart[k + 1] += cellStart[k] as number;
+  const cellTris = new Int32Array(cellStart[ncx * ncz] as number);
+  const filled = cellStart.slice(0, ncx * ncz);
+  for (let t = 0; t < nt; t++)
+    cellsOf(t, (k) => {
+      cellTris[filled[k]++] = t;
+    });
   // (the line's points by BAND cells, to tell a point within BAND of it)
   const lineCells = new Map<string, [number, number][]>();
   for (let i = 0; i < line.length; i += 4) {
@@ -149,10 +199,7 @@ export function grassPlaces(
         for (const p of lineCells.get(`${i},${j}`) ?? []) if (Math.hypot(p[0] - x, p[1] - z) < BAND) return true;
     return false;
   };
-  const xs = line.map((p) => p[0]);
-  const zs = line.map((p) => p[1]);
-  const [x0, x1] = [Math.min(...xs) - BAND, Math.max(...xs) + BAND];
-  const [z0, z1] = [Math.min(...zs) - BAND, Math.max(...zs) + BAND];
+  const grows = (t: number) => (meshes[triMesh[t] as number] as TrackMesh).grass;
   const r = seeded(SEED);
   const out: [number, number, number][] = [];
   for (let gz = z0; gz < z1; gz += STEP)
@@ -160,11 +207,15 @@ export function grassPlaces(
       const x = gx + uniform(r, -STEP / 2, STEP / 2);
       const z = gz + uniform(r, -STEP / 2, STEP / 2);
       if (!nearLine(x, z)) continue;
-      const ks = grid.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
-      if (!ks) continue;
+      // (within BAND of the line: inside the cells)
+      const i = Math.floor(x / CELL) - gx0;
+      const j = Math.floor(z / CELL) - gz0;
+      if (i < 0 || i >= ncx || j < 0 || j >= ncz) continue;
+      const k = j * ncx + i;
       // (each triangle over it: its height there, its weights)
       const hits: { t: number; y: number; l: [number, number, number] }[] = [];
-      for (const t of ks) {
+      for (let e = cellStart[k] as number; e < (cellStart[k + 1] as number); e++) {
+        const t = cellTris[e] as number;
         const ax = T[t * 9] as number;
         const az = T[t * 9 + 2] as number;
         const bx = T[t * 9 + 3] as number;
@@ -182,12 +233,12 @@ export function grassPlaces(
       }
       if (!hits.length) continue;
       const top = hits.reduce((a, b) => (b.y > a.y ? b : a));
-      if (!isGrass[top.t] || !pic[top.t]) continue;
+      const img = pics[triMesh[top.t] as number];
+      if (!grows(top.t) || !img) continue;
       // (anything that keeps grass off lying over it, even a little below the grass's top)
-      if (hits.some((h) => !isGrass[h.t] && h.y > top.y - 0.05)) continue;
-      const u = top.l.reduce((a, l, c) => a + l * (UV[top.t * 6 + c * 2] as number), 0);
-      const v = top.l.reduce((a, l, c) => a + l * (UV[top.t * 6 + c * 2 + 1] as number), 0);
-      const img = pic[top.t] as Picture;
+      if (hits.some((h) => !grows(h.t) && h.y > top.y - 0.05)) continue;
+      const u = top.l.reduce((a, l, c) => a + l * corner(top.t, c, 6), 0);
+      const v = top.l.reduce((a, l, c) => a + l * corner(top.t, c, 7), 0);
       const ch = img.mode === 'RGBA' ? 4 : 3;
       const py = Math.floor((((v % 1) + 1) % 1) * img.height) % img.height;
       const pxx = Math.floor((((u % 1) + 1) % 1) * img.width) % img.width;

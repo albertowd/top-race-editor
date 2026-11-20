@@ -210,7 +210,7 @@ describe("a rumble's picture", () => {
     const roads = { R: road };
     const [floor] = kerbGeometry(
       road,
-      { side: 'left', kind: 'floor', from: 20, to: 60 },
+      { side: 'left', kind: 'floor', from: 20, to: 60, width: 1 },
       roads,
       () => 0,
       () => 0.25,
@@ -239,7 +239,7 @@ describe("a rumble's picture", () => {
     // ground (20 cm up there) whole)
     const [rc] = kerbGeometry(
       road,
-      { side: 'left', kind: 'ramp_concrete', from: 20, to: 60 },
+      { side: 'left', kind: 'ramp_concrete', from: 20, to: 60, width: 1, back: 0.5 },
       roads,
       (_x, z) => (Math.abs(z) <= 4 ? 0 : Number.NaN),
       undefined,
@@ -262,7 +262,7 @@ describe("a rumble's picture", () => {
     expect(notches).toBeLessThan(40 / CONCRETE_NOTCHES.every + 3);
     expect(foot.every((y) => Math.abs(y - (0.2 - 0.008)) < 1e-9)).toBe(true);
     // (a ramp: from its top down to its road over a centimetre at its back)
-    const [ramp] = kerbGeometry(road, { side: 'left', kind: 'ramp', from: 20, to: 60 }, roads, () => 0);
+    const [ramp] = kerbGeometry(road, { side: 'left', kind: 'ramp', from: 20, to: 60, width: 1 }, roads, () => 0);
     if (!ramp) throw new Error('no rumble');
     const outer = Math.max(...Array.from({ length: ramp.P.length / 3 }, (_, i) => ramp.P[i * 3 + 2] as number));
     const top = Math.max(...Array.from({ length: ramp.P.length / 3 }, (_, i) => ramp.P[i * 3 + 1] as number));
