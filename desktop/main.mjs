@@ -7,11 +7,16 @@
 //                                             one opened last, else the Velopark next to the editor
 //
 //   npm run package                           the app packaged (release/: an installer and a zip)
+//
+//   npm run build-track -- --project <folder> [...]
+//                                             a saved track built for the games with no window shown, its log
+//                                             printed (desktop/buildcli.mjs: its options); for a CI tool
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, Menu, MessageChannelMain, net, protocol, shell } from 'electron';
+import { buildArgs, engineCaller, runBuild, USAGE, UsageError } from './buildcli.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -44,11 +49,19 @@ function lastTrack() {
   }
 }
 
-/** The track to open: the one named (--project), else the one opened last, else the Velopark next to the editor. */
-function firstTrack() {
-  const given = app.isPackaged
+/** The arguments given the app (after main.mjs, or the packaged app's own). */
+function givenArgs() {
+  return app.isPackaged
     ? process.argv.slice(1)
     : process.argv.slice(process.argv.findIndex((a) => a.endsWith('main.mjs')) + 1);
+}
+
+/** Built from the command line (--build): no window but the engine's. */
+const BUILD = givenArgs().includes('--build');
+
+/** The track to open: the one named (--project), else the one opened last, else the Velopark next to the editor. */
+function firstTrack() {
+  const given = givenArgs();
   const i = given.indexOf('--project');
   const named = i >= 0 ? given[i + 1] : given.find((a) => a.startsWith('--project='))?.slice('--project='.length);
   if (named) return resolve(named);
@@ -135,6 +148,12 @@ function startEngineWindow(project) {
     },
   });
   engineWindow.webContents.on('render-process-gone', (_e, d) => {
+    // (a build from the command line: failed, not begun again)
+    if (BUILD) {
+      console.error(`the engine window is gone (${d.reason}): the build failed`);
+      app.exit(1);
+      return;
+    }
     console.log(`[engine window] gone (${d.reason}): opened again`);
     if (!quitting) {
       engineWindow.destroy();
@@ -157,7 +176,48 @@ async function connectEngine(win) {
   win.webContents.postMessage('engine-port', null, [port2]);
 }
 
+/** A saved track built from the command line: the engine window alone, on the track given; the build begun on it as
+ * the Build dialog begins it, its log printed; the app's exit code the build's. */
+async function buildFromCli() {
+  let asked;
+  try {
+    asked = buildArgs(givenArgs());
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    console.error(`${e.message}\n${USAGE}`);
+    app.exit(2);
+    return;
+  }
+  const project = resolve(asked.project);
+  if (!isTrack(project)) {
+    console.error(`${project} is not a track: it has no ${TRACK_FILE}`);
+    app.exit(2);
+    return;
+  }
+  serveApp();
+  if (!existsSync(join(DIST, 'engine.html'))) {
+    console.error(`there is no ${join(DIST, 'engine.html')}: run npm run build-track (it builds it)`);
+    app.exit(2);
+    return;
+  }
+  startEngineWindow(project);
+  await engineLoaded;
+  const { port1, port2 } = new MessageChannelMain();
+  engineWindow.webContents.postMessage('engine-port', null, [port1]);
+  let stop = false;
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => (stop = true));
+  console.log(`building ${project} for ${asked.body.games.join(', ')}`);
+  const code = await runBuild(engineCaller(port2), project.split(sep).join('/'), asked.body, (l) => console.log(l), {
+    stop: () => stop,
+  }).catch((e) => {
+    console.error(`the build failed: ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  });
+  app.exit(code);
+}
+
 async function start() {
+  if (BUILD) return buildFromCli();
   serveApp();
   Menu.setApplicationMenu(menu());
   if (!existsSync(join(DIST, 'index.html'))) {

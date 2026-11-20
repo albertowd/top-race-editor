@@ -37,6 +37,9 @@ export interface Kn5Material {
   depth_mode: number | null;
   props: Kn5Prop[];
   textures: Kn5Slot[];
+  /** an editor's model's own (made with it, its pictures inside it): kept as it is, never the material library's of
+   * its name */
+  own?: boolean;
 }
 
 interface NodeBase {

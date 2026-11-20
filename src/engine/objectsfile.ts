@@ -130,6 +130,13 @@ function _object(o: unknown, w: string): J {
       throw new ObjectsError(`${w}.layouts: a list of layouts' names (none: every layout)`);
     out.layouts = [...new Set(layouts as string[])].sort();
   }
+  // (a board's own text, as its card says it: none, its name's)
+  if (o.text !== undefined && o.text !== null) {
+    if (typeof o.text !== 'string') throw new ObjectsError(`${w}.text: what its card says, as text`);
+    const text = o.text.trim();
+    if (text.length > 40) throw new ObjectsError(`${w}.text: 40 letters at most, please`);
+    if (text) out.text = text;
+  }
   // (its own lights: those not as their series are, by their place among its model's lights)
   try {
     const lights = cleanLightOptions(o.lights, `${w}.lights`, (x) => f(pyRound(x, ROUND)));

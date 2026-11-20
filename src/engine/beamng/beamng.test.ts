@@ -7,9 +7,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { readPng } from '../dds';
-import { toGltf, writeGlb } from '../gltf';
+import { fromGltf, readGlb, toGltf, writeGlb } from '../gltf';
 import type { Kn5 } from '../kn5tree';
-import { boardConfig, type gantry } from './board';
+import { boardConfig, type gantry, lampMaterial } from './board';
 import { writeDae } from './dae';
 import { writePng } from './images';
 import { extensionFolder, levelModels, levelScripts, roadCover } from './level';
@@ -44,6 +44,17 @@ describe("the BeamNG level's parts", () => {
     const back = await readPng(await writePng(px, 2, 2, 3));
     expect([back.width, back.height, back.mode]).toEqual([2, 2, 'RGB']);
     expect([...back.data]).toEqual([...px]);
+  });
+
+  it("shows a start lamp's glass, lit through it; the flag lamp plain", () => {
+    const glass = lampMaterial('lamp', 'id', '/white.png', '/StartLamp.dds').Stages[0] as Record<string, unknown>;
+    expect([glass.baseColorMap, glass.emissiveMap, glass.instanceEmissive]).toEqual([
+      '/StartLamp.dds',
+      '/StartLamp.dds',
+      true,
+    ]);
+    const plain = lampMaterial('lamp', 'id', '/white.png').Stages[0] as Record<string, unknown>;
+    expect([plain.baseColorMap, plain.emissiveMap]).toEqual([undefined, '/white.png']);
   });
 
   it("turns a start BeamNG's way: facing north, no turn; east, a quarter turn", () => {
@@ -118,6 +129,67 @@ describe("the BeamNG level's parts", () => {
     expect(groundOf(m as NonNullable<typeof m>, {})).toBe('asphalt');
     // (where it stands: moved by its parent's matrix)
     expect([m?.v[0], m?.v[2]]).toEqual([10, 5]);
+  });
+
+  it("keeps an editor's model's own material and picture, never the library's of its name", async () => {
+    const png = await writePng(new Uint8Array(4 * 4 * 3).fill(200), 4, 4, 3);
+    const k: Kn5 = {
+      version: 6,
+      extra: 0,
+      textures: [{ name: 'StartLamp', active: 1, data: png }],
+      materials: [
+        {
+          name: 'StartLamp',
+          shader: 'ksPerPixel',
+          blend: 0,
+          alpha_tested: 0,
+          depth_mode: 0,
+          props: [],
+          textures: [{ sampler: 'txDiffuse', slot: 0, name: 'StartLamp' }],
+          own: true,
+        },
+      ],
+      root: {
+        kind: 1,
+        name: 'root',
+        active: 1,
+        matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        children: [
+          {
+            kind: 2,
+            name: 'KS_START_LIGHT_0',
+            active: 1,
+            children: [],
+            verts: new Float32Array(33),
+            faces: Uint16Array.from([0, 2, 1]),
+            material: 0,
+            cast_shadows: 1,
+            visible: 1,
+            transparent: 0,
+            layer: 0,
+            lod_in: 0,
+            lod_out: 0,
+            sphere: [0, 0, 0, 1],
+            renderable: 1,
+          },
+        ],
+      },
+    };
+    // (a library with a material of its name, its picture a file of the track's)
+    const stale = { textures: [['txDiffuse', 0, 'StartLamp.dds']], shader: 'ksPerPixel', props: [] };
+    const library = { get: (n: string) => (n === 'StartLamp' ? stale : null), put: () => {} };
+    const { doc, bin } = toGltf(k, () => '../textures/StartLamp.png', library);
+    const glb = writeGlb(doc, bin);
+    // (BeamNG's and rFactor's: its picture from inside the model)
+    const [m] = trackModel(glb);
+    expect(m?.own?.colour?.name).toBe('StartLamp.png');
+    expect([...(m?.own?.colour?.data ?? [])]).toEqual([...png]);
+    // (AC's: its own slot and picture)
+    const back = readGlb(glb);
+    const read = await fromGltf(back.doc, back.bin, async () => new Uint8Array(0), undefined, library);
+    expect(read.materials[0]?.textures).toEqual([{ sampler: 'txDiffuse', slot: 0, name: 'StartLamp' }]);
+    expect(read.materials[0]?.own).toBe(true);
+    expect([...(read.textures.find((t) => t.name === 'StartLamp')?.data ?? [])]).toEqual([...png]);
   });
 
   it('makes one map of every layout: each model once, a gantry working where any layout has it so', () => {

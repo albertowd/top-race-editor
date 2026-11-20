@@ -21,6 +21,27 @@ async function inflate(b: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
 
+/** A picture read: a PNG as readPng reads it; another kind (an editor's model's JPEG) by the browser's own decoder,
+ * where the engine runs in one, as RGBA. */
+export async function readPicture(b: Uint8Array): Promise<Picture> {
+  if (b[0] === 0x89 && b[1] === 0x50) return readPng(b);
+  if (typeof createImageBitmap === 'undefined') throw new Error('no decoder here for a picture not a PNG');
+  const bmp = await createImageBitmap(new Blob([b as Uint8Array<ArrayBuffer>]), {
+    colorSpaceConversion: 'none',
+    premultiplyAlpha: 'none',
+  });
+  try {
+    const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+    const g = canvas.getContext('2d', { willReadFrequently: true });
+    if (!g) throw new Error('no canvas to decode a picture on');
+    g.drawImage(bmp, 0, 0);
+    const data = new Uint8Array(g.getImageData(0, 0, bmp.width, bmp.height).data.buffer);
+    return { width: bmp.width, height: bmp.height, mode: 'RGBA', data };
+  } finally {
+    bmp.close();
+  }
+}
+
 /** A PNG of 8-bit RGB, RGBA, grey or grey with alpha, not interlaced (as a track keeps its textures), read as
  * Pillow reads it (grey as RGB, grey with alpha as RGBA). */
 export async function readPng(b: Uint8Array): Promise<Picture> {

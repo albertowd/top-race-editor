@@ -110,6 +110,7 @@ export async function loadTemplate(src: CatalogueSource, meta: CatalogueModel): 
   if (meta.materials === 'library') return libraryParts(doc, bin);
   // (its pictures inside it: its model with its parts, their materials' textures with them)
   const k = await fromGltf(doc, bin, async () => new Uint8Array(0));
+  for (const m of k.materials) m.own = true;
   return glbParts(k, true).map((p) => ({ ...p, from: k }));
 }
 

@@ -225,6 +225,8 @@ export interface PlacedObject {
   /** its model's lights not as their series are (off, or their strength, colour, range their own), by each light's
    * place among its model's lights (engine/lightoptions.ts) */
   lights?: LightOptions;
+  /** a board's: what its card says, drawn as large as fits it (none: what its name says, BOARD_PIT_2 says PIT) */
+  text?: string;
 }
 
 /** Paint laid on the roads (every layout's): a line from p, length metres along heading, width wide; dotted: dash

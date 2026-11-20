@@ -39,6 +39,7 @@ import {
   wallStacks,
 } from '../editing/objects';
 import { wallPath } from '../editing/walls';
+import { boardText } from '../engine/boardfaces';
 import { lightValues, withLightOption } from '../engine/lightoptions';
 import { START_GATE } from '../engine/paint';
 import { useEditor, useEditorShallow, useEditorState } from '../store/EditorContext';
@@ -730,6 +731,22 @@ function ObjectRows({ objects, layout, pick, change }: Readonly<PartProps>) {
     <>
       <ModelRow kind={kind} model={it.model} />
       {track?.description ? <p className="note">{track.description}</p> : null}
+      {kind === 'boards' ? (
+        <Row label="Text">
+          <TextField
+            label="What its card says"
+            value={it.text ?? ''}
+            placeholder={boardText(it.name) || 'nothing: a blank card'}
+            onCommit={(v) =>
+              edit((t) => {
+                if (v) t.text = v.slice(0, 40);
+                else delete t.text;
+              })
+            }
+          />
+          <span>drawn as large as fits the card; | breaks a line (none: its name's)</span>
+        </Row>
+      ) : null}
       {track?.lights?.length ? <LightRows lights={track.lights} it={it} edit={edit} /> : null}
       {!curve && n ? (
         <>

@@ -21,10 +21,18 @@ export interface TrackMesh {
   grass: boolean;
   /** its material's name in the library */
   material: string | null;
+  /** its material an editor's model's own (its picture inside the model): drawn so, not as the library's of its name */
+  own?: OwnMaterial;
   /** CORNER numbers a corner */
   v: Float32Array;
   /** three corners a triangle */
   f: Uint32Array;
+}
+
+/** An editor's model's own material: its colour picture (its file name, its bytes) and how it shows through. */
+export interface OwnMaterial {
+  colour: { name: string; data: Uint8Array } | null;
+  alpha: 'opaque' | 'mask' | 'blend';
 }
 
 type Track = {
@@ -35,6 +43,7 @@ type Track = {
   shadows?: boolean;
   grass?: boolean;
   material?: string;
+  own?: boolean;
 };
 
 const trackOf = (x: { extras?: unknown } | undefined): Track =>
@@ -108,12 +117,13 @@ export function trackModel(bytes: Uint8Array): TrackMesh[] {
   const names = (doc.materials ?? []).map(
     (g) => trackOf(g).material ?? (g.name ?? 'material').replace(BLENDER_COPY, ''),
   );
+  const owns = (doc.materials ?? []).map((g) => (trackOf(g).own ? ownMaterial(doc, bin, g) : undefined));
   const out: TrackMesh[] = [];
   const node = (i: number, parent: number[]) => {
     const g = doc.nodes?.[i] as GltfNode | undefined;
     if (!g) return;
     const m = times(nodeMatrix(g), parent);
-    if (g.mesh !== undefined) mesh(doc, bin, g, m, names, out);
+    if (g.mesh !== undefined) mesh(doc, bin, g, m, names, owns, out);
     for (const c of g.children ?? []) node(c, m);
   };
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -121,7 +131,30 @@ export function trackModel(bytes: Uint8Array): TrackMesh[] {
   return out;
 }
 
-function mesh(doc: GltfDoc, bin: Uint8Array, g: GltfNode, m: number[], names: string[], out: TrackMesh[]) {
+/** A material's own picture and alpha, as its model holds them (its colour the image its base colour is of: named so,
+ * with its kind's ending where its name has none). */
+function ownMaterial(doc: GltfDoc, bin: Uint8Array, g: NonNullable<GltfDoc['materials']>[number]): OwnMaterial {
+  const alpha = g.alphaMode === 'MASK' ? 'mask' : g.alphaMode === 'BLEND' ? 'blend' : 'opaque';
+  const t = g.pbrMetallicRoughness?.baseColorTexture;
+  const img = t ? doc.images?.[doc.textures?.[t.index]?.source ?? -1] : undefined;
+  const view = img ? doc.bufferViews?.[img.bufferView ?? -1] : undefined;
+  if (!img || !view) return { colour: null, alpha };
+  const at = view.byteOffset ?? 0;
+  const data = bin.slice(at, at + view.byteLength);
+  const ext = data[0] === 0x89 && data[1] === 0x50 ? '.png' : '.jpg';
+  const base = (img.name || g.name || 'material').replace(/[\\/]/g, '_');
+  return { colour: { name: /\.(png|jpe?g)$/i.test(base) ? base : base + ext, data }, alpha };
+}
+
+function mesh(
+  doc: GltfDoc,
+  bin: Uint8Array,
+  g: GltfNode,
+  m: number[],
+  names: string[],
+  owns: (OwnMaterial | undefined)[],
+  out: TrackMesh[],
+) {
   const track = trackOf(g);
   const name = (g.name ?? 'mesh').replace(BLENDER_COPY, '');
   const draw = track.draw ?? [0, null];
@@ -184,6 +217,7 @@ function mesh(doc: GltfDoc, bin: Uint8Array, g: GltfNode, m: number[], names: st
         shadows: track.shadows !== false,
         grass: !!track.grass,
         material: prim.material !== undefined && names.length ? (names[prim.material] ?? null) : null,
+        ...(prim.material !== undefined && owns[prim.material] ? { own: owns[prim.material] } : {}),
         v: pv,
         f: pf,
       });

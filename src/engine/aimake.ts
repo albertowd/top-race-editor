@@ -27,6 +27,14 @@ export const ACCEL = 4;
 export const LENGTH = 1.5;
 /** points either side a turn's way is eased over, where it changes */
 const EASE = 2;
+/** a pit lane's: metres of road either side of it at most (the pit road's own, not the track's beside it: AC's own
+ * recorded pit lanes have 2.5); m/s it is driven at most (50 km/h, as the Velopark's recorded pit lanes) */
+export const PIT_SIDE = 2.5;
+export const PIT_SPEED = 13.9;
+/** metres a pit lane runs on the fast line at either end, at least (AC takes its karts off and back onto the lap there:
+ * the Velopark's recorded pit lanes run 17 to 20); metres from the fast line a point is on it */
+export const PIT_OVERLAP = 18;
+const ON_LINE = 0.5;
 
 type V2 = [number, number];
 
@@ -73,15 +81,54 @@ export function pointsAlong(line: RacingLine, step = STEP): V2[] {
   return out;
 }
 
+/** A pit lane's points run on along the fast line's (fast: every step metres round it) at either end, so that each end
+ * is on it for PIT_OVERLAP metres at least: before where it leaves, after where it joins. */
+export function onFastAtEnds(P: V2[], fast: V2[], step = STEP): V2[] {
+  if (P.length < 2 || fast.length < 3) return P;
+  const nearest = (p: V2) => {
+    let best = Infinity;
+    let at = 0;
+    for (let i = 0; i < fast.length; i++) {
+      const d = Math.hypot((fast[i] as V2)[0] - p[0], (fast[i] as V2)[1] - p[1]);
+      if (d < best) {
+        best = d;
+        at = i;
+      }
+    }
+    return { at, d: best };
+  };
+  // (metres an end already runs on the fast line)
+  const onFor = (pts: V2[]) => {
+    let k = 0;
+    while (k < pts.length - 1 && nearest(pts[k] as V2).d <= ON_LINE) k++;
+    return k * step;
+  };
+  const m = fast.length;
+  const want = (have: number) => Math.max(0, Math.round((PIT_OVERLAP - have) / step));
+  const lead = want(onFor(P));
+  const tail = want(onFor([...P].reverse()));
+  const first = nearest(P[0] as V2).at;
+  const last = nearest(P.at(-1) as V2).at;
+  const before: V2[] = [];
+  for (let k = lead; k >= 1; k--) before.push(fast[(((first - k) % m) + m) % m] as V2);
+  const after: V2[] = [];
+  for (let k = 1; k <= tail; k++) after.push(fast[(last + k) % m] as V2);
+  return [...before, ...P, ...after];
+}
+
 /** A racing line as AC's AI line: its points (x, y, z) on the floor, how far along each is, and its extra values (18
- * each). floor: the floor's height (NaN off it); onRoad: whether a point is on a road. */
+ * each). floor: the floor's height (NaN off it); onRoad: whether a point is on a road. A pit lane's (pit): its road no
+ * wider than PIT_SIDE either side (the pit road's, not the track's it runs beside where they meet), driven no faster
+ * than PIT_SPEED; with the fast line (pit.fast), run on along it at its ends (onFastAtEnds). */
 export function aiLineOf(
   line: RacingLine,
   floor: (x: number, z: number) => number,
   onRoad: (x: number, z: number) => boolean,
   step = STEP,
+  pit?: { fast?: RacingLine },
 ): { points: Float32Array; along: Float32Array; extra: Float32Array } {
-  const P = pointsAlong(line, step);
+  const drawn = pointsAlong(line, step);
+  const P = pit?.fast ? onFastAtEnds(drawn, pointsAlong(pit.fast, step), step) : drawn;
   const n = P.length;
   const closed = line.closed;
   const at = (i: number) => (closed ? (P[((i % n) + n) % n] as V2) : (P[Math.min(Math.max(i, 0), n - 1)] as V2));
@@ -133,7 +180,7 @@ export function aiLineOf(
     return sum / (2 * EASE + 1);
   });
   // (its speed: as fast as it may turn, braking before and speeding up after; a lap's round twice)
-  const v = Float64Array.from(radius, (r) => Math.min(TOP, Math.sqrt(GRIP * r)));
+  const v = Float64Array.from(radius, (r) => Math.min(pit ? PIT_SPEED : TOP, Math.sqrt(GRIP * r)));
   const ds = (i: number) => Math.max(1e-3, Math.abs((along[(i + 1) % n] as number) - (along[i] as number)) || step);
   for (let pass = 0; pass < (closed ? 2 : 1); pass++) {
     for (let i = n - 2 + (closed ? 1 : 0); i >= 0; i--) {
@@ -166,8 +213,11 @@ export function aiLineOf(
     const camber = Math.asin(Math.max(-1, Math.min(1, (-hx / nm) * -lx + (-hz / nm) * -lz)));
     const side = (sx: number, sz: number) => {
       let d = 0;
-      while (d < SIDE_MAX && onRoad(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
-      return Math.min(SIDE_MAX, Math.max(SIDE_MIN, d));
+      const most = pit ? PIT_SIDE : SIDE_MAX;
+      while (d < most && onRoad(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
+      // (a pit lane off the road's pictures there (its edge, a gap): its own road's width still)
+      if (pit && d === 0) return PIT_SIDE;
+      return Math.min(most, Math.max(SIDE_MIN, d));
     };
     const j = closed ? (i + 1) % n : Math.min(i + 1, n - 1);
     const accel = j === i ? 0 : ((v[j] as number) ** 2 - (v[i] as number) ** 2) / (2 * ds(i));

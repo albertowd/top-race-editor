@@ -131,27 +131,35 @@ export function boardMaterials(level: string): Record<string, unknown> {
         {},
       ],
     },
-    velopark_lamp: {
-      ...base,
-      name: 'velopark_lamp',
-      mapTo: 'velopark_lamp',
-      persistentId: '6f2b1e50-6d1a-4f83-9a55-0b1d7c3e2a02',
-      Stages: [
-        {
-          baseColorFactor: [0.06, 0.06, 0.06, 1],
-          roughnessFactor: 0.4,
-          metallicFactor: 0,
-          emissive: true,
-          emissiveFactor: [1, 1, 1],
-          emissiveMap: white,
-          emissiveIntensityNits: 5000,
-          instanceEmissive: true,
-        },
-        {},
-        {},
-        {},
-      ],
-    },
+    velopark_lamp: lampMaterial('velopark_lamp', '6f2b1e50-6d1a-4f83-9a55-0b1d7c3e2a02', white),
+  };
+}
+
+/** A lamp's glow, lit by its instance colour: through its own picture (a start lamp's glass, seen lit or not) when it
+ * has one, else plain dark with a white glow (the flag lamp's). */
+export function lampMaterial(name: string, persistentId: string, white: string, picture?: string) {
+  return {
+    class: 'Material',
+    version: 1.5,
+    castShadows: false,
+    name,
+    mapTo: name,
+    persistentId,
+    Stages: [
+      {
+        ...(picture ? { baseColorMap: picture } : { baseColorFactor: [0.06, 0.06, 0.06, 1] }),
+        roughnessFactor: 0.4,
+        metallicFactor: 0,
+        emissive: true,
+        emissiveFactor: [1, 1, 1],
+        emissiveMap: picture ?? white,
+        emissiveIntensityNits: 5000,
+        instanceEmissive: true,
+      },
+      {},
+      {},
+      {},
+    ],
   };
 }
 

@@ -21,6 +21,7 @@
 
 import { readAiFile } from '../acai';
 import { acFolder, filesUnder, placeMatrix, sha1 } from '../acbuild';
+import { boardText, type CardPainter, canvasCards, cardSheet, cardUv } from '../boardfaces';
 import { acDds, type Picture, readPng, resizeLanczos, type TextureAc } from '../dds';
 import { STILL } from '../gantries';
 import { writeZip } from '../npz';
@@ -37,6 +38,7 @@ import {
   glyphMesh,
   glyphName,
   LAMPS,
+  lampMaterial,
   SHAPES,
 } from './board';
 import { type DaeMesh, writeDae } from './dae';
@@ -56,7 +58,7 @@ import {
   uuid5,
   type V3,
 } from './races';
-import { CORNER, groundOf, type TrackMesh, trackModel } from './trackmodel';
+import { CORNER, groundOf, type OwnMaterial, type TrackMesh, trackModel } from './trackmodel';
 
 /** the level's own ground models: BeamNG's GRASS is a soft layer 5 cm deep that wheels sink into, which hides half a
  * kart's tyre; this is its grass with a layer of 1 cm (surfaces.json's grass: targets.beamng VELOPARK_GRASS) */
@@ -88,7 +90,7 @@ const LIGHT_GAIN = 4;
 /** pixels on screen per metre of a shape's radius at a metre away (1080 high, BeamNG's 60 degrees) */
 const SCREEN = 1080 / (2 * Math.tan(Math.PI / 6));
 /** raised when the shapes or textures are written differently: a level built before made again */
-const FORMAT = 1;
+const FORMAT = 2;
 const BOARD_MATERIAL = 'MarkerBoards';
 const FOREST_WIND = {
   windScale: 0.25,
@@ -122,6 +124,8 @@ export interface MapSpec {
 
 export interface BeamngOptions {
   project: string;
+  /** the boards' cards drawn (by default on Chromium's canvas) */
+  cards?: CardPainter;
   /** the layout BeamNG starts the level on (its spawn, its picture); every layout is the level's, its models, starts and
    * races */
   layout: string;
@@ -385,16 +389,49 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
   const opacityTexture = (png: string, model?: string) =>
     putTexture(fileName(`${png.replace(/\.[^.]*$/, '')}_opacity.png`), png, 'opacity', opacityPng, model);
 
+  /** An editor's model's own picture (inside its model) as it is, or what shows through it; written once a picture. */
+  const ownTexture = async (pic: { name: string; data: Uint8Array }, opacity = false) => {
+    const hash = await sha1([pic.data]);
+    const stemOf = pic.name.replace(/\.[^.]*$/, '');
+    const f = fileName(`own_${hash.slice(0, 8)}_${opacity ? `${stemOf}_opacity.png` : pic.name}`);
+    const outPath = `${texDir}/${f}`;
+    const key = `own ${opacity ? 'opacity' : 'colour'}:${hash}`;
+    if (texState[f] !== key || !(await exists(outPath))) {
+      await files.write(outPath, opacity ? await opacityPng(pic.data) : pic.data);
+      texState[f] = key;
+    }
+    written.add(outPath);
+    return `/levels/${LEVEL}/art/shapes/textures/track/${f}`;
+  };
+
   // ---- materials
   const materials: Record<string, unknown> = {};
-  const material = async (name: string | null, kind: string | null, hidden: boolean, stem: string): Promise<string> => {
-    const e = (name ? lib[name] : undefined) ?? {};
-    const key = ident(`tsvp_${name ?? 'none'}`) + (kind ? `_${kind}` : '') + (hidden ? '_hidden' : '');
+  const material = async (
+    name: string | null,
+    kind: string | null,
+    hidden: boolean,
+    stem: string,
+    own?: OwnMaterial,
+  ): Promise<string> => {
+    // (an editor's model's own: its picture and alpha, never the library's of its name)
+    const e: (typeof lib)[string] = own ? { alpha: own.alpha } : ((name ? lib[name] : undefined) ?? {});
+    const key =
+      ident(own ? `tsvp_own_${name ?? 'none'}_${own.colour?.name ?? ''}` : `tsvp_${name ?? 'none'}`) +
+      (kind ? `_${kind}` : '') +
+      (hidden ? '_hidden' : '');
     if (key in materials) return key;
     const stage: Record<string, unknown> = {};
     if (hidden) {
       stage.baseColorFactor = [1, 1, 1, 0];
       stage.opacityFactor = 0;
+    } else if (own) {
+      stage.roughnessFactor = 1;
+      stage.metallicFactor = 0;
+      if (own.colour) {
+        stage.baseColorMap = await ownTexture(own.colour);
+        if (own.alpha !== 'opaque' && own.colour.name.toLowerCase().endsWith('.png'))
+          stage.opacityMap = await ownTexture(own.colour, true);
+      }
     } else {
       // (rough and not metal unless its maps say: BeamNG's default shines like glass)
       stage.roughnessFactor = 1;
@@ -420,6 +457,20 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
     // (a mesh's material names its ground in groundType, or BeamNG drives it as asphalt)
     if (kind) mat.groundType = groundType(kind);
     materials[key] = mat;
+    return key;
+  };
+  /** A start lamp's glow through its own glass (its model's own picture, else its library material's); none: the
+   * plain lamp's. */
+  const lampOf = async (m: TrackMesh, stem: string): Promise<string> => {
+    const pic = m.own?.colour;
+    const colour = m.own ? undefined : m.material ? lib[m.material]?.colour : undefined;
+    if (!m.material || (!pic && !colour)) return 'velopark_lamp';
+    const key = ident(`velopark_lamp_${m.material}${pic ? `_own_${pic.name}` : ''}`);
+    if (!(key in materials)) {
+      const white = `/levels/${LEVEL}/art/shapes/${SHAPES}/white.png`;
+      const map = pic ? await ownTexture(pic) : await colourTexture(colour as string, stem);
+      materials[key] = lampMaterial(key, uuid5(`${LEVEL}/${key}`), white, map);
+    }
     return key;
   };
 
@@ -468,9 +519,9 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
         if (!arrays) continue;
         const kind = groundOf(m, lib);
         if (kind && !m.visible)
-          parts.walls.push({ name: m.name, material: await material(m.material, kind, true, stem), ...arrays });
+          parts.walls.push({ name: m.name, material: await material(m.material, kind, true, stem, m.own), ...arrays });
         else if (kind) {
-          parts.solid.push({ name: m.name, material: await material(m.material, kind, false, stem), ...arrays });
+          parts.solid.push({ name: m.name, material: await material(m.material, kind, false, stem, m.own), ...arrays });
           const T = new Float64Array(arrays.F.length * 3);
           for (let k = 0; k < arrays.F.length; k++)
             T.set(
@@ -485,10 +536,11 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
           const { mid } = bounds(arrays.P);
           const f = `${stem}_${m.name}.dae`;
           const path = `${shapes}/${f}`;
+          const glow = LAMPS.test(m.name) ? await lampOf(m, stem) : 'velopark_lamp';
           if (fresh || !(await exists(path)))
             await put(
               path,
-              writeDae([{ name: m.name, material: 'velopark_lamp', ...arrays, P: shifted(arrays.P, mid) }], {
+              writeDae([{ name: m.name, material: glow, ...arrays, P: shifted(arrays.P, mid) }], {
                 sizes: [1],
               }),
             );
@@ -502,7 +554,8 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
             extra: { useInstanceRenderData: true, instanceColor: [0, 0, 0, 1] },
           });
           lamps.set(stem, [...(lamps.get(stem) ?? []), m.name]);
-        } else seen.push([m, { name: m.name, material: await material(m.material, null, false, stem), ...arrays }]);
+        } else
+          seen.push([m, { name: m.name, material: await material(m.material, null, false, stem, m.own), ...arrays }]);
       }
     // (the meshes drawn only far, each with the near mesh it takes over from: a shape of their own)
     const swaps: [number, DaeMesh, DaeMesh][] = [];
@@ -818,11 +871,12 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
   log(`  the ground under the starts: ${all.length / 9} triangles`);
   const onRoad = (p: V3) => road.on(p);
   await put(`${level}/groundModels/velopark.json`, JSON.stringify(GROUND_MODELS, null, 1));
-  const markerPng = lib[BOARD_MATERIAL]?.colour;
-  const boardTexture =
-    markerPng && (await exists(`${project}/source/textures/${markerPng}`))
-      ? await rgbPng(await files.read(`${project}/source/textures/${markerPng}`))
-      : null;
+  // (the boards' cards: one sheet of every layout's boards' texts, each board's face on its own text's card)
+  const boardsPlaced = Object.values(places).flatMap((L) =>
+    (L.objects ?? []).filter((ob) => cat[ob.model]?.kind === 'boards'),
+  );
+  const sheet = cardSheet(boardsPlaced.map((ob) => boardText(ob.name, ob.text)));
+  const boardTexture = boardsPlaced.length ? await (o.cards ?? canvasCards)(sheet) : null;
   const spawns: { name: string; title: string; at: V3; fwd: V3 }[] = [];
   const roads: Record<string, { line: V3[]; sides: [number, number][] | null }> = {};
   const races: {
@@ -961,7 +1015,14 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
             nx * (m[2] as number) + ny * (m[6] as number) + nz * (m[10] as number),
           ];
           N.push(...toBeamng(n[0], n[1], n[2]));
-          U.push(p.V[k * 11 + 6] as number, 1 - (p.V[k * 11 + 7] as number));
+          // (its face on its text's card)
+          const [cu, cv] = cardUv(
+            p.V[k * 11 + 6] as number,
+            p.V[k * 11 + 7] as number,
+            sheet,
+            boardText(ob.name, ob.text),
+          );
+          U.push(cu, 1 - cv);
         }
         const F = Array.from(p.F);
         facing(P, N, F);

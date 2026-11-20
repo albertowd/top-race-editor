@@ -30,6 +30,8 @@ export interface PhysicsObject {
   y: number;
   z: number;
   heading: number;
+  /** a board's own text (none: its name's, boardfaces.boardText) */
+  text?: string;
 }
 
 export interface LayoutPlaces {
@@ -60,6 +62,7 @@ interface ObjectIn {
   heading?: number;
   collision?: string;
   layouts?: string[];
+  text?: string;
 }
 export interface ObjectsIn {
   layouts?: Record<string, LayoutIn>;
@@ -144,7 +147,15 @@ export function layoutPlaces(
     const y = floor(x, z) - (SINKS[o.model] ?? 0);
     for (const lay of (o.layouts ?? all).filter((l) => all.includes(l))) {
       out[lay] ??= { spots: [], pits: 0, objects: [] };
-      out[lay].objects.push({ name: o.name, model: o.model, x, y, z, heading: o.heading ?? 0 });
+      out[lay].objects.push({
+        name: o.name,
+        model: o.model,
+        x,
+        y,
+        z,
+        heading: o.heading ?? 0,
+        ...(o.text?.trim() ? { text: o.text.trim() } : {}),
+      });
     }
   }
   return { version: 1, layouts: out };
@@ -162,7 +173,12 @@ export function placesJson(doc: PlacesDoc): PyJson {
         {
           spots: L.spots.map((s) => ({ name: s.name, ...at(s) })),
           pits: L.pits,
-          objects: L.objects.map((o) => ({ name: o.name, model: o.model, ...at(o) })),
+          objects: L.objects.map((o) => ({
+            name: o.name,
+            model: o.model,
+            ...at(o),
+            ...(o.text ? { text: o.text } : {}),
+          })),
         },
       ]),
     ),

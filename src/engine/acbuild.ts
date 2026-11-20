@@ -11,9 +11,20 @@
 import { writeAiFile } from './acai';
 import { AC_LIGHTS, acLightsText, lightsData } from './aclights';
 import type { RacingLine, RacingLines } from './ailines';
-import { aiLineOf } from './aimake';
+import { aiLineOf, STEP } from './aimake';
+import {
+  BOARD_SHEET_MATERIAL,
+  boardText,
+  CARDS_MATERIAL,
+  CARDS_PICTURE,
+  type CardPainter,
+  type CardSheet,
+  canvasCards,
+  cardSheet,
+  onCards,
+} from './boardfaces';
 import { acDds, type TextureAc } from './dds';
-import { libraryMaterial, loadKn5, type MaterialLibrary } from './gltf';
+import { libraryMaterial, loadKn5, type MaterialLibrary, pictureMaterial } from './gltf';
 import { dump, type Kn5, type Kn5Material, type Kn5Mesh, VERT } from './kn5tree';
 import { libraryOf } from './materials';
 import { meshes, sphere, triangles } from './mesh';
@@ -53,6 +64,8 @@ export interface AcBuildOptions {
   log?: (line: string) => void;
   /** where the work is shared out: the textures made DDS (by default here, one after another) */
   dds?: (name: string, data: Uint8Array, textures: Record<string, TextureAc>) => Promise<Uint8Array>;
+  /** the boards' cards drawn (by default on Chromium's canvas) */
+  cards?: CardPainter;
 }
 
 export interface AcBuilt {
@@ -93,12 +106,13 @@ export interface MaterialSources {
   library?(name: string): Promise<{ material: Kn5Material; textures: Kn5['textures'] } | null>;
 }
 
-/** A material's index in model k: brought in, with its textures, from the first model that has it, if k has none of it
- * (place_objects.material_of). */
-async function materialOf(k: Kn5, name: string, sources: MaterialSources): Promise<number> {
+/** A material's index in model k: brought in, with its textures, from the model it is of (from: an editor's model, its
+ * own), else the first model that has it, if k has none of it (place_objects.material_of). */
+async function materialOf(k: Kn5, name: string, sources: MaterialSources, from?: Kn5): Promise<number> {
   const at = k.materials.findIndex((m) => m.name === name);
   if (at >= 0) return at;
-  for (const src of await sources.models()) {
+  const own = from?.materials.some((m) => m.name === name && m.own) ? [from as Kn5] : [];
+  for (const src of [...own, ...(await sources.models())]) {
     const m = src.materials.find((x) => x.name === name);
     if (!m) continue;
     const have = new Set(k.textures.map((t) => t.name));
@@ -141,7 +155,7 @@ async function meshOf(
     children: [],
     verts: Float32Array.from(part.V),
     faces: Uint16Array.from(part.F),
-    material: await materialOf(k, part.material, sources),
+    material: await materialOf(k, part.material, sources, part.from),
     cast_shadows: renderable ? 1 : 0,
     visible: 1,
     transparent: 0,
@@ -163,7 +177,15 @@ export async function addPlaces(
   cat: Record<string, CatalogueModel>,
   parts: (model: string) => Promise<TemplatePart[]>,
   sources: MaterialSources,
+  /** the boards' cards (boardfaces.ts): each board's face on its own text's card */
+  cards?: { sheet: CardSheet; png: Uint8Array },
 ): Promise<void> {
+  const board = (model: string) => !!cards && cat[model]?.kind === 'boards';
+  if (cards && here.objects.some((o) => board(o.model)) && !k.materials.some((m) => m.name === CARDS_MATERIAL)) {
+    if (!k.textures.some((t) => t.name === CARDS_PICTURE))
+      k.textures.push({ name: CARDS_PICTURE, active: 1, data: cards.png });
+    k.materials.push(pictureMaterial(CARDS_MATERIAL, CARDS_PICTURE));
+  }
   for (const s of here.spots)
     k.root.children.push({
       kind: 1,
@@ -173,7 +195,9 @@ export async function addPlaces(
       children: [],
     });
   for (const [i, o] of here.objects.entries()) {
-    const all = await parts(o.model);
+    const own = await parts(o.model);
+    const all =
+      cards && board(o.model) ? onCards(own, BOARD_SHEET_MATERIAL, cards.sheet, boardText(o.name, o.text)) : own;
     const lods = cat[o.model]?.lods ?? {};
     const top: Kn5['root'] = {
       kind: 1,
@@ -309,7 +333,7 @@ async function aiFromLines(
     written += 2;
     let said = `  ${l}: its AI lines from its racing lines (${fast.along.length} points`;
     if (L.pit?.curve?.length) {
-      const pit = aiLineOf(L.pit, y, onRoad);
+      const pit = aiLineOf(L.pit, y, onRoad, STEP, { fast: L.fast as RacingLine });
       await files.write(`${out}/${l}/ai/pit_lane.ai`, writeAiFile(pit.points, pit.along, pit.extra, false));
       written++;
       said += `, its pit lane ${pit.along.length}`;
@@ -397,11 +421,19 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
   const ddsOf = opts.dds ?? ((name: string, data: Uint8Array, t: Record<string, TextureAc>) => acDds(name, data, t));
   const cache = `${project}/build/cache/dds`;
   const made: string[] = [];
+  // (the boards' cards: one sheet of every board's text, drawn once where any layout has a board)
+  const boardsPlaced = Object.values(placed).flatMap((L) => L.objects.filter((o) => cat[o.model]?.kind === 'boards'));
+  let cards: { sheet: CardSheet; png: Uint8Array } | undefined;
+  if (boardsPlaced.length) {
+    const sheet = cardSheet(boardsPlaced.map((o) => boardText(o.name, o.text)));
+    cards = { sheet, png: await (opts.cards ?? canvasCards)(sheet) };
+    log(`  the boards' cards: ${sheet.texts.map((t) => JSON.stringify(t)).join(', ') || 'blank'}`);
+  }
   // (every model as it goes into the game: read, its layout's places in it)
   const loaded = new Map<string, Kn5>();
   for (const stem of stems) {
     const k = await loadKn5(files, `${models}/${stem}.glb`, library);
-    if (placed[stem]) await addPlaces(k, placed[stem], cat, parts, sources);
+    if (placed[stem]) await addPlaces(k, placed[stem], cat, parts, sources, cards);
     loaded.set(stem, k);
   }
   // (each model's pictures once: a twin under another name one. Each keeps its own: AC finds none in another model)

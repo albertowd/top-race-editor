@@ -281,6 +281,23 @@ its last line and how long ago it said it; and 7-Zip's percentage while it packs
 with the dialog closed (a note at the top says so), can be stopped, and does not begin while another build holds the
 build's lock (`build/build.lock`, which the editor takes round all it does).
 
+The marker boards' faces are drawn by the build: each board's text (its form's Text, else what its name says:
+`BOARD_PIT_2` says PIT) on a card of its own, as large as fits it (a `|` breaks a line), the cards on one sheet
+(`BoardCards.png`), each board's back a blank card.
+
+### From the command line (CI)
+
+A saved track is built with no window shown, its log printed as it goes, the exit code its end's (0 built, 1 failed
+or stopped, 2 wrong arguments):
+
+```sh
+npm run build-track -- --project <folder> [--games ac,beamng,rf2] [--install] [--install-beamng] [--install-rf2] [--no-pack] [--all]
+```
+
+It is the desktop app's engine (`desktop/main.mjs --build`, `desktop/buildcli.mjs`), so it builds just as the dialog
+does: by default for AC, packed. `--install` and the others are the dialog's ticks; `--all` makes every step again.
+On Linux it needs a display: `xvfb-run npm run build-track -- ...` (and `--no-sandbox` where it runs as root).
+
 ## A new track
 
 The wizard (the globe in the toolbar, or `/wizard.html`) makes a new track's folder. You pick:

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { readAiFile, writeAiFile } from './acai';
 import type { LineNode, RacingLine } from './ailines';
-import { aiLineOf, GRIP, STEP, TOP } from './aimake';
+import { aiLineOf, GRIP, PIT_OVERLAP, PIT_SIDE, PIT_SPEED, STEP, TOP } from './aimake';
 
 /** An oval: two 200 m straights along z and bends of radius 30 m, its nodes' handles a circle's (kappa). */
 function oval(): RacingLine {
@@ -93,5 +93,44 @@ describe('a racing line made an AI line', () => {
     const back = readAiFile(writeAiFile(ai.points, ai.along, ai.extra, true));
     expect(back.points.length / 3).toBe(n);
     expect(back.extra?.[bend * 18]).toBeCloseTo(E(bend, 0), 4);
+  });
+
+  it('drives a pit lane on its own road, at the pit speed, on the lap at either end', () => {
+    // (beside the oval's straight at x 30, out to x 40 and back; the pit road and the track one asphalt from x 26 to 46,
+    // as where they meet; drawn from the lap and back onto it, on it at neither end)
+    const pit: RacingLine = {
+      curve: [
+        { p: [30, -60], in: [0, 0], out: [0, 15] },
+        { p: [40, -30], in: [0, -15], out: [0, 15] },
+        { p: [40, 30], in: [0, -15], out: [0, 15] },
+        { p: [30, 60], in: [0, -15], out: [0, 0] },
+      ],
+      closed: false,
+    };
+    const ai = aiLineOf(
+      pit,
+      () => 0,
+      (x) => x >= 26 && x <= 46,
+      STEP,
+      { fast: oval() },
+    );
+    const n = ai.along.length;
+    const E = (i: number, k: number) => ai.extra[i * 18 + k] as number;
+    for (let i = 0; i < n; i++) {
+      expect(E(i, 5)).toBeLessThanOrEqual(PIT_SIDE);
+      expect(E(i, 6)).toBeLessThanOrEqual(PIT_SIDE);
+      expect(E(i, 0)).toBeLessThanOrEqual(PIT_SPEED + 1e-6);
+    }
+    // (on the lap's line, x 30, for PIT_OVERLAP metres at least before it leaves and after it joins; no more than a
+    // step or so past that)
+    const onLap = (i: number) => Math.abs((ai.points[i * 3] as number) - 30) <= 0.5;
+    let lead = 0;
+    while (onLap(lead)) lead++;
+    let tail = 0;
+    while (onLap(n - 1 - tail)) tail++;
+    for (const run of [lead, tail]) {
+      expect(run * STEP).toBeGreaterThanOrEqual(PIT_OVERLAP);
+      expect(run * STEP).toBeLessThan(PIT_OVERLAP + 2);
+    }
   });
 });

@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json && vite build",
     "start": "npm run desktop",
     "desktop": "npm run build && node desktop/launch.mjs",
+    "build-track": "npm run build && node desktop/launch.mjs --build",
     "package": "npm run build && electron-builder --win --x64 --publish never",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",

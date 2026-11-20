@@ -20,9 +20,9 @@ import type { LayoutObjects } from '../../domain/types';
 import { acFolder, sha1 } from '../acbuild';
 import { type LightsData, lightsData } from '../aclights';
 import type { RacingLine, RacingLines } from '../ailines';
-import { aiLineOf } from '../aimake';
-import { CORNER, groundOf as meshGround, type TrackMesh, trackModel } from '../beamng/trackmodel';
-import { acDds, ddsChain, ddsOf, readPng, resizeLanczos, type TextureAc } from '../dds';
+import { aiLineOf, STEP } from '../aimake';
+import { CORNER, groundOf as meshGround, type OwnMaterial, type TrackMesh, trackModel } from '../beamng/trackmodel';
+import { acDds, convert, ddsChain, ddsOf, readPicture, readPng, resizeLanczos, type TextureAc } from '../dds';
 import type { HostFiles } from '../placehost';
 import { type PyJson, plain } from '../pyjson';
 import { Surface } from '../surface';
@@ -524,6 +524,29 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
     textures.set(src, name);
     return name;
   };
+  /** An editor's model's own picture (inside its model) as a DDS of sides powers of two, once a picture: DXT5 where
+   * it shows through, else DXT1. */
+  const ownTextureOf = async (own: OwnMaterial): Promise<string> => {
+    const pic = own.colour;
+    if (!pic) return WHITE;
+    const hash = await sha1([pic.data]);
+    const src = `own:${hash}`;
+    if (textures.has(src)) return textures.get(src) as string;
+    const name = fileName(`own_${hash.slice(0, 8)}_${pic.name.replace(/\.[^.]*$/, '')}.dds`);
+    let img: Awaited<ReturnType<typeof readPicture>>;
+    try {
+      img = await readPicture(pic.data);
+    } catch (e) {
+      log(`  ${pic.name}: ${(e as Error).message}, drawn white`);
+      textures.set(src, WHITE);
+      return WHITE;
+    }
+    const up = (n: number) => Math.min(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 4))));
+    const sized = pow2(img.width) && pow2(img.height) ? img : resizeLanczos(img, up(img.width), up(img.height));
+    await put(`${maps}/${name}`, ddsChain(convert(sized, 'RGBA'), own.alpha === 'opaque' ? 'DXT1' : 'DXT5'));
+    textures.set(src, name);
+    return name;
+  };
 
   // ---- each model's meshes as GMTs, a GMT for each kind of them
   const gmtDir = `${out}/Assets/GMT`;
@@ -599,11 +622,22 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
         fill = new GmtFill();
       };
       for (const { mesh, ground } of g.meshes) {
-        const e = mesh.material ? lib[mesh.material] : undefined;
-        const name = materialName(mesh.material ?? 'hidden', ground);
+        // (an editor's model's own: its picture and alpha, never the library's of its name)
+        const own = mesh.own;
+        const e = own ? { alpha: own.alpha } : mesh.material ? lib[mesh.material] : undefined;
+        const name = materialName(
+          own
+            ? `${mesh.material ?? 'material'}_own_${own.colour?.name.replace(/\.[^.]*$/, '') ?? ''}`
+            : (mesh.material ?? 'hidden'),
+          ground,
+        );
         let mat = made.get(name);
         if (!mat) {
-          const tex = g.visible ? await textureOf(e?.colour, stem) : WHITE;
+          const tex = !g.visible
+            ? WHITE
+            : own
+              ? await ownTextureOf(own)
+              : await textureOf(lib[mesh.material ?? '']?.colour, stem);
           mat = diffuseMaterial(name, tex, e?.alpha === 'blend' ? 'blend' : e?.alpha === 'mask' ? 'mask' : 'opaque');
           made.set(name, mat);
         }
@@ -651,7 +685,7 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
     const floor = (x: number, z: number) => F.y(x, z);
     const onRoad = (x: number, z: number) => !Number.isNaN(R.y(x, z));
     const fast = aiLineOf(lay.lines.fast as RacingLine, floor, onRoad);
-    const pit = lay.lines.pit?.curve?.length ? aiLineOf(lay.lines.pit, floor, onRoad) : null;
+    const pit = lay.lines.pit?.curve?.length ? aiLineOf(lay.lines.pit, floor, onRoad, STEP, {}) : null;
     const input = { layout: lay, fast, pit, floor, axes };
     await put(`${dir}/${l}.AIW`, aiwText(input));
     const timing = aiwTiming(input);

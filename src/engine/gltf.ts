@@ -269,8 +269,10 @@ export function toGltf(
     if (u === null) return null;
     return library && u.toLowerCase().endsWith('.dds') ? `${u.slice(0, -4)}.png` : u;
   };
+  // (an editor's model's own pictures: always inside it, never a file of the track's of their name)
+  const ownTex = new Set(k.materials.filter((m) => m.own).flatMap((m) => m.textures.map((s) => s.name)));
   const images: GltfImage[] = k.textures.map((t) => {
-    const u = uriOf(t);
+    const u = ownTex.has(t.name) ? null : uriOf(t);
     if (u !== null) return { name: t.name, uri: quote(u) };
     return { name: t.name, bufferView: b.add(t.data, t.data.length, 1, 0, 'RAW') as number, mimeType: mimeOf(t.data) };
   });
@@ -302,9 +304,10 @@ export function toGltf(
       extras: { kn5: x },
       pbrMetallicRoughness: { metallicFactor: 0, roughnessFactor: 1 },
     };
-    // (with a library: its name only, its kn5 data kept there)
+    // (with a library: its name only, its kn5 data kept there; an editor's model's own: its data with it, marked own)
     kept.push(x);
-    if (library) g.extras = { track: { material: m.name } };
+    if (library)
+      g.extras = m.own ? { track: { material: m.name, own: true }, kn5: x } : { track: { material: m.name } };
     const slots = new Map(m.textures.map((t) => [t.sampler, t.name]));
     const diffuse = byName.get(slots.get('txDiffuse') ?? '\0');
     const normal = byName.get(slots.get('txNormal') ?? '\0');
@@ -709,6 +712,17 @@ function material(name: string, x: Kx): Kn5Material {
 
 const defaultProps = () => DEFAULT_PROPS.map(([name, value]) => ({ name, value, rest: new Uint8Array(36) }));
 
+/** A plain material of one picture (ksPerPixel, opaque, the default props), as a model made with none is given. */
+export const pictureMaterial = (name: string, picture: string): Kn5Material => ({
+  name,
+  shader: 'ksPerPixel',
+  blend: 0,
+  alpha_tested: 0,
+  depth_mode: 0,
+  props: defaultProps(),
+  textures: [{ sampler: 'txDiffuse', slot: 0, name: picture }],
+});
+
 /** A dummy's or a mesh's flag, as the kn5 data has it, else its default. */
 const flag = (x: Kx, key: string, d: number) => (x[key] == null ? d : Number(x[key]));
 
@@ -789,6 +803,7 @@ export async function fromGltf(
         textures: slots.flatMap(([sampler, t], slot) => (t ? [{ sampler, slot, name: t }] : [])),
       });
     }
+    if ((g.extras as { track?: { own?: boolean } } | undefined)?.track?.own) (mats.at(-1) as Kn5Material).own = true;
   }
   for (const [name, x] of (top.unused_materials ?? []) as [string, Kx | null][])
     if (!mats.some((m) => m.name === name) && (x || library?.get(name)))
