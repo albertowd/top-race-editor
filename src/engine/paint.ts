@@ -4,8 +4,11 @@
 // and rising over it, its ends tapering in, going on along the roads its edge carries on into). Ported as the Python
 // has them, numpy's ways and all, so they come out point for point.
 
+import type { Vec2, WallNode } from '../domain/types';
+import { chainPieces, legacyCurve, type Paintable, paintChains, pastSeam } from '../editing/marks';
 import { upright } from './layer';
-import { inside } from './polygon';
+import { byCodePoint } from './order';
+import { earClip, inside } from './polygon';
 import { BASE, fine, heightAt, INSIDE, interp, linspace, outline, type RoadDesc, searchsorted, unwrap } from './roads';
 import type { Surface } from './surface';
 
@@ -591,7 +594,7 @@ const others = new Map<string, Near | null>();
  * a tapering end eases down only within it). */
 function otherRoads(road: RoadDesc, k: Kerb, roads: Roads): ((x: number, z: number) => number) | null {
   const own = new Set([...kerbPieces(road, k, roads).map((p) => p.road.name), road.name]);
-  const key = [...own].sort().join('|');
+  const key = [...own].sort(byCodePoint).join('|');
   let near = others.get(key);
   if (near === undefined) {
     const rest = Object.entries(roads).filter(([n, r]) => !own.has(n) && !(r.along && own.has(r.along.road)));
@@ -616,6 +619,8 @@ export interface KerbMesh {
   F: Int32Array;
   material: string;
   suffix: string;
+  /** points a row of it is across (its profile's, and its back ramp's) */
+  across: number;
 }
 
 /** A rumble's surface (build_kerbs.geometry): its rows across it at its kind's profile, level with its road's edge
@@ -845,7 +850,16 @@ export function kerbGeometry(
     if (up < 0) kept.push(cc, b, a);
     else kept.push(a, b, cc);
   }
-  return [{ P: Float64Array.from(P), U: Float64Array.from(U), F: Int32Array.from(kept), material: mat, suffix: '' }];
+  return [
+    {
+      P: Float64Array.from(P),
+      U: Float64Array.from(U),
+      F: Int32Array.from(kept),
+      material: mat,
+      suffix: '',
+      across: nc,
+    },
+  ];
 }
 
 // ---- the paint laid on the merged surface ------------------------------------------------------------------------
@@ -897,17 +911,95 @@ class Cover {
   }
 }
 
-/** Each road's edge lines laid on the surface as merged (floor: the merged roads and rumbles, the ground not; own: a
- * road's own mesh's height, where its lines start from), each along its whole length: every point of paint put on the
- * floor under it nearest its height, LINE_LIFT over it (none within LAY_NEAR: as it was; off its own road's mesh: on
- * whichever floor is there, another road, a rumble, a run-off; off the floor: as its nearest point within LAY_NEAR),
- * and its faces under a rumble's raised part (its rise over its road more than RAISED: the Python's merge_floor) out. */
-export function layPaint(
-  roads: Roads,
-  floor: Surface,
-  own: (road: string) => ((x: number, z: number) => number) | null,
-): PaintMesh[] {
-  // (where the rumbles rise over their roads: each one's own triangles, on a flat top, risen more than RAISED)
+/** metres: an edge line's point this near the straight on from the one kept before to the next left out */
+const LINE_KEEP = 0.002;
+
+/** Points along a line, those within tol of the straight between the ones either side left out (Douglas-Peucker):
+ * its ends kept. */
+function simplified(P: Vec2[], tol: number): Vec2[] {
+  if (P.length < 3) return P;
+  const keep = new Uint8Array(P.length);
+  keep[0] = 1;
+  keep[P.length - 1] = 1;
+  const todo: [number, number][] = [[0, P.length - 1]];
+  while (todo.length) {
+    const [a, b] = todo.pop() as [number, number];
+    const A = P[a] as Vec2;
+    const B = P[b] as Vec2;
+    const dx = B[0] - A[0];
+    const dz = B[1] - A[1];
+    const len = Math.hypot(dx, dz);
+    let far = -1;
+    let fd = tol;
+    for (let k = a + 1; k < b; k++) {
+      const Q = P[k] as Vec2;
+      const d =
+        len > 1e-12 ? Math.abs((Q[0] - A[0]) * dz - (Q[1] - A[1]) * dx) / len : Math.hypot(Q[0] - A[0], Q[1] - A[1]);
+      if (d > fd) [far, fd] = [k, d];
+    }
+    if (far < 0) continue;
+    keep[far] = 1;
+    todo.push([a, far], [far, b]);
+  }
+  return P.filter((_, k) => keep[k]);
+}
+
+/** A road's edge line as painted: its middle's points (at its start and end, and each of the road's fine rows
+ * between), its paint (unless it says: LINE_W wide, white, solid). Null where it has no length. */
+export function edgeLine(road: RoadDesc, line: Line): Paintable | null {
+  const f = fine(road);
+  const end = f.at[f.at.length - 1] as number;
+  const a0 = Math.max(0, line.from || 0);
+  const a1 = Math.min(end, line.to !== undefined && line.to !== null ? line.to : end);
+  if (a1 - a0 < 1e-6) return null;
+  const rows = [a0, ...[...f.at].filter((a) => a > a0 && a < a1), a1];
+  const { mx, mz, lx, lz } = rowsAt(road, rows);
+  const side = line.side === 'left' ? f.wl : f.wr;
+  const sgn = line.side === 'left' ? 1 : -1;
+  const pad = line.pad ?? LINE_PAD;
+  const points = rows.map((r, k): Vec2 => {
+    const o = sgn * (interp(r, f.at, side) - pad);
+    return [(mx[k] as number) + (lx[k] as number) * o, (mz[k] as number) + (lz[k] as number) * o];
+  });
+  return {
+    points: simplified(points, LINE_KEEP),
+    width: line.w ?? LINE_W,
+    colour: line.colour ?? 'white',
+    style: line.style ?? 'solid',
+    dash: line.dash,
+    gap: line.gap,
+  };
+}
+
+/** Where a car may drive over the rumbles, as an AI line takes them: their low ramps (a ramp's, a floor's, a round
+ * one's, a ramp + concrete's ramp), not their concrete (a concrete rumble's block, a ramp + concrete's back behind its
+ * ramp), nor their back ramps down to the road: those jump, and throw a car. Whether (x, z) is on such a part. */
+export function kerbsToDrive(roads: Roads): (x: number, z: number) => boolean {
+  const T: number[] = [];
+  for (const r of Object.values(roads)) {
+    if (r.along) continue;
+    for (const k of r.kerbs ?? []) {
+      const kind = kindOf(k);
+      if (kind === 'concrete') continue;
+      // (the columns across it a car may be on: its profile's, or a ramp + concrete's ramp's)
+      const cols = kind === 'ramp_concrete' ? RAMP_CONCRETE.ramp.length : (PROFILES[kind] as Profile).pts.length;
+      for (const g of kerbGeometry(r, k, roads, () => 0)) {
+        for (let f = 0; f < g.F.length; f += 3) {
+          const v = [g.F[f] as number, g.F[f + 1] as number, g.F[f + 2] as number];
+          // (each row of the strip its points across: the column a face starts at)
+          const q = Math.min(...v) % g.across;
+          if (q + 1 > cols - 1) continue;
+          for (const i of v) T.push(g.P[i * 3] as number, 0, g.P[i * 3 + 2] as number);
+        }
+      }
+    }
+  }
+  const on = new Cover(T);
+  return (x, z) => on.has(x, z);
+}
+
+/** Where the rumbles rise over their roads: each one's own triangles, on a flat top, risen more than RAISED. */
+function raisedOver(roads: Roads): Cover {
   const raised: number[] = [];
   for (const r of Object.values(roads)) {
     if (r.along) continue;
@@ -919,79 +1011,38 @@ export function layPaint(
             for (const i of v) raised.push(g.P[i * 3] as number, g.P[i * 3 + 1] as number, g.P[i * 3 + 2] as number);
         }
   }
-  const under = new Cover(raised);
-  const out: PaintMesh[] = [];
+  return new Cover(raised);
+}
+
+/** The paint laid on the surface as merged (floor: the merged roads and rumbles, the ground not): each road's edge
+ * lines along their whole length (over whatever floor is there: another road, a rumble, a run-off), then the marks,
+ * all painted as paintLines paints them (an edge line and the next whose ends meet, a road's and the road it joins,
+ * one line, its corners mitred; round a ring of them closed; where they overlap, painted once; a mark over a line of
+ * another colour on top); a piece only on the floor, none under a rumble's raised part (its rise over its road more
+ * than RAISED: the Python's merge_floor); LINE_LIFT over the floor. */
+export function layPaint(roads: Roads, floor: Surface, marks: Mark[] = []): Promise<PaintMesh[]> {
+  const items: { name: string; paint: Paintable }[] = [];
   for (const road of Object.values(roads)) {
-    if (road.along || !road.lines?.length) continue;
-    const height = own(road.name) ?? undefined;
-    for (const { line, pieces } of roadLines(road)) {
-      const P: number[] = [];
-      const F: number[] = [];
-      for (const pc of pieces) {
-        const s = lineStrip(road, pc, height);
-        const base = P.length / 3;
-        const xz = new Float64Array((s.P.length / 3) * 2);
-        const y0 = new Float64Array(s.P.length / 3);
-        for (let i = 0; i < s.P.length / 3; i++) {
-          xz[i * 2] = s.P[i * 3] as number;
-          xz[i * 2 + 1] = s.P[i * 3 + 2] as number;
-          y0[i] = (s.P[i * 3 + 1] as number) - LINE_LIFT;
-        }
-        const y = floor.nearestY(xz, y0, LAY_NEAR);
-        // (a point with no height of its own (off its road's mesh: on another road, a rumble, a run-off): the floor's
-        // under it, whichever it is)
-        const n = s.P.length / 3;
-        const H = new Float64Array(n);
-        const lost = new Set<number>();
-        for (let i = 0; i < n; i++) {
-          const x = s.P[i * 3] as number;
-          const z = s.P[i * 3 + 2] as number;
-          let h = Number.isNaN(y[i] as number) ? (s.P[i * 3 + 1] as number) : (y[i] as number) + LINE_LIFT;
-          if (Number.isNaN(h)) h = floor.y(x, z) + LINE_LIFT;
-          if (Number.isNaN(h)) lost.add(i);
-          H[i] = h;
-        }
-        // (none there either (just past the floor's edge, a line's end at its road's): the height of the nearest of its
-        // points that has one, within LAY_NEAR; none that near: its faces out)
-        const gone = new Set<number>();
-        for (const i of lost) {
-          let best = LAY_NEAR;
-          let h = Number.NaN;
-          for (let j = 0; j < n; j++) {
-            if (lost.has(j)) continue;
-            const d = Math.hypot(
-              (s.P[j * 3] as number) - (s.P[i * 3] as number),
-              (s.P[j * 3 + 2] as number) - (s.P[i * 3 + 2] as number),
-            );
-            if (d <= best) [best, h] = [d, H[j] as number];
-          }
-          if (Number.isNaN(h)) gone.add(i);
-          H[i] = Number.isNaN(h) ? 0 : h;
-        }
-        for (let i = 0; i < n; i++) P.push(s.P[i * 3] as number, H[i] as number, s.P[i * 3 + 2] as number);
-        for (let f = 0; f < s.F.length; f += 3) {
-          const v = [s.F[f] as number, s.F[f + 1] as number, s.F[f + 2] as number];
-          if (v.some((i) => gone.has(i))) continue;
-          const cx = v.reduce((a, i) => a + (s.P[i * 3] as number), 0) / 3;
-          const cz = v.reduce((a, i) => a + (s.P[i * 3 + 2] as number), 0) / 3;
-          if (!under.has(cx, cz)) F.push(...v.map((i) => i + base));
-        }
-      }
-      if (F.length)
-        out.push({
-          name: line.name ?? `LINE_${road.name}`,
-          colour: line.colour ?? 'white',
-          P: Float64Array.from(P),
-          F: Int32Array.from(F),
-        });
+    if (road.along) continue;
+    for (const line of road.lines ?? []) {
+      const paint = edgeLine(road, line);
+      if (paint) items.push({ name: line.name ?? `LINE_${road.name}`, paint });
     }
   }
-  return out;
+  marks.forEach((m, k) => {
+    items.push({ name: m.name ?? `MARK_${k + 1}`, paint: paintable(m) });
+  });
+  const under = raisedOver(roads);
+  return paintLines(
+    items,
+    (x, z) => !Number.isNaN(floor.y(x, z)) && !under.has(x, z),
+    (x, z) => floor.y(x, z),
+  );
 }
 
 // ---- the marks and the start lines (place_objects' marks, start_lines) -------------------------------------------
 
-/** metres between a mark's rows along it (it follows the road) */
+/** metres: the cells the marks' paint is cut in (each piece of it on the floor under it) */
 export const MARK_STEP = 0.25;
 /** a layout's start line (objects.json's layouts' `start_line`): chequered squares, or a single solid white line */
 export type StartLineStyle = 'checker' | 'line';
@@ -1006,12 +1057,15 @@ export const START_LINE_W = LINE_W;
 /** metres either way across the road the start line is looked for, from where it crosses the road's middle */
 const ACROSS_REACH = 20;
 
-/** A mark (objects.json's marks): a strip of paint from p along its heading, its length, its width. */
+/** A mark (objects.json's marks): paint along its curve (an older file's: from p, its length along its heading), its
+ * width. */
 export interface Mark {
   name?: string;
-  p: [number, number];
-  heading: number;
-  length: number;
+  curve?: WallNode[];
+  closed?: boolean;
+  p?: [number, number];
+  heading?: number;
+  length?: number;
   width?: number;
   colour?: string;
   style?: string;
@@ -1030,45 +1084,141 @@ function lifted(name: string, colour: string, P: number[], F: number[], floor: (
   return { name, colour, P: Float64Array.from(P), F: Int32Array.from(F) };
 }
 
-/** The marks painted: each a strip WIDTH wide along its heading from p, solid or in dashes; only where there is road
- * under it (onRoad: paint never on the grass); LINE_LIFT over the floor. */
+/** A mark as painted: its curve (an older one's straight from p), its paint (unless it says: LINE_W wide, white,
+ * solid). */
+export function paintable(mk: Mark): Paintable {
+  const curve = mk.curve ?? (mk.p ? legacyCurve({ p: mk.p, heading: mk.heading ?? 0, length: mk.length ?? 0 }) : []);
+  return {
+    curve,
+    closed: mk.closed,
+    width: mk.width ?? LINE_W,
+    colour: mk.colour ?? 'white',
+    style: mk.style ?? 'solid',
+    dash: mk.dash,
+    gap: mk.gap,
+  };
+}
+
+/** A ring without the points that go straight on (between two in line with them): what it is cut in triangles of. */
+function cornersOf(ring: Vec2[]): Vec2[] {
+  // (a point repeated once; then, again and again, a point in line with those either side of it out)
+  let pts = ring.filter((q, i) => {
+    const p = ring[(i + ring.length - 1) % ring.length] as Vec2;
+    return Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-9;
+  });
+  for (let changed = true; changed && pts.length >= 3; ) {
+    changed = false;
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[(i + n - 1) % n] as Vec2;
+      const b = pts[i] as Vec2;
+      const c = pts[(i + 1) % n] as Vec2;
+      const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      if (Math.abs(cr) <= 1e-12 * Math.max(1, Math.hypot(c[0] - a[0], c[1] - a[1]))) {
+        pts = [...pts.slice(0, i), ...pts.slice(i + 1)];
+        changed = true;
+        break;
+      }
+    }
+  }
+  return pts;
+}
+
+/** a shape of paint with more points than this split in tiles PAINT_TILE metres square, a mesh each (none too big
+ * for a game: AC's meshes count their points in 16 bits) */
+export const PAINT_MOST = 30000;
+export const PAINT_TILE = 64;
+
+/** Lines of paint laid (each named, its paint): the lines they make (paintChains: those of one paint whose ends meet
+ * one line, its corners mitred, round to its first where they close a ring; dotted, in its dashes), each widened,
+ * all of a colour that meet one shape (where they overlap, painted once; a colour's under a later line's of another
+ * colour, cut away), each shape a mesh named as its first line is (one of more than PAINT_MOST points, a mesh each
+ * PAINT_TILE square of it, the first its name, the rest _2, _3...). Cut in cells MARK_STEP square, a piece only where keep says (its middle), each point
+ * of it LINE_LIFT over the floor's height there (none: the floor's at the piece's middle). */
+async function paintLines(
+  items: { name: string; paint: Paintable }[],
+  keep: (x: number, z: number) => boolean,
+  floor: (x: number, z: number) => number,
+): Promise<PaintMesh[]> {
+  const chains = paintChains(items.map((i) => i.paint));
+  if (!chains.length) return [];
+  // (GEOS loaded only here, where it is needed: the map's start lines, painted without it, not waiting on it)
+  const { geosPaint, geosReady } = await import('./geos');
+  await geosReady();
+  const shapes = geosPaint(
+    chains.map((c) => ({
+      colour: c.colour,
+      half: c.width / 2,
+      lines: c.style === 'dotted' ? chainPieces(c).map((points) => ({ points, closed: false })) : [c],
+      ...(c.cuts ? { cuts: c.cuts.map(pastSeam) } : {}),
+    })),
+    MARK_STEP,
+  );
+  const out: PaintMesh[] = [];
+  for (const shape of shapes) {
+    const tiles = new Map<string, { P: number[]; F: number[] }>();
+    for (const piece of shape.pieces) {
+      const ring = cornersOf(piece);
+      if (ring.length < 3) continue;
+      const cx = ring.reduce((a, q) => a + q[0], 0) / ring.length;
+      const cz = ring.reduce((a, q) => a + q[1], 0) / ring.length;
+      if (!keep(cx, cz)) continue;
+      const mid = floor(cx, cz);
+      const key = `${Math.floor(cx / PAINT_TILE)},${Math.floor(cz / PAINT_TILE)}`;
+      let t = tiles.get(key);
+      if (!t) {
+        t = { P: [], F: [] };
+        tiles.set(key, t);
+      }
+      const base = t.P.length / 3;
+      for (const [x, z] of ring) {
+        const y = floor(x, z);
+        t.P.push(x, (Number.isNaN(y) ? (Number.isNaN(mid) ? 0 : mid) : y) + LINE_LIFT, z);
+      }
+      for (const i of earClip(ring)) t.F.push(base + i);
+    }
+    const first = Math.min(...shape.strokes.flatMap((k) => chains[k]?.marks ?? []));
+    const name = items[first]?.name ?? `PAINT_${first + 1}`;
+    const colour = chains[shape.strokes[0] as number]?.colour ?? 'white';
+    const all = [...tiles].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, t]) => t);
+    const points = all.reduce((n, t) => n + t.P.length / 3, 0);
+    const parts =
+      points > PAINT_MOST
+        ? all
+        : [
+            all.reduce(
+              (one, t) => {
+                const base = one.P.length / 3;
+                for (const v of t.P) one.P.push(v);
+                for (const i of t.F) one.F.push(i + base);
+                return one;
+              },
+              { P: [] as number[], F: [] as number[] },
+            ),
+          ];
+    let k = 0;
+    for (const t of parts) {
+      if (!t.F.length) continue;
+      facingUp(t.P, t.F);
+      k++;
+      out.push({ name: k === 1 ? name : `${name}_${k}`, colour, P: Float64Array.from(t.P), F: Int32Array.from(t.F) });
+    }
+  }
+  return out;
+}
+
+/** The marks painted (paintLines), a piece only where there is road under it (onRoad: paint never on the grass);
+ * LINE_LIFT over the floor. */
 export function markPaint(
   marks: Mark[],
   onRoad: (x: number, z: number) => boolean,
   floor: (x: number, z: number) => number,
-): PaintMesh[] {
-  const out: PaintMesh[] = [];
-  marks.forEach((mk, k) => {
-    const w = mk.width ?? LINE_W;
-    const t = [Math.sin(mk.heading), Math.cos(mk.heading)] as const;
-    const side = [t[1], -t[0]] as const;
-    const runs: [number, number][] =
-      mk.style === 'dotted'
-        ? npArange(0, mk.length, (mk.dash ?? 0.5) + (mk.gap ?? 0.5)).map((a) => [
-            a,
-            Math.min(a + (mk.dash ?? 0.5), mk.length),
-          ])
-        : [[0, mk.length]];
-    const P: number[] = [];
-    const F: number[] = [];
-    for (const [a, b] of runs) {
-      const S = [...npArange(a, b, MARK_STEP), b];
-      const base = P.length / 3;
-      const on = S.map((s) => {
-        const x = mk.p[0] + s * t[0];
-        const z = mk.p[1] + s * t[1];
-        for (const sgn of [-0.5, 0.5]) P.push(x + side[0] * w * sgn, 0, z + side[1] * w * sgn);
-        return onRoad(x, z);
-      });
-      for (let j = 0; j < S.length - 1; j++)
-        if (on[j] && on[j + 1]) {
-          const i0 = base + 2 * j;
-          F.push(i0, i0 + 2, i0 + 1, i0 + 1, i0 + 2, i0 + 3);
-        }
-    }
-    if (F.length) out.push(lifted(mk.name ?? `MARK_${k + 1}`, mk.colour ?? 'white', P, F, floor));
-  });
-  return out;
+): Promise<PaintMesh[]> {
+  return paintLines(
+    marks.map((m, k) => ({ name: m.name ?? `MARK_${k + 1}`, paint: paintable(m) })),
+    onRoad,
+    floor,
+  );
 }
 
 /** Where a line from a (along u, from s = lo to hi) is inside a ring: its stretches inside, [s0, s1] each, in order. */

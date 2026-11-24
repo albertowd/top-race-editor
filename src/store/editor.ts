@@ -18,14 +18,27 @@ import {
   type PaintMark,
   type RacingLines,
   type Road,
+  type RubberMark,
+  type RubberWear,
   type Selection,
   type Side,
   type Spot,
   type StartLineStyle,
   type TrackObjects,
   type Vec2,
+  type WallNode,
 } from '../domain/types';
 import { parkingMarks } from '../editing/areas';
+import {
+  type BumpBrush,
+  type Bumps,
+  bumpDab,
+  bumpPoint,
+  bumpsFrom,
+  bumpsJson,
+  hasBumps,
+  noBumps,
+} from '../editing/bumps';
 import {
   addNode,
   addProfilePoint,
@@ -48,6 +61,7 @@ import {
   PAINT_PREFIX,
   paintAt,
 } from '../editing/lineup';
+import { markThrough, rubberWidth } from '../editing/marks';
 import {
   addObject,
   emptyLayout,
@@ -65,6 +79,7 @@ import {
   reorderObject,
   setKey,
 } from '../editing/objects';
+import { CAR_WIDTH, optimiseLine } from '../editing/racingline';
 import {
   addObjectNode as addObjectNodeTo,
   keptWhy,
@@ -162,6 +177,7 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
   // (what was last loaded or saved: what differs from it is what is saved)
   let savedRoads: Road[] | null = null;
   let savedObjects: TrackObjects | null = null;
+  let savedBumps: Bumps | null = null;
   // (whether the track's trees were read: only then are they saved, among the objects or none)
   let treesRead = false;
   // (the layouts' models as read or last saved, and whether they were read: only then are they saved)
@@ -170,7 +186,7 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 
   // ---------------------------------------------------------------- history
 
-  const snapshot = (): Snapshot => ({ roads: get().roads, objects: get().objects });
+  const snapshot = (): Snapshot => ({ roads: get().roads, objects: get().objects, bumps: get().bumps });
 
   function remember() {
     const s = get();
@@ -191,6 +207,7 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
       roads: to.roads,
       ...(to.roads === get().roads ? {} : { meshes: {} }),
       objects: to.objects,
+      bumps: to.bumps,
       obj: keep,
       undo,
       redo,
@@ -350,6 +367,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
         ...(isModelKind(kind) ? { model: s.models[kind] } : {}),
         // (an area: of the track's first material)
         ...(kind === 'areas' && s.track?.materials?.[0] ? { model: s.track.materials[0] } : {}),
+        // (rubber: as dark as new rubber is laid, as wide as such a band along the racing line)
+        ...(kind === 'rubber' ? { rubber: newRubberPaint() } : {}),
       });
     }, kind);
     if (!picked) return;
@@ -372,15 +391,16 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
     let i = -1;
     changeObjects((d) => {
       const taken = names(d);
-      d.marks.push({
-        name: freeName('MARK_START_', taken, 1),
-        p: [g.left.x, g.left.z],
-        heading: headingOf(g.right.x - g.left.x, g.right.z - g.left.z),
-        length: Math.round(Math.hypot(g.right.x - g.left.x, g.right.z - g.left.z) * 1000) / 1000,
-        width: ACROSS_WIDTH,
-        colour: 'white',
-        style: 'solid',
-      });
+      d.marks.push(
+        markThrough(
+          freeName('MARK_START_', taken, 1),
+          [
+            [g.left.x, g.left.z],
+            [g.right.x, g.right.z],
+          ],
+          { width: ACROSS_WIDTH, colour: 'white' },
+        ),
+      );
       i = d.marks.length - 1;
     }, 'marks');
     if (i < 0) return;
@@ -601,6 +621,9 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
         ]),
       );
       const lists = await api.layouts().catch(() => null);
+      // (the roads' bumps: none read, none)
+      const bumps = bumpsFrom(await api.bumps().catch(() => null));
+      savedBumps = bumps;
       listsRead = !!lists;
       savedLists = JSON.stringify(lists?.layouts ?? {});
       const { roads: list, ...track } = roads;
@@ -618,6 +641,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
         objectsSeeded: objects?.seeded ?? false,
         layout: placed?.layouts[get().layout] ? get().layout : firstLayout(placed),
         obj: null,
+        bumps,
+        bumpPick: null,
       });
       savedRoads = get().roads;
       const first = get().roads[0];
@@ -757,14 +782,26 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
       return;
     }
     const objectsChanged = !!s.objects && (s.objects !== savedObjects || s.objectsSeeded);
-    const roadsChanged = s.roads !== savedRoads || s.deleted.length > 0 || !objectsChanged;
+    const bumpsChanged = s.bumps !== savedBumps;
+    const roadsChanged = s.roads !== savedRoads || s.deleted.length > 0 || (!objectsChanged && !bumpsChanged);
     status('saving…');
-    await task('Saving', true, async () => saving(s, names, objectsChanged, roadsChanged));
+    await task('Saving', true, async () => saving(s, names, objectsChanged, roadsChanged, bumpsChanged));
   }
 
-  async function saving(s: EditorState, names: string[], objectsChanged: boolean, roadsChanged: boolean) {
+  async function saving(
+    s: EditorState,
+    names: string[],
+    objectsChanged: boolean,
+    roadsChanged: boolean,
+    bumpsChanged = false,
+  ) {
     try {
       const said: string[] = [];
+      if (bumpsChanged) {
+        await api.saveBumps(bumpsJson(s.bumps));
+        savedBumps = s.bumps;
+        said.push('bumps saved');
+      }
       if (roadsChanged) {
         const deleted = s.deleted.filter((n) => !names.includes(n));
         const res = await api.save(s.roads, deleted);
@@ -855,6 +892,58 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
     if (mode === 'place' && !get().layers.objects) setLayer('objects', true);
   }
 
+  // ---------------------------------------------------------------- the roads' bumps
+
+  /** How the bumps are made (a point at a time, a brush; its reach, its strength). */
+  function setBumpBrush(b: Partial<BumpBrush>) {
+    set({ bumpBrush: { ...get().bumpBrush, ...b } });
+  }
+
+  /** New bumps: not saved (remembered first, where asked: a stroke's first dab, a point's first move). */
+  function editBumps(bumps: Bumps, first = false) {
+    if (bumps === get().bumps) return;
+    if (first) remember();
+    set({ bumps, dirty: true, status: 'not saved' });
+  }
+
+  /** A dab of the brush at (x, z) (first: a stroke begun, remembered for undo). */
+  function bumpDabAt(x: number, z: number, first = false) {
+    const s = get();
+    editBumps(bumpDab(s.bumps, x, z, s.bumpBrush), first);
+  }
+
+  /** The point of a road's mesh (of those loaded: the road picked's, and those it joins) nearest (x, z), within tol
+   * metres, picked to bump; whether one was. */
+  function pickBumpPoint(x: number, z: number, tol: number): boolean {
+    let best: Vec2 | null = null;
+    let bd = tol;
+    for (const m of Object.values(get().meshes)) {
+      const P = m.P;
+      if (!P) continue;
+      for (let i = 0; i < P.length; i += 2) {
+        const d = Math.hypot((P[i] as number) - x, (P[i + 1] as number) - z);
+        if (d <= bd) [bd, best] = [d, [P[i] as number, P[i + 1] as number]];
+      }
+    }
+    set({ bumpPick: best });
+    return best !== null;
+  }
+
+  /** The point picked's bump set to metres (first: remembered for undo), easing to nothing within the brush's reach
+   * for a point. */
+  function setBumpAtPick(metres: number, first = true) {
+    const s = get();
+    if (!s.bumpPick) return;
+    editBumps(bumpPoint(s.bumps, s.bumpPick[0], s.bumpPick[1], metres, s.bumpBrush.reach), first);
+  }
+
+  /** Every bump taken away (remembered: undo brings them back). */
+  function clearBumps() {
+    if (!hasBumps(get().bumps)) return;
+    editBumps(noBumps(), true);
+    status('the bumps cleared; not saved yet');
+  }
+
   /** What placing adds (and placing on). */
   function setPlace(kind: ObjectKind) {
     if (!CATEGORIES[get().focus].kinds.includes(kind)) setFocus(categoryOf(kind));
@@ -866,6 +955,55 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
   function paintAcross() {
     setPlace('marks');
     set({ markAcross: true });
+  }
+
+  /** What a new rubber mark is: as dark as the track lays new rubber (used where it says none), as wide as such a
+   * band along the cars' racing line. */
+  function newRubberPaint(): Pick<RubberMark, 'width' | 'wear'> {
+    const o = get().objects;
+    const w = o?.wear?.rubber;
+    const wear: RubberWear = w && w !== 'new' ? w : 'used';
+    return { wear, width: rubberWidth(wear, o?.ai?.width ?? CAR_WIDTH) };
+  }
+
+  /** Rubber laid along a layout's racing lines (its fast line, its pit lane line): each a rubber mark of the track's,
+   * on in every layout (RUBBER_<LAYOUT>_FAST, _PIT; those laid from them before replaced), the first picked. */
+  function rubberFromLines(layout = get().layout) {
+    const s = get();
+    const L = s.objects?.layouts[layout]?.lines;
+    const lines = (['fast', 'pit'] as const).flatMap((k) => {
+      const line = L?.[k];
+      return line && line.curve.length > 1 ? [[k, line] as const] : [];
+    });
+    if (!s.objects || !lines.length) {
+      status(`${layout || 'This layout'} has no racing lines to lay rubber along`);
+      return;
+    }
+    const paint = newRubberPaint();
+    let first = -1;
+    let replaced = 0;
+    changeObjects((d) => {
+      d.rubber ??= [];
+      for (const [k, line] of lines) {
+        const name = `RUBBER_${layout.toUpperCase()}_${k.toUpperCase()}`;
+        const m: RubberMark = {
+          name,
+          curve: structuredClone(line.curve),
+          ...(line.closed && line.curve.length > 2 ? { closed: true } : {}),
+          ...paint,
+        };
+        let at = d.rubber.findIndex((r) => r.name === name);
+        if (at >= 0) {
+          d.rubber[at] = m;
+          replaced++;
+        } else at = d.rubber.push(m) - 1;
+        if (first < 0) first = at;
+      }
+    }, 'rubber');
+    if (first >= 0) selectObject({ kind: 'rubber', i: first, j: -1 });
+    status(
+      `rubber laid along ${layout}'s ${lines.map(([k]) => (k === 'fast' ? 'fast line' : 'pit lane')).join(' and ')}${replaced ? ` (replacing ${replaced} laid before)` : ''}; not saved yet`,
+    );
   }
 
   /** A kind's model chosen: what placing it adds, and placing it. */
@@ -1459,6 +1597,41 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
     set({ routing: null });
   }
 
+  /** The layout's fast line optimised (racingline.ts: across the roads, within what its cars may use, to bend as
+   * little as it can); none yet: made along the roads clicked first (routing), optimised as it is made. */
+  function optimiseFast() {
+    const s = get();
+    const fast = s.objects?.layouts[s.layout]?.lines?.fast;
+    if (!fast || fast.curve.length < 3) {
+      startRouting('fast');
+      status('Click the roads of the lap in order, then Make: the fast line is made along them and optimised');
+      return;
+    }
+    const find = lookup(s.roads);
+    let done = false;
+    changeObjects((d) => {
+      const L = d.layouts[s.layout]?.lines;
+      if (!L?.fast) return;
+      const curve = optimiseLine(
+        current(L.fast).curve as WallNode[],
+        true,
+        s.roads,
+        find,
+        s.objects?.ai?.width ?? CAR_WIDTH,
+      );
+      if (curve.length < 3) return;
+      L.fast.curve = castDraft(curve);
+      keepPitOn(L);
+      done = true;
+    }, 'fast');
+    if (!done) {
+      ui.alert('The fast line could not be optimised here.');
+      return;
+    }
+    selectObject({ kind: 'fast', i: 0, j: -1 });
+    status('the fast line optimised: out wide, its apexes, out wide again; not saved yet');
+  }
+
   /** The line made along the roads clicked (for the layout shown): picked, to edit. */
   function makeRouted() {
     const s = get();
@@ -1488,9 +1661,11 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
       const L = d.layouts[s.layout] as LayoutObjects;
       L.lines ??= {};
       if (r.kind === 'fast') {
-        const curve = lineFromRoads(paths, true, start);
-        if (curve.length < 3) return;
-        L.lines.fast = { curve, closed: true };
+        // (along the roads, then optimised: the line a car takes, not the roads' middles)
+        const along = lineFromRoads(paths, true, start);
+        if (along.length < 3) return;
+        const curve = optimiseLine(along, true, s.roads, find, s.objects?.ai?.width ?? CAR_WIDTH);
+        L.lines.fast = { curve: curve.length >= 3 ? curve : along, closed: true };
         keepPitOn(L.lines);
         made = true;
       } else {
@@ -1543,6 +1718,7 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
     setFocus,
     setOthers: (others: Others) => set({ others }),
     toggleSidebar: (open?: boolean) => set({ sidebar: open ?? !get().sidebar }),
+    toggleObjectList: (open?: boolean) => set({ objectList: open ?? !get().objectList }),
     escape: cancel,
     task,
     listTracks,
@@ -1575,7 +1751,14 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
     selectObject,
     setLayout,
     setPlace,
+    optimiseFast,
+    setBumpBrush,
+    bumpDabAt,
+    pickBumpPoint,
+    setBumpAtPick,
+    clearBumps,
     paintAcross,
+    rubberFromLines,
     placeModel,
     setModel,
     setLining,

@@ -36,7 +36,10 @@ export function visibleTiles(view: View, size: Size, sat: Pick<TrackInfo, 'span'
   return out;
 }
 
-/** Tiles as images, loaded as asked for, the oldest forgotten past a limit. */
+/** ms before a tile not had is asked for again */
+export const RETRY_MS = 2000;
+
+/** Tiles as images, loaded as asked for, the oldest forgotten past a limit; one not had asked for again. */
 export class TileCache {
   private readonly images = new Map<string, HTMLImageElement>();
 
@@ -54,9 +57,16 @@ export class TileCache {
       const image = new Image();
       im = image;
       image.onload = this.onLoad;
+      // (a tile not had (the engine busy, say): forgotten, and the map drawn again a moment later, which asks for it
+      // again; kept, it would stay blank)
+      const failed = () => {
+        if (this.images.get(key) === image) this.images.delete(key);
+        setTimeout(this.onLoad, RETRY_MS);
+      };
+      image.onerror = failed;
       const url = this.url(level, x, y);
       if (typeof url === 'string') image.src = url;
-      else url.then((u) => (image.src = u)).catch(() => {});
+      else url.then((u) => (image.src = u)).catch(failed);
       this.images.set(key, image);
       if (this.images.size > this.limit) {
         const oldest = this.images.keys().next().value;

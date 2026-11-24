@@ -2,14 +2,18 @@ import { type ReactNode, useState } from 'react';
 import { CATEGORIES, CATEGORY_ORDER, type Category, countIn, type Others, UNCOUNTED } from '../domain/categories';
 import { useEditor, useEditorShallow, useEditorState } from '../store/EditorContext';
 import { TerrainPanel } from '../terrain/TerrainPanel';
+import { BumpsPanel } from './BumpsPanel';
 import { Segmented } from './fields';
+import { GroundPicturePanel } from './GroundPicturePanel';
 import { CATEGORY_ICONS, Icon } from './icons';
 import { LiningPanel } from './LiningPanel';
 import { NodeForm } from './NodeForm';
-import { ObjectForm, ObjectList, ObjectsPanel } from './ObjectsPanel';
+import { ObjectFinder, ObjectForm, ObjectsPanel } from './ObjectsPanel';
 import { KerbsForm, LinesForm, PickRoad } from './PaintForms';
 import { RoadForm } from './RoadForm';
 import { RoadList } from './RoadList';
+import { SurfacePanel } from './SurfacePanel';
+import { WearPanel } from './WearPanel';
 
 const OTHERS: readonly (readonly [Others, string])[] = [
   ['show', 'Show'],
@@ -57,9 +61,24 @@ function Body({ focus }: Readonly<{ focus: Category }>) {
     case 'paint':
       return <PaintFlow />;
     case 'terrain':
-      return <TerrainPanel />;
+      return (
+        <>
+          <GroundPicturePanel />
+          <TerrainPanel />
+        </>
+      );
     case 'race':
-      return <ObjectsFlow kinds={CATEGORIES[focus].kinds} extra={<LiningPanel />} />;
+      return (
+        <ObjectsFlow
+          kinds={CATEGORIES[focus].kinds}
+          extra={
+            <>
+              <WearPanel part="lines" />
+              <LiningPanel />
+            </>
+          }
+        />
+      );
     default:
       return <ObjectsFlow kinds={CATEGORIES[focus].kinds} />;
   }
@@ -102,6 +121,8 @@ function RoadsFlow() {
         </button>
         <SurfaceCheck />
       </div>
+      <SurfacePanel />
+      <BumpsPanel />
       <RoadList />
       <RoadForm />
       <NodeForm />
@@ -130,20 +151,24 @@ function RumblesFlow() {
   );
 }
 
-type PaintPart = 'lines' | 'marks';
+type PaintPart = 'lines' | 'marks' | 'rubber';
 
 function PaintFlow() {
   const paintable = usePaintable();
-  const { line, mark } = useEditorShallow((s) => ({ line: s.sel.line >= 0, mark: s.obj?.kind === 'marks' }));
+  const { line, mark } = useEditorShallow((s) => ({
+    line: s.sel.line >= 0,
+    mark: s.obj?.kind === 'marks' || s.obj?.kind === 'rubber' ? s.obj.kind : null,
+  }));
   const [chosen, choose] = useState<PaintPart>('lines');
   // (what is picked on the map shows its own part)
   let part = chosen;
-  if (mark) part = 'marks';
+  if (mark) part = mark;
   else if (line) part = 'lines';
   const ed = useEditor();
   const onChange = (p: PaintPart) => {
-    if (p === 'lines') ed.selectObject(null);
-    else ed.select({ line: -1 });
+    // (what is picked of another part let go, as it would show its own)
+    if (p === 'lines' || (mark && mark !== p)) ed.selectObject(null);
+    if (p !== 'lines') ed.select({ line: -1 });
     choose(p);
   };
   return (
@@ -154,10 +179,14 @@ function PaintFlow() {
         options={[
           ['lines', 'Road Lines'],
           ['marks', 'Paint Marks'],
+          ['rubber', 'Rubber'],
         ]}
         onChange={onChange}
       />
-      {part === 'lines' ? (
+      {part === 'rubber' ? <WearPanel part="rubber" /> : <WearPanel part="paint" />}
+      {part === 'rubber' ? (
+        <ObjectsFlow kinds={['rubber']} />
+      ) : part === 'lines' ? (
         <>
           <RoadList count="lines" />
           {paintable ? <LinesForm /> : <PickRoad what="lines" />}
@@ -202,8 +231,12 @@ function ObjectsFlow({ kinds, extra }: Readonly<{ kinds: CategoryKinds; extra?: 
     <>
       <ObjectsPanel kinds={kinds} />
       {extra}
-      {picked ? <ObjectForm /> : null}
-      <ObjectList kinds={kinds} />
+      {picked ? (
+        <ObjectForm />
+      ) : (
+        <p className="empty-state pick-hint">Pick one on the map to see it here, or find it in the list.</p>
+      )}
+      <ObjectFinder kinds={kinds} />
     </>
   );
 }
@@ -220,6 +253,7 @@ function Overview() {
     roads: st.roads,
     objects: st.objects,
     layout: st.layout,
+    sidebar: st.sidebar,
   }));
   if (s.obj) return <ObjectForm />;
   if (s.road) {
@@ -247,19 +281,22 @@ function Overview() {
       <p className="empty-state">
         Pick anything on the map to edit it here, or pick a category to work on one kind of thing at a time.
       </p>
-      <ul className="list overview" aria-label="Categories">
-        {CATEGORY_ORDER.filter((c) => c !== 'all').map((c) => (
-          <li key={c}>
-            <button type="button" className="row-button" onClick={() => ed.setFocus(c)}>
-              <span className={`side-icon side-${c}`}>
-                <Icon name={CATEGORY_ICONS[c]} />
-              </span>
-              <span className="row-title">{CATEGORIES[c].label}</span>
-              {UNCOUNTED.has(c) ? null : <span className="badge">{countIn(c, s.roads, s.objects, s.layout)}</span>}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {/* (the categories here only with the sidebar hidden: it lists them itself) */}
+      {s.sidebar ? null : (
+        <ul className="list overview" aria-label="Categories">
+          {CATEGORY_ORDER.filter((c) => c !== 'all').map((c) => (
+            <li key={c}>
+              <button type="button" className="row-button" onClick={() => ed.setFocus(c)}>
+                <span className={`side-icon side-${c}`}>
+                  <Icon name={CATEGORY_ICONS[c]} />
+                </span>
+                <span className="row-title">{CATEGORIES[c].label}</span>
+                {UNCOUNTED.has(c) ? null : <span className="badge">{countIn(c, s.roads, s.objects, s.layout)}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }

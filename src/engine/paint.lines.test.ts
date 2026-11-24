@@ -44,22 +44,16 @@ async function mergedFloor(roads: Roads): Promise<Record<string, Mesh>> {
   return merge(regions, window, localFiller(await triangle()));
 }
 
-/** The paint laid on them, as the track's build lays it: each road's lines from its own mesh's height. */
-function paintOn(roads: Roads, meshes: Record<string, Mesh>): PaintMesh[] {
-  const floor = floorOf(Object.fromEntries(Object.entries(meshes).filter(([n]) => n !== 'ground')));
-  return layPaint(roads, floor, (name) => {
-    const m = meshes[name];
-    if (!m) return null;
-    const S = surfaceOf(m);
-    return (x, z) => S.y(x, z);
-  });
+/** The paint laid on them, as the track's build lays it: on the roads and rumbles as merged. */
+function paintOn(roads: Roads, meshes: Record<string, Mesh>): Promise<PaintMesh[]> {
+  return layPaint(roads, floorOf(Object.fromEntries(Object.entries(meshes).filter(([n]) => n !== 'ground'))));
 }
 
 /** Where along a road's line (metres along it) the paint is seen: at its middle and either side of it, a face of
- * its paint over the floor there, at least half LINE_LIFT over the floor's top. */
+ * paint of its colour over the floor there (its own, or another's painted as one with it), at least half LINE_LIFT
+ * over the floor's top. */
 function seen(road: RoadDesc, line: Line, paint: PaintMesh[], meshes: Record<string, Mesh>) {
-  const name = line.name ?? `LINE_${road.name}`;
-  const on = paint.filter((p) => p.name === name).map((p) => surfaceOf(p));
+  const on = paint.filter((p) => p.colour === (line.colour ?? 'white')).map((p) => surfaceOf(p));
   const top = floorOf(Object.fromEntries(Object.entries(meshes).filter(([n]) => n !== 'ground')));
   const f = fine(road);
   const sgn = line.side === 'left' ? 1 : -1;
@@ -114,7 +108,7 @@ describe('the edge lines laid on the floor as merged', () => {
       },
     };
     const meshes = await mergedFloor(roads);
-    const paint = paintOn(roads, meshes);
+    const paint = await paintOn(roads, meshes);
     const M = roads.M as RoadDesc;
     const B = roads.B as RoadDesc;
     const end = (r: RoadDesc) => fine(r).at.at(-1) as number;
@@ -161,7 +155,7 @@ describe('the edge lines laid on the floor as merged', () => {
       },
     };
     const meshes = await mergedFloor(roads);
-    const paint = paintOn(roads, meshes);
+    const paint = await paintOn(roads, meshes);
     const H = roads.H as RoadDesc;
     const at = seen(H, (roads.H as Roads[string]).lines?.[0] as Line, paint, meshes);
     expect(missing(at, 0, 19.5)).toEqual([]);

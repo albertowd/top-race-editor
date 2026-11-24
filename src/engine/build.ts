@@ -14,9 +14,11 @@
 import { acFolder, buildAc } from './acbuild';
 import { layoutsMissing } from './exportcheck';
 import { writeZip } from './npz';
+import { byCodePoint } from './order';
 import type { HostFiles } from './placehost';
 import { type PyJson, plain } from './pyjson';
 import { buildRf2 } from './rf2/build';
+import type { Rf2PictureHost } from './rf2/pictures';
 import { readPart } from './trackdoc';
 import type { TrackSettings } from './trackfiles';
 
@@ -314,6 +316,13 @@ export interface BuilderOptions {
   /** the BeamNG level made by the engine (beamng/level.ts), of a layout, from the AC track made (its AI lines): where
    * it runs with what it needs (the app's engine window); none, no BeamNG level */
   makeBeamng?: (o: { layout: string; ai: string; log: (line: string) => void }) => Promise<void>;
+  /** the AC track's layouts' pictures made in it (layoutmap.ts: each one's photo with its map, its outline), before
+   * it is installed or packed: where there is a canvas to draw them on (the app's engine window); none, the track's
+   * pictures as they came */
+  makeAcPictures?: (o: { out: string; log: (line: string) => void }) => Promise<void>;
+  /** what draws the rFactor 2 location's pictures (its icons, thumbnails, loading screens) and renders the track under
+   * some: where there is a canvas (the app's engine window); none, no pictures */
+  rf2Pictures?: Rf2PictureHost;
 }
 
 /** The builds of a track (one at a time). */
@@ -661,9 +670,13 @@ export class Builder {
       aiFromLines: true,
       log: this.sayer(job),
     });
+    const out = `${this.project}/build/ac/content/tracks/${tid}`;
+    if (this.opts.makeAcPictures) {
+      this.stopped(job);
+      await this.opts.makeAcPictures({ out, log: this.sayer(job) });
+    }
     if (job.install) {
       this.stopped(job);
-      const out = `${this.project}/build/ac/content/tracks/${tid}`;
       const dest = `${((await this.acTracks()) ?? '').replace(/[\\/]+$/, '')}/${tid}`;
       job.say(`AC: ${await this.sync(out, dest)} files updated in ${dest}`);
       job.installed.push(['ac', dest]);
@@ -690,6 +703,9 @@ export class Builder {
         project: this.project,
         out: `${this.project}/build/rf2`,
         install: rf2 ?? undefined,
+        editorModels: this.opts.editorModels,
+        pictures: this.opts.rf2Pictures,
+        acTrack: `${this.project}/build/ac/content/tracks/${tid}`,
         log: this.sayer(job),
       });
       for (const [l, why] of Object.entries(made.skipped)) job.say(`rFactor 2: ${l} left out: ${why}`);
@@ -762,7 +778,7 @@ export class Builder {
     let n = 0;
     const walk = async (rel: string): Promise<void> => {
       const here = rel ? `${src}/${rel}` : src;
-      for (const name of (await this.files.list(here)).sort()) {
+      for (const name of (await this.files.list(here)).sort(byCodePoint)) {
         const r = rel ? `${rel}/${name}` : name;
         const a = await this.sys.stat(`${src}/${r}`);
         if (!a) continue;
@@ -780,7 +796,7 @@ export class Builder {
     await walk('');
     const prune = async (rel: string): Promise<void> => {
       const here = rel ? `${dst}/${rel}` : dst;
-      for (const name of (await this.files.list(here)).sort()) {
+      for (const name of (await this.files.list(here)).sort(byCodePoint)) {
         const r = rel ? `${rel}/${name}` : name;
         const b = await this.sys.stat(`${dst}/${r}`);
         if (!b) continue;
@@ -842,14 +858,14 @@ export class Builder {
       const base = `${this.project}/build/ac`;
       const names: string[] = [];
       const walk = async (rel: string): Promise<void> => {
-        for (const name of (await this.files.list(`${base}/${rel}`)).sort()) {
+        for (const name of (await this.files.list(`${base}/${rel}`)).sort(byCodePoint)) {
           const r = `${rel}/${name}`;
           if ((await this.sys.stat(`${base}/${r}`))?.dir) await walk(r);
           else names.push(r);
         }
       };
       await walk(`content/tracks/${tid}`);
-      names.sort();
+      names.sort(byCodePoint);
       const got: { name: string; data: Uint8Array }[] = [];
       for (const name of names) {
         got.push({ name, data: await this.files.read(`${base}/${name}`) });

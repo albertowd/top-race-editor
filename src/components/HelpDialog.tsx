@@ -67,8 +67,12 @@ const KEYS: readonly [string, string][] = [
     "a curve as a road's: drag its nodes and handles (Alt: a corner), its curve to move it; A or a double click adds a node; S smooths it (or the node picked)",
   ],
   [
+    'U (Bumps, in Roads)',
+    'the roads’ surface bumped by hand: a point of the road picked’s mesh dragged up or down (Shift: finer) or typed, or a brush that raises, lowers or smooths; the build moves the merged floor by them',
+  ],
+  [
     'Marks: O (Marks picked), then drag',
-    'a paint mark from where the drag starts to where it ends; drag an end to stretch and turn it, Shift: by 15°',
+    'a paint mark from where the drag starts to where it ends, then clicks carry it on; its nodes and handles as a tyre wall’s, a node snapping onto another mark’s end (Ctrl: not; Shift: its way by 15°)',
   ],
   ['Esc', 'back to Select, nothing selected'],
   ['Ctrl+Z / Ctrl+Y / Ctrl+S', 'undo / redo / save'],

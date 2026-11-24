@@ -109,3 +109,8 @@ export const SURFACE_WINDOW = 150;
 export const UNDO_DEPTH = 150;
 export const MIN_PPM = 0.3;
 export const MAX_PPM = 400;
+
+/** Screen pixels of the marks dragged to edit something (as large however far the map is zoomed): a node's square (its
+ * side), a handle's dot (its radius), a width's diamond and an end's triangle (from their middle to a point), and how
+ * far from one a press takes it (the nearest, where several are that near). */
+export const MARK_PX = { node: 14, dot: 6.5, point: 9, grab: 14 } as const;

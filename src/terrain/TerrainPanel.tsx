@@ -288,19 +288,19 @@ function MouseGroup() {
       <table className="kinds terrain-heights">
         <tbody>
           <tr>
-            <td>Original</td>
+            <th scope="row">Original</th>
             <td>{fmt(at('original'))} m</td>
           </tr>
           <tr>
-            <td>Filtered</td>
+            <th scope="row">Filtered</th>
             <td>{fmt(at('filtered'))} m</td>
           </tr>
           <tr>
-            <td>Ground</td>
+            <th scope="row">Ground</th>
             <td>{fmt(at('ground'))} m</td>
           </tr>
           <tr>
-            <td>Edits</td>
+            <th scope="row">Edits</th>
             <td>{Number.isNaN(change) ? '0.00' : `${change > 0 ? '+' : ''}${fmt(change)}`} m</td>
           </tr>
         </tbody>
@@ -398,7 +398,9 @@ function FiltersGroup() {
                   onClick={() => t.pickThing({ kind: 'area', i })}
                 >
                   <span className="swatch" style={{ background: AREA_COLOURS[a.kind] }} />
-                  <span className="row-title">{a.name}</span>
+                  <span className="row-title" title={a.name}>
+                    {a.name}
+                  </span>
                   <span className="dim">{a.kind === 'ground' ? 'ground' : 'not ground'}</span>
                 </button>
               </li>
@@ -460,7 +462,9 @@ function EditsGroup() {
                     onClick={() => t.pickThing({ kind: 'edit', i })}
                   >
                     <span className="swatch" style={{ background: EDIT_COLOURS[e.type] }} />
-                    <span className="row-title">{e.name}</span>
+                    <span className="row-title" title={e.name}>
+                      {e.name}
+                    </span>
                     <span className="dim">
                       {EDIT_LABELS[e.type]} · {editSummary(e, r ? r.nx * r.nz : undefined)}
                     </span>

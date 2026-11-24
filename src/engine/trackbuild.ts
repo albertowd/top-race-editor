@@ -7,21 +7,25 @@
 // model written to the track's made models (track/models), nothing else left there; each layout's model list in the
 // track file, made here: the shared models, its own and its gantries' (each working or still).
 
+import type { AiSettings, RubberMark, SurfaceRoughness, TrackWear } from '../domain/types';
+import { loadBumps } from './bumpsfile';
 import { meshNode } from './floorwrite';
 import { GANTRIES, gantryFeet, gantryModel, startLine, stillMaterials, workingGantries, writeGantry } from './gantries';
 import { GENERATOR, type MaterialLibrary, toGltf, writeGlb } from './gltf';
+import { generatedGround } from './groundpicture';
 import type { Kn5 } from './kn5tree';
 import { type LaidObject, layObject, type PlacedObject } from './laying';
 import { libraryOf } from './materials';
 import type { Filler, MergeOptions } from './merge';
-import { earClip } from './merge';
-import { layPaint, type Mark, markPaint, type Roads, startLinePaint } from './paint';
+import { byCodePoint } from './order';
+import { layPaint, type Mark, type Roads, startLinePaint } from './paint';
 import type { PlaceHost } from './placehost';
 import { layoutPlaces, type ObjectsIn, type PlacesDoc, SPOT_LIFT } from './places';
+import { earClip } from './polygon';
 import { dumpPyJson, type PyJson, plain } from './pyjson';
 import type { RoadDesc } from './roads';
 import { floorOf, surfaceOf } from './roadshost';
-import type { Surface } from './surface';
+import { layRubber } from './rubber';
 import {
   type CatalogueModel,
   type CatalogueSource,
@@ -36,6 +40,15 @@ import { buildFloor, GROUND } from './trackfloor';
 import { type ModelLight, writeLines, writeObjects } from './trackobjects';
 import { TREE_KINDS, type TreesWritten, writeTrees } from './tracktrees';
 import { loadTrees, type TreePlacement } from './treesfile';
+import {
+  giveMaterial,
+  PAINT_DIFFUSE,
+  PAINT_WORN,
+  paintPicture,
+  RUBBER_DIFFUSE,
+  RUBBER_SHEEN,
+  rubberPage,
+} from './wear';
 
 export interface TrackBuildOptions {
   project: string;
@@ -108,6 +121,23 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
   const project = o.project.replace(/[\\/]+$/, '');
   const s = await settingsOf(files, project);
   const out = o.out ?? settingsPaths(s).models;
+  // (the ground's own picture, generated from the photo's covers where the track asks it (its photo Google's, or
+  // anyone's not to be handed on): made, or made again, before the library is read, its material in it)
+  const asked = plain(((await readPart(files, s, 'objects')) ?? {}) as PyJson) as { ground?: { picture?: string } };
+  let generated: string | null = null;
+  if (asked.ground?.picture === 'generated') {
+    const p0 = settingsPaths(s);
+    const libDoc = JSON.parse(text(await files.read(`${project}/source/materials.json`))) as {
+      materials?: Record<string, { colour?: string }>;
+    };
+    const photoName = p0.satellite.split('/').pop() ?? '';
+    const photoMaterial = Object.entries(libDoc.materials ?? {}).find(([, m]) => m.colour === photoName)?.[0];
+    if (!photoMaterial)
+      throw new Error(
+        `the material library (source/materials.json) has no material of the track's picture (${photoName})`,
+      );
+    generated = await generatedGround(files, project, p0.satellite, photoMaterial, p0.span, log);
+  }
   const library = (await libraryOf(files, project)) as MaterialLibrary;
   if (!library) throw new Error('the track has no material library (source/materials.json)');
   // (the models, every one made here: the floor, its rumbles, the paint, each layout's own; the objects' and the
@@ -126,12 +156,18 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
   const objectsDoc = await readPart(files, s, 'objects');
   const objects = (objectsDoc === null ? null : plain(objectsDoc)) as {
     marks?: Mark[];
-    layouts?: Parameters<typeof startLinePaint>[0];
+    rubber?: RubberMark[];
+    layouts?: Record<string, Parameters<typeof startLinePaint>[0][string]>;
     objects?: PlacedObject[];
     areas?: PavedAreaIn[];
+    wear?: TrackWear;
+    ai?: AiSettings;
+    surface?: SurfaceRoughness;
   } | null;
   const trackLayouts = (s.track.layouts ?? {}) as Record<string, { models?: string[]; from?: string }>;
-  const layoutNames = [...new Set([...Object.keys(trackLayouts), ...Object.keys(objects?.layouts ?? {})])].sort();
+  const layoutNames = [...new Set([...Object.keys(trackLayouts), ...Object.keys(objects?.layouts ?? {})])].sort(
+    byCodePoint,
+  );
   for (const lay of layoutNames) models[`${lay}.glb`] = blank();
   const roads = plain((await trackRoads(files, s)) as PyJson) as unknown as RoadDesc[];
   const lib =
@@ -157,7 +193,7 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
   const paths = settingsPaths(s);
   const half = paths.span / 2;
   const picture = paths.satellite.split('/').pop() ?? '';
-  const groundMaterial = Object.entries(lib).find(([, m]) => m.colour === picture)?.[0];
+  const groundMaterial = generated ?? Object.entries(lib).find(([, m]) => m.colour === picture)?.[0];
   if (!groundMaterial)
     throw new Error(`the material library (source/materials.json) has no material of the track's picture (${picture})`);
   const areaFloors = (areasDoc ?? []).map((a) => `1ROAD_${a.name}`);
@@ -173,6 +209,8 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
       own: areaFloors,
       window: { x0: -half, z0: -half, x1: half, z1: half },
       ground: { material: groundMaterial, uv: (x, z) => [0.5 - x / paths.span, 0.5 - z / paths.span] },
+      bumps: await loadBumps(files, project),
+      surface: objects?.surface,
     },
     o.more,
   );
@@ -199,32 +237,57 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
     const y = all.y(x, z);
     return Number.isNaN(y) ? 0 : y;
   };
-  // (the paint: the edge lines from each road's own mesh, the marks and start lines; into the paint's model)
-  const own = new Map<string, Surface>();
-  const lines = layPaint(byName, roadsOnly, (name) => {
-    const m = floor.meshes[name];
-    if (!m) return null;
-    let S = own.get(name);
-    if (!S) {
-      S = surfaceOf(m);
-      own.set(name, S);
-    }
-    const surf = S;
-    return (x, z) => surf.y(x, z);
-  });
-  if (objects) {
-    const onRoad = (x: number, z: number) => !Number.isNaN(roadsOnly.y(x, z));
-    lines.push(...markPaint(objects.marks ?? [], onRoad, top), ...startLinePaint(objects.layouts ?? {}, byName, top));
-  }
+  // (the paint: the edge lines and the marks, painted as one where they meet, on the roads and rumbles as merged; the
+  // start lines; into the paint's model)
+  const lines = await layPaint(byName, roadsOnly, objects?.marks ?? []);
+  if (objects) lines.push(...startLinePaint(objects.layouts ?? {}, byName, top));
   const id = MODEL;
   const paintModel = models[linesFile] as Kn5;
-  writeLines(paintModel, lines, models);
-  log(`the paint: ${lines.length} lines into ${linesFile}`);
+  // (in the track's wear: its own pictures, the asphalt's grain showing through, worn and dirtied as it is used)
+  const wear = objects?.wear ?? {};
+  const paintWear = wear.paint ?? 'new';
+  for (const c of ['white', 'yellow'] as const)
+    await giveMaterial(
+      paintModel,
+      PAINT_WORN[c].material,
+      PAINT_WORN[c].picture,
+      () => paintPicture(c, paintWear),
+      PAINT_DIFFUSE,
+    );
+  writeLines(paintModel, lines, models, { white: PAINT_WORN.white.material, yellow: PAINT_WORN.yellow.material });
+  log(`the paint: ${lines.length} lines into ${linesFile}, ${paintWear.replace('_', ' ')}`);
+  // (the rubber the cars have laid on the roads, each mark a band over the road, its paint and its rumbles, its
+  // pictures its own all along; in the paint's model, as the paint is: every layout's)
+  const rubber = objects?.rubber ?? [];
+  if (rubber.length) {
+    const t0 = performance.now();
+    const onFloor = (x: number, z: number) => roadsOnly.y(x, z);
+    // (all at once: where marks lie over one another, the road shown as their blend there, never darker)
+    const laid = layRubber(rubber, onFloor);
+    for (const [n, pg] of laid.pages.entries()) {
+      const { material, picture } = rubberPage(n);
+      await giveMaterial(paintModel, material, picture, () => pg.rgba, RUBBER_DIFFUSE, RUBBER_SHEEN, pg.width);
+    }
+    const count = new Map<number, number>();
+    for (const piece of laid.pieces) {
+      const r = rubber[piece.mark] as RubberMark;
+      const i = count.get(piece.mark) ?? 0;
+      count.set(piece.mark, i + 1);
+      const { material } = rubberPage(piece.page);
+      const node = meshNode(paintModel, `${r.name}${i ? `_${i + 1}` : ''}`, piece.mesh, material, null, models);
+      node.cast_shadows = 0;
+      paintModel.root.children.push(node);
+    }
+    const shown = rubber.filter((_, k) => count.has(k)).length;
+    log(
+      `the rubber: ${laid.pieces.length} pieces of ${shown} of ${rubber.length} rubber marks (the others under them), ` +
+        `${laid.pages.map((p) => `${p.width} x ${p.height}`).join(', ') || 'no'} pictures, ${((performance.now() - t0) / 1000).toFixed(1)} s`,
+    );
+  }
   // (the objects, of the editor's catalogue)
   const laid: LaidObject[] = [];
   let count: Record<string, number> = {};
   let lights: unknown[] = [];
-  let known: (m: string) => boolean = () => false;
   const sharedFile = `${id}_objects.glb`;
   const csrc: CatalogueSource = {
     read: (f) => files.read(f),
@@ -243,7 +306,7 @@ export async function buildTrack(host: PlaceHost, filler: Filler, o: TrackBuildO
     }
     return t;
   };
-  known = (m) => m in cat;
+  const known = (m: string): boolean => m in cat;
   // (the start gantries: each a model of its own, working or still in each layout; by layout, the gantries' models it
   // lists)
   const isGantry = (l: LaidObject) => cat[l.model]?.kind === GANTRIES && l.parts.length > 0;

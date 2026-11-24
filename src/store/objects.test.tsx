@@ -267,32 +267,61 @@ describe('the objects in the editor', () => {
     expect(calls.get('arc')).toBe(before);
   });
 
-  it('draws a mark by dragging from its start to its end; stretches it by an end, Shift by 15 degrees', async () => {
+  it('draws a mark by dragging from its start to its end, carries it on by clicks; snaps its end onto another, Shift by 15 degrees', async () => {
     const { ed, mouse } = await setup();
+    const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
+    const nodes = (i: number) => ed.get().objects?.marks[i]?.curve.map((n) => n.p.map(r6));
     ed.setPlace('marks');
     mouse.down(at(ed, 10, 1));
     mouse.move(at(ed, 13, 1));
     mouse.up();
-    const m = ed.get().objects?.marks[1];
-    expect(m).toMatchObject({ name: 'MARK_2', p: [10, 1], length: 3 });
-    expect(m?.heading).toBeCloseTo(Math.PI / 2, 6);
+    expect(ed.get().objects?.marks[1]).toMatchObject({ name: 'MARK_2' });
+    expect(nodes(1)).toEqual([
+      [10, 1],
+      [13, 1],
+    ]);
     expect(ed.get().undo).toHaveLength(1);
-    // (a click: a mark of its own length, along the road)
-    mouse.down(at(ed, 20, 1));
+    // (a click while it is picked: carried on to there)
+    mouse.down(at(ed, 13, 4));
     mouse.up();
-    expect(ed.get().objects?.marks[2]).toMatchObject({ p: [20, 1], length: 1 });
+    expect(nodes(1)).toEqual([
+      [10, 1],
+      [13, 1],
+      [13, 4],
+    ]);
     expect(ed.get().undo).toHaveLength(2);
+    // (a drag: a new one)
+    mouse.down(at(ed, 20, 1));
+    mouse.move(at(ed, 22, 1));
+    mouse.up();
+    expect(nodes(2)).toEqual([
+      [20, 1],
+      [22, 1],
+    ]);
     ed.setMode('select');
-    mouse.down(at(ed, 13, 1));
-    expect(ed.get().obj).toEqual({ kind: 'marks', i: 1, j: 1 });
-    mouse.move(at(ed, 13, 3.9, { shift: true }));
+    // (its end turned by 15 degrees with Shift)
+    mouse.down(at(ed, 22, 1));
+    expect(ed.get().obj).toEqual({ kind: 'marks', i: 2, j: 1 });
+    mouse.move(at(ed, 22, 3.9, { shift: true }));
     mouse.up();
-    expect(ed.get().objects?.marks[1].heading).toBeCloseTo(Math.PI / 4, 6);
-    mouse.down(at(ed, 11, 1.8));
-    expect(ed.get().obj).toEqual({ kind: 'marks', i: 1, j: -1 });
-    mouse.move(at(ed, 11, 2.8));
+    const [a, b] = ed.get().objects?.marks[2]?.curve.map((n) => n.p) ?? [];
+    expect(Math.atan2((b?.[0] ?? 0) - (a?.[0] ?? 0), (b?.[1] ?? 0) - (a?.[1] ?? 0))).toBeCloseTo(Math.PI / 6, 6);
+    // (dragged near another mark's end: onto it, so the two are painted as one line)
+    mouse.down(at(ed, b?.[0] ?? 0, b?.[1] ?? 0));
+    mouse.move(at(ed, 13.3, 4.2));
     mouse.up();
-    expect(ed.get().objects?.marks[1].p[1]).toBeCloseTo(2, 9);
+    expect(nodes(2)?.[1]).toEqual([13, 4]);
+    expect(ed.get().status).toMatch(/snapped to MARK_2's end/);
+    // (its line, picked by nothing: the whole of it moved)
+    ed.set({ obj: null });
+    mouse.down(at(ed, 16.5, 2.5));
+    expect(ed.get().obj).toEqual({ kind: 'marks', i: 2, j: -1 });
+    mouse.move(at(ed, 16.5, 3.5));
+    mouse.up();
+    expect(nodes(2)).toEqual([
+      [20, 2],
+      [13, 5],
+    ]);
     ed.deleteSelected();
     expect(ed.get().objects?.marks).toHaveLength(2);
     ed.set({ mode: 'place', place: 'marks' });
@@ -467,19 +496,19 @@ describe('the objects panel', () => {
     expect(ed.get().objects?.objects[0]).toMatchObject({ closed: true, collision: 'none' });
     act(() => ed.selectObject({ kind: 'marks', i: 0, j: -1 }));
     expect(screen.getByRole('heading')).toHaveTextContent('Paint mark 1 of 1');
-    const mh = screen.getByLabelText('Heading (degrees)');
-    await userEvent.clear(mh);
-    await userEvent.type(mh, '0{Enter}');
-    expect(ed.get().objects?.marks[0].heading).toBe(0);
-    expect(ed.get().objects?.marks[0].p).toEqual([50, -2]);
-    const len = screen.getByLabelText('Length (m)');
-    await userEvent.clear(len);
-    await userEvent.type(len, '6{Enter}');
-    expect(screen.getByLabelText('End z')).toHaveValue(4);
-    const ez = screen.getByLabelText('End z');
-    await userEvent.clear(ez);
-    await userEvent.type(ez, '8{Enter}');
-    expect(ed.get().objects?.marks[0].length).toBeCloseTo(10, 6);
+    expect(screen.getByText(/2 nodes, 4 m long/)).toBeInTheDocument();
+    const mw = screen.getByLabelText('Width (m)');
+    await userEvent.clear(mw);
+    await userEvent.type(mw, '0.2{Enter}');
+    expect(ed.get().objects?.marks[0].width).toBe(0.2);
+    act(() => ed.selectObject({ kind: 'marks', i: 0, j: 1 }));
+    const nz = screen.getByLabelText('Node 2 z');
+    await userEvent.clear(nz);
+    await userEvent.type(nz, '1{Enter}');
+    // (its piece still straight: its handles along it)
+    const [n0, n1] = ed.get().objects?.marks[0].curve ?? [];
+    expect(n1?.p).toEqual([54, 1]);
+    expect(n0?.out.map((v) => Math.round(v * 1e6) / 1e6)).toEqual([4 / 3, 1].map((v) => Math.round(v * 1e6) / 1e6));
     await userEvent.selectOptions(screen.getByLabelText('Colour'), 'yellow');
     await userEvent.selectOptions(screen.getByLabelText('Style'), 'dotted');
     const gap = screen.getByLabelText('Gap (m)');

@@ -8,8 +8,9 @@ import { distance } from './polygon';
 import { bezier, interp, linspace } from './roads';
 import { type CatalogueModel, type TemplatePart, world } from './templates';
 
-/** metres a model stands into the floor (the others: none) */
-export const SINKS: Record<string, number> = { tyre_stack: 0.03 };
+/** metres a model stands into the floor (the others: none): those standing on tyres, whose lowest edge curls in, so
+ * that no gap under it shows the stack's inside */
+export const SINKS: Record<string, number> = { tyre_stack: 0.03, gantry: 0.03 };
 /** metres a wall's or a box's collision stands over its model */
 export const COLLISION_OVER = 0.08;
 /** metres: a collision wall's foot under the floor */
@@ -244,11 +245,11 @@ function baseCorners(parts: TemplatePart[]): [number, number][][] {
 const FOOT_GAP = 0.3;
 
 /** Where each copy of a model rests on the floor (place_objects.rest_heights): a model on feet (its base in two pieces
- * or more) by the floor under each foot, its middle and corners (EDGE_IN of the way out, turned to its heading), each
- * foot on the highest it touches: one on three or more (wheels, legs) on the highest of them, as such a thing rests;
- * one on two (a gantry's legs, a sign's posts) on the lower, the other sunk in a little where the ground is higher, so
- * neither stands in the air (never on the open span between them, which a gantry over a road would be lifted by); one on
- * a base of a piece (a tyre stack's, a cone's, a mast's foot) on the floor under its middle. */
+ * or more) by the floor under each foot, its middle and corners (EDGE_IN of the way out, turned to its heading):
+ * one on three or more (wheels, legs) on the highest any foot touches, as such a thing rests; one on two (a gantry's
+ * legs, a sign's posts) on the lowest floor under either, the rest of both sunk in where the ground is higher, so no
+ * part of either stands in the air (never on the open span between them, which a gantry over a road would be lifted
+ * by); one on a base of a piece (a tyre stack's, a cone's, a mast's foot) on the floor under its middle. */
 export function restHeights(parts: TemplatePart[], places: Place[], floor: Floor): number[] {
   const pieces = baseCorners(parts);
   if (pieces.length < 2) return places.map(([x, z]) => floor(x, z));
@@ -268,13 +269,11 @@ export function restHeights(parts: TemplatePart[], places: Place[], floor: Floor
     return Q;
   });
   return places.map(([x, z, h]) => {
-    const each = feetAt.map((Q) => {
+    const ys = feetAt.flatMap((Q) => {
       const W = world(Q, x, z, 0, h);
-      let best = -Infinity;
-      for (let k = 0; k < 5; k++) best = Math.max(best, floor(W[k * 11] as number, W[k * 11 + 2] as number));
-      return best;
+      return [0, 1, 2, 3, 4].map((k) => floor(W[k * 11] as number, W[k * 11 + 2] as number));
     });
-    return pieces.length === 2 ? Math.min(...each) : Math.max(...each);
+    return pieces.length === 2 ? Math.min(...ys) : Math.max(...ys);
   });
 }
 
@@ -361,8 +360,11 @@ export function objectBent(o: PlacedObject, parts: TemplatePart[], size: number[
   });
 }
 
-/** A wall's collision (place_objects.wall_band): a band either side of its stacks (half out from the outermost rows),
- * from WALL_DOWN under the floor to high over it, faces both ways. Points (x, y, z), faces. */
+/** A wall's collision: one closed solid round its stacks (from half out of the outermost rows on one side to half out
+ * of them on the other), from WALL_DOWN under the floor to high over it: its two sides, its top, its bottom and its
+ * ends (none for a ring), every face one way only, facing out (as box's). Not two open sheets hit from either side:
+ * a kart driven hard into one of those could be pushed through to its far side, into the hollow between them or out
+ * under the track. Points (x, y, z), faces. */
 export function wallBand(w: PlacedObject, stacks: Place[], half: number, high: number, floor: Floor) {
   const rows = Math.max(Math.trunc(w.rows ?? 1), 1);
   const first = rows > 1 ? stacks.slice(0, Math.trunc(stacks.length / rows)) : stacks;
@@ -374,27 +376,69 @@ export function wallBand(w: PlacedObject, stacks: Place[], half: number, high: n
       [x + Math.sin(h) * half, z + Math.cos(h) * half],
     ];
   } else line = first.map(([x, z]) => [x, z]);
-  if (w.closed && line.length > 2) line = [...line, line[0] as number[]];
-  const t = gradient2(line).map(([a, b]) => {
+  const ring = !!w.closed && line.length > 2;
+  const n = line.length;
+  // (the way along at each point: a ring's round from the point before its first to the one after its last, each
+  // point once, its last joined to its first)
+  const ways = ring
+    ? line.map((_, j) => {
+        const a = line[(j + n - 1) % n] as number[];
+        const b = line[(j + 1) % n] as number[];
+        return [(b[0] as number) - (a[0] as number), (b[1] as number) - (a[1] as number)];
+      })
+    : gradient2(line);
+  const t = ways.map(([a, b]) => {
     const m = Math.max(Math.sqrt((a as number) ** 2 + (b as number) ** 2), 1e-12);
     return [(a as number) / m, (b as number) / m];
   });
   const sp = w.spacing ?? SPACING;
   const P: number[] = [];
   const F: number[] = [];
-  for (const off of [-half, (rows - 1) * sp + half]) {
-    const base = P.length / 3;
-    line.forEach((q, j) => {
-      const tt = t[j] as number[];
+  // (each point along: its bottom and top on the near side, then on the far side: four points, 4j to 4j + 3)
+  const offs = [-half, (rows - 1) * sp + half];
+  line.forEach((q, j) => {
+    const tt = t[j] as number[];
+    for (const off of offs) {
       const x = (q[0] as number) + (tt[1] as number) * off;
       const z = (q[1] as number) + -(tt[0] as number) * off;
       const y = floor(x, z);
       P.push(x, y - WALL_DOWN, z, x, y + high, z);
-    });
-    for (let j = 0; j < line.length - 1; j++) {
-      const a = base + 2 * j;
-      F.push(a, a + 2, a + 1, a + 1, a + 2, a + 3, a, a + 1, a + 2, a + 1, a + 3, a + 2);
     }
+  });
+  const at = (k: number, c: number) => P[k * 3 + c] as number;
+  // (a triangle wound to face out: its normal ((b - a) x (c - a), as box's) the way out says)
+  const tri = (a: number, b: number, c: number, out: readonly number[]) => {
+    const [ux, uy, uz] = [at(b, 0) - at(a, 0), at(b, 1) - at(a, 1), at(b, 2) - at(a, 2)];
+    const [vx, vy, vz] = [at(c, 0) - at(a, 0), at(c, 1) - at(a, 1), at(c, 2) - at(a, 2)];
+    const facing =
+      (uy * vz - uz * vy) * (out[0] as number) +
+      (uz * vx - ux * vz) * (out[1] as number) +
+      (ux * vy - uy * vx) * (out[2] as number);
+    if (facing < 0) F.push(a, c, b);
+    else F.push(a, b, c);
+  };
+  const quad = (a: number, b: number, c: number, d: number, out: readonly number[]) => {
+    tri(a, b, c, out);
+    tri(a, c, d, out);
+  };
+  for (let j = 0; j < (ring ? n : n - 1); j++) {
+    const [a, b] = [4 * j, 4 * ((j + 1) % n)];
+    // (out of each side: across the line, away from the other; up; down)
+    const tt = t[j] as number[];
+    const across = [tt[1] as number, 0, -(tt[0] as number)];
+    const away = [-(tt[1] as number), 0, tt[0] as number];
+    quad(a, b, b + 1, a + 1, away);
+    quad(a + 2, b + 2, b + 3, a + 3, across);
+    quad(a + 1, b + 1, b + 3, a + 3, [0, 1, 0]);
+    quad(a, b, b + 2, a + 2, [0, -1, 0]);
+  }
+  if (!ring) {
+    // (its ends: back the way it came at its start, on at its end)
+    const t0 = t[0] as number[];
+    const t1 = t[n - 1] as number[];
+    quad(0, 1, 3, 2, [-(t0[0] as number), 0, -(t0[1] as number)]);
+    const e = 4 * (n - 1);
+    quad(e, e + 1, e + 3, e + 2, [t1[0] as number, 0, t1[1] as number]);
   }
   return { P: Float64Array.from(P), F: Int32Array.from(F) };
 }

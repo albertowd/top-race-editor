@@ -8,6 +8,8 @@
 // gantry, laid out as the patch script lays out its text on the board's texture, carried onto the board by its mesh's
 // uvs. The start lamps and the flag lamp are shapes of their own with a material whose glow BeamNG multiplies by the
 // object's instance colour, as its traffic signals are: the Lua lights them by setting that colour.
+
+import { byCodePoint } from '../order';
 import type { DaeMesh } from './dae';
 import { CORNER, type TrackMesh } from './trackmodel';
 
@@ -304,7 +306,7 @@ export function boardConfig(
     const near = Object.entries(races)
       .filter(([, at]) => Math.hypot((at[0] as number) - g.centre[0], (at[1] as number) - g.centre[1]) < 40)
       .map(([lay]) => lay)
-      .sort();
+      .sort(byCodePoint);
     const own = workingIn(g.name);
     g.layouts = near;
     g.default = near.find((l) => own.includes(l)) ?? near[0] ?? null;

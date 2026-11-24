@@ -48,6 +48,7 @@ const ALL_KINDS: readonly ObjectKind[] = [
   'poles',
   'tyres',
   'marks',
+  'rubber',
   'trees',
   'fences',
   'sheds',
@@ -80,7 +81,7 @@ export const CATEGORIES: Record<Category, CategoryInfo> = {
     roads: 'shape',
     lines: false,
     kerbs: false,
-    modes: ['select', 'add', 'new', 'measure', 'place'],
+    modes: ['select', 'add', 'new', 'measure', 'place', 'bumps'],
   },
   rumbles: {
     id: 'rumbles',
@@ -97,8 +98,8 @@ export const CATEGORIES: Record<Category, CategoryInfo> = {
     id: 'paint',
     label: 'Paint',
     group: 'Surface',
-    what: 'The lines painted along the roads, and the paint marks laid on them.',
-    kinds: ['marks'],
+    what: 'The lines painted along the roads, the paint marks laid on them, and the rubber the cars have laid.',
+    kinds: ['marks', 'rubber'],
     roads: 'pick',
     lines: true,
     kerbs: false,
@@ -241,7 +242,7 @@ export function countIn(c: Category, roads: readonly Road[], o: TrackObjects | n
     case 'rumbles':
       return sum(roads.map((r) => r.kerbs?.length ?? 0));
     case 'paint':
-      return sum(roads.map((r) => r.lines?.length ?? 0)) + (o?.marks.length ?? 0);
+      return sum(roads.map((r) => r.lines?.length ?? 0)) + (o?.marks.length ?? 0) + (o?.rubber?.length ?? 0);
     case 'race':
       return (
         (lay ? lay.grid.length + lay.pits.length + (lay.hotlap ? 1 : 0) + lay.timing.length : 0) +

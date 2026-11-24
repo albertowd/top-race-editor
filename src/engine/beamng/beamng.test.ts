@@ -9,9 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { readPng } from '../dds';
 import { fromGltf, readGlb, toGltf, writeGlb } from '../gltf';
 import type { Kn5 } from '../kn5tree';
+import { ASPHALT_GREY, isPaintPicture } from '../wear';
 import { boardConfig, type gantry, lampMaterial } from './board';
 import { writeDae } from './dae';
-import { writePng } from './images';
+import { overGreyPng, writePng } from './images';
 import { extensionFolder, levelModels, levelScripts, roadCover } from './level';
 import { roadNetwork } from './network';
 import { quat, type V3 } from './races';
@@ -44,6 +45,16 @@ describe("the BeamNG level's parts", () => {
     const back = await readPng(await writePng(px, 2, 2, 3));
     expect([back.width, back.height, back.mode]).toEqual([2, 2, 'RGB']);
     expect([...back.data]).toEqual([...px]);
+  });
+
+  it('makes the paint’s picture its colour as it shows over the asphalt, to be drawn cut out', async () => {
+    // (white at 80%, white at 20% (a pit), fully shown, not at all)
+    const px = Uint8Array.from([200, 200, 200, 204, 200, 200, 200, 51, 10, 20, 30, 255, 200, 200, 200, 0]);
+    const over = await readPng(await overGreyPng(await writePng(px, 2, 2, 4), ASPHALT_GREY));
+    expect(over.mode).toBe('RGB');
+    expect([...over.data]).toEqual([178, 178, 178, 114, 114, 114, 10, 20, 30, 92, 92, 92]);
+    expect(isPaintPicture('PaintWhite_worn.png')).toBe(true);
+    expect(isPaintPicture('Rubber_1.png')).toBe(false);
   });
 
   it("shows a start lamp's glass, lit through it; the flag lamp plain", () => {

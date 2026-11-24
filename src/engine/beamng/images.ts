@@ -54,6 +54,20 @@ export async function opacityPng(png: Uint8Array): Promise<Uint8Array> {
   return writePng(a, p.width, p.height, 1);
 }
 
+/** A PNG as RGB, each pixel its colour as it shows over a ground of one grey (its alpha's share of it over the grey's):
+ * a blended picture drawn cut out instead, looking as it did where it is not cut. */
+export async function overGreyPng(png: Uint8Array, grey: number): Promise<Uint8Array> {
+  const p = await readPng(png);
+  if (p.mode !== 'RGBA') return rgbPng(png);
+  const n = p.width * p.height;
+  const rgb = new Uint8Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const a = (p.data[i * 4 + 3] as number) / 255;
+    for (let c = 0; c < 3; c++) rgb[i * 3 + c] = Math.round((p.data[i * 4 + c] as number) * a + grey * (1 - a));
+  }
+  return writePng(rgb, p.width, p.height, 3);
+}
+
 /** A PNG as RGB (its alpha left out), as Pillow's convert('RGB') saves it. */
 export async function rgbPng(png: Uint8Array): Promise<Uint8Array> {
   const p = await readPng(png);

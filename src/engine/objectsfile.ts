@@ -2,7 +2,9 @@
 // page's checked, rounded and written back, the file before kept. A file of version 2 read as version 3 (written so
 // when saved); a track without the file has its objects read from its models (seeded), so saving them as read moves
 // nothing.
+import { legacyCurve } from '../editing/marks';
 import { cleanLightOptions, LightOptionsError } from './lightoptions';
+import { byCodePoint } from './order';
 import type { HostFiles } from './placehost';
 import { type PyJson, PyNumber, pyFloat, readPyJson } from './pyjson';
 import { backup, pyRound, writePyJsonFile } from './trackfiles';
@@ -128,7 +130,7 @@ function _object(o: unknown, w: string): J {
   if (layouts !== undefined && layouts !== null) {
     if (!Array.isArray(layouts) || !layouts.every((x) => typeof x === 'string' && x))
       throw new ObjectsError(`${w}.layouts: a list of layouts' names (none: every layout)`);
-    out.layouts = [...new Set(layouts as string[])].sort();
+    out.layouts = [...new Set(layouts as string[])].sort(byCodePoint);
   }
   // (a board's own text, as its card says it: none, its name's)
   if (o.text !== undefined && o.text !== null) {
@@ -156,24 +158,31 @@ function _area(a: unknown, w: string): J {
   return { name: String(a.name), material: a.material, points: pts.map((p, i) => _pair(p, `${w}.points[${i}]`)) };
 }
 
-function _mark(m: unknown, w: string): J {
-  if (!isObj(m) || !m.name) throw new ObjectsError(`${w}: {name, p, heading, length, width, colour, style}`);
+/** A mark's curve: its own, else (as older files have it: from p, length metres along heading) one straight from p. */
+function markCurve(m: J, w: string): J[] {
+  if (m.curve !== undefined && m.curve !== null) {
+    const curve = _curve(m.curve, w);
+    if (curve.length < 2) throw new ObjectsError(`${w}.curve: two nodes at least`);
+    return curve;
+  }
   const length = _num(m.length, `${w}.length`);
+  if (length <= 0) throw new ObjectsError(`${w}: its length more than 0, please`);
+  const [x, z] = _pair(m.p, `${w}.p`).map(Number) as [number, number];
+  return _curve(legacyCurve({ p: [x, z], heading: _num(m.heading ?? 0, `${w}.heading`), length }), w);
+}
+
+function _mark(m: unknown, w: string): J {
+  if (!isObj(m) || !m.name) throw new ObjectsError(`${w}: {name, curve, width, colour, style}`);
+  const curve = markCurve(m, w);
   const width = _num(m.width ?? MARK_WIDTH, `${w}.width`);
-  if (length <= 0 || width <= 0) throw new ObjectsError(`${w}: its length and width more than 0, please`);
+  if (width <= 0) throw new ObjectsError(`${w}: its width more than 0, please`);
   const colour = m.colour ?? 'white';
   const style = m.style ?? 'solid';
   if (!COLOURS.includes(colour as string)) throw new ObjectsError(`${w}.colour: ${COLOURS.join(' or ')}`);
   if (!STYLES.includes(style as string)) throw new ObjectsError(`${w}.style: ${STYLES.join(' or ')}`);
-  const out: J = {
-    name: String(m.name),
-    p: _pair(m.p, `${w}.p`),
-    heading: heading(m.heading, `${w}.heading`),
-    length: f(pyRound(length, ROUND)),
-    width: f(pyRound(width, ROUND)),
-    colour,
-    style,
-  };
+  const out: J = { name: String(m.name), curve };
+  if (curve.length > 2 && (num(m.closed) ?? m.closed)) out.closed = true;
+  Object.assign(out, { width: f(pyRound(width, ROUND)), colour, style });
   if (style === 'dotted')
     for (const [k, d] of [
       ['dash', DASH],
@@ -184,6 +193,22 @@ function _mark(m: unknown, w: string): J {
       out[k] = f(pyRound(v, ROUND));
     }
   return out;
+}
+
+/** a rubber mark's darkness: one of these */
+const RUBBER_WEARS = ['almost_new', 'used', 'very_used'];
+
+/** Rubber laid on the roads: {name, curve (two nodes at least), closed, width (m, more than 0), wear}. */
+function _rubber(m: unknown, w: string): J {
+  if (!isObj(m) || !m.name) throw new ObjectsError(`${w}: {name, curve, width, wear}`);
+  const curve = _curve(m.curve, w);
+  if (curve.length < 2) throw new ObjectsError(`${w}.curve: two nodes at least`);
+  const width = _num(m.width, `${w}.width`);
+  if (width <= 0) throw new ObjectsError(`${w}: its width more than 0, please`);
+  if (!RUBBER_WEARS.includes(m.wear as string)) throw new ObjectsError(`${w}.wear: ${RUBBER_WEARS.join(', ')}`);
+  const out: J = { name: String(m.name), curve };
+  if (curve.length > 2 && (num(m.closed) ?? m.closed)) out.closed = true;
+  return Object.assign(out, { width: f(pyRound(width, ROUND)), wear: m.wear });
 }
 
 // ---------------------------------------------------------------- version 2, read as version 3
@@ -327,7 +352,7 @@ export function convertV2(objects: unknown): J {
       collision: 'none',
     });
   const lays = v2.layouts as Record<string, J>;
-  const every = Object.keys(lays).sort();
+  const every = Object.keys(lays).sort(byCodePoint);
   for (const [kind, model, prefix] of [
     ['cones', 'cone', 'CONE_'],
     ['boards', 'board', 'BOARD_'],
@@ -353,7 +378,7 @@ export function convertV2(objects: unknown): J {
         heading: g.heading ?? 0,
         collision: 'dynamic',
       };
-      const ls = [...g.layouts].sort();
+      const ls = [...g.layouts].sort(byCodePoint);
       if (ls.join('\0') !== every.join('\0')) obj.layouts = ls;
       out.push(obj);
     }
@@ -386,7 +411,7 @@ export async function seedObjects(files: HostFiles, models: string): Promise<J> 
     : {};
   const layouts: J = {};
   const stems = (await files.exists(models)) ? (await files.list(models)).filter((f) => /^vp_.*\.glb$/.test(f)) : [];
-  for (const f of stems.sort()) {
+  for (const f of stems.sort(byCodePoint)) {
     const stem = f.slice(0, -4);
     layouts[stem] = places[stem]
       ? layoutPlaces(places[stem])
@@ -517,13 +542,101 @@ export function cleanObjects(given: unknown): J {
   }
   const objs = _list(objects.objects, 'objects').map((o, i) => _object(o, `objects[${i}]`));
   const marks = _list(objects.marks, 'marks').map((m, i) => _mark(m, `marks[${i}]`));
+  const rubber = _list(objects.rubber, 'rubber').map((m, i) => _rubber(m, `rubber[${i}]`));
   const areas = _list(objects.areas, 'areas').map((a, i) => _area(a, `areas[${i}]`));
-  const names = [...objs.map((o) => o.name), ...marks.map((m) => m.name), ...areas.map((a) => a.name)] as string[];
+  const names = [
+    ...objs.map((o) => o.name),
+    ...marks.map((m) => m.name),
+    ...rubber.map((m) => m.name),
+    ...areas.map((a) => a.name),
+  ] as string[];
   const dup = names.find((n, i) => names.indexOf(n) !== i);
   if (dup) throw new ObjectsError(`two objects are named ${dup}`);
   const out: J = { version: VERSION };
   if (isObj(objects.templates)) out.templates = objects.templates;
-  return { ...out, layouts, objects: objs, marks, ...(areas.length ? { areas } : {}) };
+  const wear = _wear(objects.wear);
+  const ai = _ai(objects.ai);
+  const surface = _surface(objects.surface);
+  const ground = _ground(objects.ground);
+  return {
+    ...out,
+    ...(ground ? { ground } : {}),
+    ...(surface ? { surface } : {}),
+    ...(wear ? { wear } : {}),
+    ...(ai ? { ai } : {}),
+    layouts,
+    objects: objs,
+    marks,
+    ...(rubber.length ? { rubber } : {}),
+    ...(areas.length ? { areas } : {}),
+  };
+}
+
+const WEARS = ['new', 'almost_new', 'used', 'very_used'];
+
+/** How worn the track looks: its paint's and its rubber's wear (each one of WEARS; none: new). */
+function _wear(v: unknown): J | null {
+  if (v === undefined || v === null) return null;
+  if (!isObj(v)) throw new ObjectsError('wear: {paint, rubber}');
+  const out: J = {};
+  for (const k of ['paint', 'rubber']) {
+    if (v[k] === undefined || v[k] === null) continue;
+    if (!WEARS.includes(v[k] as string)) throw new ObjectsError(`wear.${k}: ${WEARS.join(', ')}`);
+    out[k] = v[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** The ground's picture in the games: the photo (none said), or generated. */
+function _ground(v: unknown): J | null {
+  if (v === undefined || v === null) return null;
+  if (!isObj(v)) throw new ObjectsError('ground: {picture}');
+  if (v.picture === undefined || v.picture === null || v.picture === 'photo') return null;
+  if (v.picture !== 'generated') throw new ObjectsError('ground.picture: photo or generated');
+  return { picture: 'generated' };
+}
+
+/** The roads' surface made imperfect: each of its millimetres 0 to 100, its seed a whole number; none of it: none. */
+function _surface(v: unknown): J | null {
+  if (v === undefined || v === null) return null;
+  if (!isObj(v)) throw new ObjectsError('surface: {waves, bumps, ripple, camber, seed}');
+  const out: J = {};
+  for (const k of ['waves', 'bumps', 'ripple', 'camber']) {
+    if (v[k] === undefined || v[k] === null) continue;
+    const mm = _num(v[k], `surface.${k}`);
+    if (mm < 0 || mm > 100) throw new ObjectsError(`surface.${k}: millimetres, 0 to 100`);
+    if (mm > 0) out[k] = f(pyRound(mm, 2));
+  }
+  if (v.seed !== undefined && v.seed !== null) {
+    if (!isInt(v.seed)) throw new ObjectsError('surface.seed: a whole number');
+    out.seed = num(v.seed);
+  }
+  if (v.map !== undefined && v.map !== null) {
+    out.map = _list(v.map, 'surface.map').map((p, i) => {
+      if (!Array.isArray(p) || p.length !== 3) throw new ObjectsError(`surface.map[${i}]: [x, z, k]`);
+      const [x, z, k] = p.map((q, j) => _num(q, `surface.map[${i}][${j}]`)) as [number, number, number];
+      if (k < 0 || k > 10) throw new ObjectsError(`surface.map[${i}]: its k 0 to 10`);
+      return [f(pyRound(x, 2)), f(pyRound(z, 2)), f(pyRound(k, 2))];
+    });
+  }
+  return Object.keys(out).some((k) => k !== 'seed' && k !== 'map') ? out : null;
+}
+
+/** What the AI lines are made for: its cars' width (metres, more than 0). */
+function _ai(v: unknown): J | null {
+  if (v === undefined || v === null) return null;
+  if (!isObj(v)) throw new ObjectsError('ai: {width}');
+  if (v.width === undefined || v.width === null) return null;
+  const w = _num(v.width, 'ai.width');
+  if (w <= 0 || w > 4) throw new ObjectsError('ai.width: metres, more than 0 and no more than 4');
+  return { width: f(pyRound(w, ROUND)) };
+}
+
+/** Objects of version 3 with their marks as the page has them: each a curve (one of an older file, from p, length
+ * metres along heading: straight from p, as saving writes it). */
+export function withCurvedMarks<T>(given: T): T {
+  if (!isObj(given) || !Array.isArray(given.marks) || given.marks.every((m) => !isObj(m) || 'curve' in m)) return given;
+  return { ...given, marks: given.marks.map((m, i) => (isObj(m) && !('curve' in m) ? _mark(m, `marks[${i}]`) : m)) };
 }
 
 /** The objects file as the page has it (objects.py's ObjectsStore.load): version 3 as it is; version 2 read as version
@@ -537,7 +650,7 @@ export async function loadObjects(
     const given = readPyJson(new TextDecoder().decode(await files.read(path)));
     return isV2(given)
       ? { objects: cleanObjects(given) as PyJson, seeded: false, converted: true }
-      : { objects: given, seeded: false, converted: false };
+      : { objects: withCurvedMarks(given), seeded: false, converted: false };
   }
   return { objects: cleanObjects(await seedObjects(files, models)) as PyJson, seeded: true, converted: false };
 }

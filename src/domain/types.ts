@@ -125,7 +125,7 @@ export interface Selection {
 
 export const NO_SELECTION: Selection = Object.freeze({ r: -1, n: -1, line: -1, kerb: -1 });
 
-export type Mode = 'select' | 'add' | 'new' | 'measure' | 'place';
+export type Mode = 'select' | 'add' | 'new' | 'measure' | 'place' | 'bumps';
 
 export type LayerName = 'sat' | 'ctx' | 'draw' | 'wire' | 'lines' | 'kerbs' | 'names' | 'surface' | 'objects';
 export type Layers = Record<LayerName, boolean>;
@@ -229,13 +229,13 @@ export interface PlacedObject {
   text?: string;
 }
 
-/** Paint laid on the roads (every layout's): a line from p, length metres along heading, width wide; dotted: dash
- * metres painted, gap not. */
+/** Paint laid on the roads (every layout's): a line along a curve of Bezier pieces (as a tyre wall's: two nodes at
+ * least; closed: a last piece back to its first node), width wide; dotted: dash metres painted, gap not. Marks of one
+ * paint whose ends meet are painted as one line, their corners mitred; where they overlap, painted once. */
 export interface PaintMark {
   name: string;
-  p: Vec2;
-  heading: number;
-  length: number;
+  curve: WallNode[];
+  closed?: boolean;
   width: number;
   colour: LineColour;
   style: LineStyle;
@@ -258,8 +258,63 @@ export interface PavedArea {
   points: Vec2[];
 }
 
+/** How worn a track looks: new (its paint fresh, no rubber), almost new, used, very used. */
+export type Wear = 'new' | 'almost_new' | 'used' | 'very_used';
+export const WEARS: readonly Wear[] = ['new', 'almost_new', 'used', 'very_used'];
+/** How dark rubber laid on the roads is (none is no rubber mark at all). */
+export type RubberWear = Exclude<Wear, 'new'>;
+export const RUBBER_WEARS: readonly RubberWear[] = ['almost_new', 'used', 'very_used'];
+
+/** How worn the track's paint is, and how dark new rubber marks are laid (each its own after). */
+export interface TrackWear {
+  paint?: Wear;
+  rubber?: Wear;
+}
+
+/** Rubber the cars have laid on the roads (every layout's, as the paint is): a band along a curve of Bezier pieces (as
+ * a paint mark's: two nodes at least; closed: on back to its first node), width wide on a straight (wider where it
+ * turns tight), as dark as its wear. */
+export interface RubberMark {
+  name: string;
+  curve: WallNode[];
+  closed?: boolean;
+  width: number;
+  wear: RubberWear;
+}
+
+/** What the AI lines are made for: its cars' width (m), which the lines keep clear of the road's edges and of the
+ * rumbles' raised parts by half of, and a little. */
+export interface AiSettings {
+  width?: number;
+}
+
+/** The roads' surface made imperfect all over (millimetres, engine/roughness.ts): long waves (8 to 20 m), bumps (1.5
+ * to 4 m), a ripple (a kart trembles on it), and how far a tight bend's inside sits lower; its noise's seed. */
+export interface SurfaceRoughness {
+  waves?: number;
+  bumps?: number;
+  ripple?: number;
+  camber?: number;
+  seed?: number;
+  /** how rough each place is, from onboard videos: [x, z, k] (k 1: as rough as the rest; 2: twice; 0.5: half), the
+   * bumps and ripple by k there (the waves by its square root), the rest as the levels say */
+  map?: [number, number, number][];
+}
+
+/** The ground's picture in the games: the satellite photo as it is (the editor always draws it), or one generated
+ * from what covers the ground where in it (engine/groundpicture.ts: none of its pixels in it). */
+export type GroundPictureSource = 'photo' | 'generated';
+
 export interface TrackObjects {
   version: number;
+  /** the ground's picture in the games */
+  ground?: { picture?: GroundPictureSource };
+  /** the roads' surface made imperfect all over */
+  surface?: SurfaceRoughness;
+  /** how worn the track looks (the paint, the rubber on the racing lines) */
+  wear?: TrackWear;
+  /** what the AI lines are made for */
+  ai?: AiSettings;
   /** the paved areas */
   areas?: PavedArea[];
   /** each layout's models (the page's, kept with the objects; saved apart, into the track file's layouts) */
@@ -269,6 +324,8 @@ export interface TrackObjects {
   layouts: Record<string, LayoutObjects>;
   objects: PlacedObject[];
   marks: PaintMark[];
+  /** the rubber laid on the roads */
+  rubber?: RubberMark[];
 }
 
 /** The kinds of model (the catalogue's): what the sidebar sorts the objects by. */
@@ -284,7 +341,9 @@ export type ModelKind =
   | 'gantries'
   | 'karts';
 export type LayoutKind = 'grid' | 'pits' | 'hotlap' | 'timing';
-export type TrackKind = 'marks' | 'areas';
+export type TrackKind = 'marks' | 'rubber' | 'areas';
+/** the kinds laid along a curve on the roads: paint marks, rubber marks */
+export type MarkKind = 'marks' | 'rubber';
 /** a layout's racing lines: its fast line, its pit lane line */
 export type LineKind = 'fast' | 'pit';
 export type ObjectKind = LayoutKind | TrackKind | ModelKind | LineKind;

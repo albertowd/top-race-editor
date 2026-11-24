@@ -22,6 +22,37 @@ export interface LineOffsets {
   b: Offset;
 }
 
+/** metres between the points an edge line is painted along */
+const LINE_STEP = 0.25;
+
+/** A road's edge line as it is painted: its middle's points along it (o: the road's samples), its paint (unless it
+ * says: LINE_WIDTH wide, white, solid); none where it has no length. As the build paints it (engine/paint.ts
+ * edgeLine), with the marks (editing/marks.ts paintChains). */
+export function edgeLinePoints(
+  o: Samples,
+  ln: PaintLine,
+): { points: Vec2[]; width: number; colour: string; style: string; dash?: number; gap?: number } | null {
+  const [s0, s1] = span(o, ln.from, ln.to);
+  if (s1 - s0 < 1e-6) return null;
+  const sgn = ln.side === 'left' ? 1 : -1;
+  const pad = ln.pad ?? LINE_PAD;
+  const n = Math.max(1, Math.ceil((s1 - s0) / LINE_STEP));
+  const points: Vec2[] = [];
+  for (let k = 0; k <= n; k++) {
+    const q = pointAt(o, s0 + ((s1 - s0) * k) / n);
+    const off = sgn * ((sgn > 0 ? q.l : q.r) - pad);
+    points.push([q.x + q.nx * off, q.z + q.nz * off]);
+  }
+  return {
+    points,
+    width: ln.w ?? LINE_WIDTH,
+    colour: ln.colour ?? 'white',
+    style: ln.style ?? 'solid',
+    dash: ln.dash,
+    gap: ln.gap,
+  };
+}
+
 /** A line's two sides, out from the road's middle. */
 export function lineOffsets(ln: PaintLine): LineOffsets {
   const sgn = ln.side === 'left' ? 1 : -1;

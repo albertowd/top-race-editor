@@ -1,18 +1,23 @@
 // The editor's engine calls answered where the engine runs (the desktop app's engine window): each the page's client
 // asks, by its path. A call there is no route for, or one needing what the host does not have, fails saying so.
 
+import { bumpsJson } from '../editing/bumps';
 import { firstLines } from './ailines';
 import { type BeamngHost, buildBeamng } from './beamng/level';
 import { type BringSettings, bringIn, roadMeshesOffered } from './bringin';
 import { builderOf, normalPath, type SystemHost, toolsOf } from './build';
+import { loadBumps, saveBumps } from './bumpsfile';
 import { trackContext } from './context';
+import { acPictures, type PictureHost } from './layoutmap';
 import { lightSeriesOf } from './lightoptions';
 import { libraryOf } from './materials';
 import type { Filler, MergeOptions } from './merge';
+import { byCodePoint } from './order';
 import type { HostFiles, PlaceHost } from './placehost';
 import { roadPreview, surfacePreview } from './previews';
 import { Keys, type WizardHost } from './providers';
 import { dumpPyJson, type PyJson, plain } from './pyjson';
+import type { Rf2PictureHost } from './rf2/pictures';
 import type { RoadDesc } from './roads';
 import { editorModelsOf, pageCatalogue } from './templates';
 import {
@@ -65,6 +70,8 @@ export interface ApiHost {
   outliner?: MergeOptions['outliner'];
   /** the BeamNG level's: pictures read and made, a start's map drawn (Chromium's) */
   beamng?: BeamngHost;
+  /** the rFactor 2 location's pictures drawn, the track rendered under some (Chromium's) */
+  rf2?: Rf2PictureHost;
 }
 
 /** What the host has of its own for a call, else an error saying what is missing (the desktop app's engine window
@@ -114,11 +121,17 @@ function builder(files: HostFiles, s: TrackSettings, host: ApiHost) {
         more: { outliner: host.outliner },
       });
     },
+    makeAcPictures: beamng?.outline
+      ? async ({ out, log }) => {
+          await acPictures(files, beamng as PictureHost, { project: s.project, out, log });
+        }
+      : undefined,
     makeBeamng: beamng
       ? async ({ layout, ai, log }) => {
           await buildBeamng(files, beamng, { project: s.project, layout, ai, editorModels: host.modelsDir, log });
         }
       : undefined,
+    rf2Pictures: host.rf2,
   });
 }
 
@@ -249,7 +262,7 @@ const GET: Record<string, Route> = {
     const parent = here.split(/[\\/]/).slice(0, -1).join('/');
     let next: string[] = [];
     try {
-      next = (await files.list(parent)).sort().map((n) => `${parent}/${n}`);
+      next = (await files.list(parent)).sort(byCodePoint).map((n) => `${parent}/${n}`);
     } catch {
       next = [];
     }
@@ -273,6 +286,8 @@ const GET: Record<string, Route> = {
   },
   // (the objects file of version 3 as it is; one of version 2 converted; none yet, read from the models)
   '/api/objects': (files, s) => trackObjects(files, s, settingsPaths(s).models),
+  // (the roads' bumps made by hand: none, an empty set)
+  '/api/bumps': async (files, s) => bumpsJson(await loadBumps(files, s.project)) as unknown as PyJson,
   '/api/trees': async (files, s) => ({ trees: await loadTrees(files, s) }),
   // (each layout's models, in the order a game loads them, and the layout it was made from: the track file's)
   '/api/layouts': async (_files, s) => ({ layouts: (s.track.layouts ?? {}) as PyJson }),
@@ -424,6 +439,14 @@ const POST: Record<string, Route> = {
     if (doc === undefined) throw new Error('needs: doc');
     return saveTerrain(place, s.project, settingsPaths(s).backups, doc);
   },
+  '/api/bumps': async (files, s, _q, body) => {
+    const given = (body as { bumps?: unknown } | undefined)?.bumps;
+    if (given === undefined) throw new Error('needs: bumps');
+    return {
+      ok: true,
+      bumps: (await saveBumps(files, s.project, settingsPaths(s).backups, given)) as unknown as PyJson,
+    };
+  },
   '/api/objects': async (files, s, _q, body) => {
     const given = (body as { objects?: unknown } | undefined)?.objects;
     if (given === undefined) throw new Error('needs: objects');
@@ -460,7 +483,8 @@ const POST: Record<string, Route> = {
 /** A call of the page's answered (its folder's track's settings read each time: a track file edited is taken as it
  * is); one the engine has no route for fails saying so. */
 export async function answerApi(files: HostFiles, call: ApiCall, host: ApiHost = {}): Promise<unknown> {
-  const u = new URL(call.path, 'http://engine');
+  // (a base to read its path and query by, never fetched)
+  const u = new URL(call.path, 'https://engine');
   const post = call.body !== undefined;
   const route = (post ? POST : GET)[u.pathname];
   if (!route) throw new Error(`the engine has no call ${post ? 'POST' : 'GET'} ${u.pathname}`);

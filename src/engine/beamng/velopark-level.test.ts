@@ -8,9 +8,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readPng } from '../dds';
+import type { MapSpec } from '../layoutmap';
 import type { HostFiles } from '../placehost';
 import { EDITOR, OUT } from '../velopark-fixture';
-import { buildBeamng, type MapSpec } from './level';
+import { buildBeamng } from './level';
 
 const VELOPARK = 'D:/projects/kart-velopark';
 const AI = `${VELOPARK}/build/ac/content/tracks/techspeed_fueltech_velopark`;
@@ -59,7 +60,10 @@ describe.skipIf(!here)("the Velopark's BeamNG level", () => {
         },
       );
       expect(made.starts).toBeGreaterThan(1);
+      // (a map each layout's start, nothing here rendering the track; spawns only at the layouts the track lists)
       expect(maps).toHaveLength(made.starts);
+      expect(made.spawns).toBeGreaterThan(0);
+      expect(made.spawns).toBeLessThanOrEqual(made.starts);
       for (const m of maps) expect(m.roads.length / 6).toBeLessThan(100_000);
       expect((Date.now() - t0) / 1000).toBeLessThan(180);
     } finally {

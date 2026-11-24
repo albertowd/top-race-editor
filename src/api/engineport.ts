@@ -89,6 +89,8 @@ export const engineChannel = new EngineChannel();
 /** Each port the window is handed, to fn (the desktop app's preload posts it to the page). */
 export function onEnginePort(fn: (port: PortLike) => void, target: Window = window): void {
   target.addEventListener('message', (e: MessageEvent) => {
+    // (only the window's own preload's, posted from the page itself: none from another origin or frame)
+    if (e.origin !== target.location.origin || e.source !== target) return;
     // (the browser's port, as the engine's code has one: its messages' data, and a way to post)
     if (e.data === PORT_MESSAGE && e.ports[0]) fn(e.ports[0] as unknown as PortLike);
   });

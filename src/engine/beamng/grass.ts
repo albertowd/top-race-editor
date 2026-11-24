@@ -232,7 +232,7 @@ export function grassPlaces(
         hits.push({ t, y, l: [l1, l2, l3] });
       }
       if (!hits.length) continue;
-      const top = hits.reduce((a, b) => (b.y > a.y ? b : a));
+      const top = hits.reduce((a, b) => (b.y > a.y ? b : a), hits[0] as (typeof hits)[number]);
       const img = pics[triMesh[top.t] as number];
       if (!grows(top.t) || !img) continue;
       // (anything that keeps grass off lying over it, even a little below the grass's top)

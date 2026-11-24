@@ -1,322 +1,285 @@
 # Top Race editor
 
-A track editor, as a desktop app (Electron). It shows a track's roads as curves over its satellite picture, with their
-lines, rumbles and run-offs, and the meshes the track's build makes from them. Edits are saved back to the track's
-files.
+Draw a race track over its satellite picture, place everything around it, and build it for **Assetto Corsa**,
+**BeamNG.drive** and **rFactor 2** from one place.
 
-It opens the **Techspeed FuelTech Velopark** track (`../kart-velopark`) the first time, and the track opened last
-after that.
+![The whole Velopark in the editor: its roads, rumbles and racing lines over the satellite picture](docs/images/overview.webp)
 
-## Layout
+You edit the track the way you see it from above: roads as curves you drag into shape, rumbles and paint along
+them, and the grid, pits, timing gates, cones, boards, light poles, tyre walls, trees and buildings where they stand.
+The editor works out the ground, the meshes and the AI lines, and one click builds the track for each game, and
+installs it if you want.
 
-```
-src/                  the page: TypeScript, React
-  domain/             the roads' types and constants
-  geometry/           curves sampled, run-offs, lines and rumbles, road shapes (pure, tested)
-  editing/            joints, curve edits, snapping, handles, what the mouse is on (pure, tested)
-  store/              the editor's state (zustand, immer: edits never change roads in place, undo keeps states)
-  canvas/             the map: view, satellite tiles, renderer, mouse
-  components/         toolbar, sidebar, inspector, road list, forms, dialogs, the pointer's readout
-  api/                the engine's API, typed, and the page's channel to the engine window
-  engine/             the engine: the track's files, its geometry, the terrain, the wizard, the builds (TypeScript)
-  engine-window/      the desktop app's engine window: the engine answering the editor's windows
-  wizard/             the new-track wizard: a page of its own (wizard.html)
-  test/               fixtures (a made-up terrain and roads), and the parity tests against the editor this was made from
-models/               the models the editor places and the build lays (.glb), their one catalogue, the games'
-                      scripts (models/scripts)
-public/models/        their pictures: icons, and seen from above for the map (npm run pictures)
-scripts/              the models' pictures drawn (model-pictures.mjs), the coverage report made Sonar's
-desktop/              the desktop app (Electron): its window, and the engine window started with it
-```
+- [Getting started](#getting-started)
+- [The window](#the-window)
+- [Roads](#roads)
+- [Rumbles and paint](#rumbles-and-paint)
+- [The grid, timing and racing lines](#the-grid-timing-and-racing-lines)
+- [Objects](#objects)
+- [The terrain](#the-terrain)
+- [Saving](#saving)
+- [Building for the games](#building-for-the-games)
+- [Making a new track](#making-a-new-track)
+- [Keys and mouse](#keys-and-mouse)
+- [When something goes wrong](#when-something-goes-wrong)
 
-The engine makes the meshes, merged surfaces and fitted curves as the track project's own build makes them, so the
-editor always shows what the build makes.
+## Getting started
 
-## Setup
+**What you need**
 
-Needs Node 20+ and, for Sonar, Docker.
+- Windows 10 or 11.
+- A track's folder: one the editor made (see [Making a new track](#making-a-new-track)), or the Techspeed FuelTech
+  Velopark (`kart-velopark`) next to the editor.
+- The games you build for, installed, if you want the editor to install the track in them.
+
+**Install and open it**
+
+Run the installer (`top-race-editor-<version>-win-x64.exe`) and open **Top Race Editor** from the Start menu. The first time, it
+opens the Velopark if it sits next to the editor; after that, the track you had open last.
+
+<details>
+<summary>Running it from its source instead</summary>
+
+With [Node.js](https://nodejs.org) 20 or later:
 
 ```sh
 npm install
+npm start
 ```
 
-## Running
+`npm start -- --project <folder>` opens a given track. [DEVELOPMENT.md](DEVELOPMENT.md) has the rest.
+</details>
 
-```sh
-npm run desktop  # the page built, and the desktop app (npm start does the same)
-```
+**Open another track** from the track's name at the top left: it lists the tracks it found and the ones opened
+before, and takes any track's folder.
 
-The desktop app ([desktop/main.mjs](desktop/main.mjs), Electron) serves the built page itself and shows it in its
-own window. The engine runs in a window of its own that is never shown (the engine window,
-[src/engine-window/main.ts](src/engine-window/main.ts)), with the computer open to it from Node
-([desktop/engine-preload.cjs](desktop/engine-preload.cjs)): each of the editor's windows calls it on a port of its
-own. It opens the track opened last, or the one named: `npm run desktop -- --project ../another-track` (a path with
-spaces in quotes). With no track yet, it opens the new-track wizard.
+## The window
 
-Another track is opened from the editor: the track's name in the toolbar is a menu of the tracks found (those next to
-this one's project, and those opened before) and takes any track's folder. The engine window keeps it open from then
-on, and the page loads again on it. Several copies of the app can run at once. A copy started while another runs
-keeps its Chromium data in a temporary folder of its own. Two copies on the same track would save over each other's
-changes, so open another track in the second. [desktop/launch.mjs](desktop/launch.mjs) starts it without
-`ELECTRON_RUN_AS_NODE` (VS Code's terminals set it, and Electron would then run as plain Node).
+![The editor's window: the toolbar, the categories, the map and the inspector](docs/images/roads.webp)
 
-What the app keeps on this computer (the wizard's keys, the tracks opened before, the engine's cache) is in
-`%APPDATA%/top-race-editor` (`~/.config/top-race-editor` elsewhere), or beside the file `TOP_RACE_KEYS` names.
-`TOP_RACE_DEBUG_PORT` opens Chromium's debugging port, to drive the app from outside.
+- **The toolbar** (top): the tools for what you're working on (Select, Add Node, New Road, Measure, Place), Undo and
+  Redo, what the map shows (the layers button), Build for the games, New Track, Help, and **Save**.
+- **The categories** (left): pick what to work on: Roads, Rumbles, Paint, Grid, timing & lines, Light poles, Tyre
+  walls, Cones & boards, Scenery, Buildings, Static objects, Terrain. In a category only its own things can be
+  picked, and the rest of the map is shown, dimmed or hidden (**Everything else**, top of the inspector).
+  **Overview** lets you pick anything. Keys `1` to `9`, `0`, `-` and `=` switch between them; `\` hides the sidebar
+  for more map.
+- **The map** (middle): wheel to zoom at the cursor; drag empty map, or drag with the right or middle button, to pan.
+  The bar at the bottom says where the cursor is, and on a road, how far along it you are.
+- **The inspector** (right): what you picked, and the category's own tools.
 
-## Packaging and releases
+## Roads
 
-```sh
-npm run package  # the app for Windows x64 in release/: an installer (NSIS) and a zip
-```
+Click a road to pick it. Its marks show:
 
-[electron-builder.yml](electron-builder.yml) puts the built page (the engine in it) and the editor's own models in the
-app's resources folder, beside the Electron files. The page's packages are bundled by Vite, so the app ships no
-`node_modules`. Packing a build for Assetto Corsa uses 7-Zip where it is installed, else a zip. The installer isn't
-code-signed, so Windows SmartScreen warns on first run.
+| Mark                           | What dragging it does                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| White square: a **node**       | moves the road through there (it snaps to other roads' ends and edges; hold `Ctrl` not to) |
+| Blue dot: a **handle**         | bends the curve at its node; the other handle follows. `Alt` + drag for a sharp corner     |
+| `L` / `R` diamond: a **width** | that side's width at the node; `Shift` changes both sides                                  |
 
-A release is made by pushing a tag ([.github/workflows/release.yml](.github/workflows/release.yml)):
+The marks are large and grabbed from a little way off, so you can work without zooming in close. Where marks crowd
+together, the one nearest the cursor is taken.
 
-```sh
-git tag v0.2.0 && git push origin v0.2.0      # v0.2.0-beta.1 makes a pre-release
-```
+- **Add a node:** `A` then click on the road, or double-click it. Click past an end to make the road longer.
+- **New road:** `N`, click its points, then `Enter`.
+- **Join two roads:** `J` on a road's first or last node joins it to the nearest end of another road.
+- **Smooth:** `S` smooths the picked node, or the whole road with no node picked.
+- **Delete:** `Delete` takes out the picked node; `Shift`+`Delete` the whole road.
+- **Bring In** (Roads category) adds a road the track has but the editor doesn't yet, from its mesh.
+- **Bumps** (`U`) makes the road surface less than perfect, by hand. **Point**: pick a road to show its mesh's
+  points (zoom in), then drag one up or down (`Shift` for finer steps) or type its bump in millimetres; it eases to
+  nothing within its reach. **Raise**, **Lower** and **Smooth** are brushes you drag over the road. The map shows
+  the bumps in red (up) and blue (down). The build moves the merged surface by them, so the paint, rumbles, objects
+  and racing lines follow, in every game. They are saved with the track (`source/bumps.json`); **Clear All Bumps**
+  takes them away.
+- **Check Surface** (`C`) builds the ground where you're looking, as the build will, and rings any seam problem in
+  red.
 
-The workflow then:
+The road's form gives its length, material, its texture's direction, and its joints, branches and run-offs.
 
-1. runs the checks (types, Biome, the tests) on Windows;
-2. packages the app with the tag's version;
-3. makes a GitHub release of that tag, with the installer, the zip and notes generated from the changes since the
-   last release.
+## Rumbles and paint
 
-Run by hand from the Actions tab, it runs the checks and the package only, and keeps the package as the run's
-artifact for 14 days.
+Pick a road, then **Rumbles** or **Paint** to see what runs along it. Drag a rumble or a line to slide it along the
+road, and its end (an orange triangle) to make it start or end elsewhere. Their forms set the kind, width and
+colour.
 
-The editor shows the roads, objects and drawings as soon as they are in. The track's models seen from above are read
-after, while the editor is used (the first time after the models change, that takes a while): a note at the top says
-so, as for other work that goes on (the surface checked, the meshes listed). Work the window must wait for (the track
-opening, saving, a road brought in, the terrain saved) shows a loading screen after a moment.
+**Paint Marks** (in Paint) holds paint that isn't along one road: start lines, the grid's boxes and the pit
+boxes' marks, and lines across a road. **Paint Round** paints round a layout's grid slots or pit boxes as they
+stand.
 
-## Checks
+A paint mark is a curve, like a tyre wall: drag its nodes and handles, `A` adds a node, `S` smooths it. To paint one,
+**Place** and drag from its start to its end, then click on to carry it on; drag again for a new one. A node dragged
+near another mark's end snaps onto it (hold `Ctrl` not to).
 
-```sh
-npm run check         # types, Biome, the tests
-npm run lint:fix      # Biome's fixes (format, imports)
-npm run test:coverage # the tests with coverage (coverage/web)
-```
+The paint merges where it meets, on the map and in the game. Lines of the same paint whose ends meet, whether
+marks or roads' edge lines, are painted as one line with mitred corners. A road's edge line joins the next road's,
+and lines that close a loop become one closed ring, such as a rectangle round a box or a triangle where roads fork.
+Where two paints meet end to end (a yellow line and a white one, or two widths), they join at a mitred seam, each
+keeping its half of the corner. Where paint overlaps, it is painted once.
 
-When the Velopark track is next to the editor, more tests run. The parity tests run the old editor (kept in
-`src/test/legacy/`) on the real roads and check that this one samples, draws, snaps and hits exactly the same. The
-engine's tests that read the Velopark's files (its AI lines, its buildings) run too. Elsewhere they are skipped.
-The tests that build the whole Velopark run only when asked (`TOP_RACE_VELOPARK=1`).
+**Wear** (top of Paint) sets how worn all the painting looks in the game: lines, marks, boxes and start lines.
+Choose **New**, **Almost new**, **Used** or **Very used**. Even new paint is a little dull, with the asphalt's grain
+showing through it. The more it is used, the thinner and dirtier it gets, and the more it wears off in patches.
 
-## Sonar
+**Rubber** (in Paint) holds the dark rubber the cars leave on the roads. Like the paint, it is the track's: every
+layout shows all of it. A rubber mark is a curve, edited like a paint mark: **Place** and drag to lay one, drag its
+nodes and handles, `A` adds a node, `Delete` takes it away. Each one has its own width and darkness (**Almost new**,
+**Used** or **Very used**). The build lays the rubber the way cars would: the most in the braking zones, through the
+apexes and out of the corners, little on the straights. It is drawn as thousands of separate tyre marks laid over time
+(most old and faded, a few fresh and dark), the asphalt's stones showing through, and marbles thrown outside the
+corners, never a repeating picture. **New rubber** sets how dark new marks start. **Lay Rubber Along the Racing
+Lines** copies the layout chosen at the top's fast line and pit lane in as rubber marks (`RUBBER_<LAYOUT>_FAST`,
+`_PIT`), which you can then trim, move or delete. Doing it again for the same layout replaces them. Draw a rubber mark
+the way the cars drive. Where marks lie over one another, as layouts sharing a corner do, the road shows them as one,
+never darker than the darkest of them, so every layout's lines can stay.
 
-SonarQube runs in Docker ([docker-compose.yml](docker-compose.yml), settings in
-[sonar-project.properties](sonar-project.properties)):
+**To merge two lines**, drag one's end onto the other's: a line's end (its orange triangle) or a mark's node snaps
+onto the end of any other line or mark nearby (hold `Ctrl` not to). Ends within 10 cm of each other merge by
+themselves.
 
-```sh
-npm run sonar:up      # SonarQube at http://localhost:9000 (the first login: admin / admin)
-npm run sonar         # tests with coverage, then a scan; needs SONAR_TOKEN
-npm run sonar:down    # stopped (its data kept)
-```
+## The grid, timing and racing lines
 
-For the token, use My Account → Security → Generate a token (a Global Analysis Token), then
-`export SONAR_TOKEN=...` before `npm run sonar`.
+Each **layout** (vp_1000, vp_1500…) has its own grid, pit boxes, hotlap start, timing gates and racing lines. Choose
+the layout at the top of the panel. **with the same** changes every layout that has the same set at once.
 
-## The engine's API
+- **Lay Out Along a Line** puts a whole grid or row of pit boxes down at once: how many, in rows of 1, 2 or 3, how far
+  apart, and which way they face. Click where the first one stands, then the way the rest go.
+- **Timing gates** are two posts; drag either.
+- **The racing line and the pit lane** are curves like a road's middle. The games' AI drives these lines. The pit
+  lane leaves and joins the racing line at its two diamonds; drag them along the line to move where the cars go in
+  and come out.
+- **In Assetto Corsa the pit lane must run the same way as the layout.** AC can't take a pit lane the cars drive
+  against the racing line's direction, so lay it out going the way the track goes.
+- **Start lines** (in Paint) are painted on the track for every layout, chequered or a solid line.
+- **Rubber** is the track's, not a layout's: it is in Paint, where a layout's racing lines can be copied in as rubber.
+- **Cars' width** is what the AI lines are made for (1.4 m unless you set it). The AI keeps half of it,
+  and 0.3 m more, off the road's edges. It may run over a rumble's low ramp, but not over concrete (a concrete
+  rumble, the concrete behind a ramp) nor off a rumble's back, where a car would be thrown.
 
-The page asks the engine window each call by its path (as a GET, or a POST with a body), on the track it has open
-([src/engine/api.ts](src/engine/api.ts)):
+## Objects
 
-| Request                     | Body               | Answer                                             |
-| --------------------------- | ------------------ | -------------------------------------------------- |
-| `GET /api/track`            |                    | name, folder, satellite span and size, materials   |
-| `GET /api/tracks`           |                    | the track open, and the others found               |
-| `POST /api/open`            | `{folder}`         | that track kept open from now on                   |
-| `GET /api/build`            |                    | whether it can build, for which games, its last    |
-| `POST /api/build`           | `{games?, ...}`    | a build for the games, begun                       |
-| `GET /api/build/job`        | `?id=`             | the build: its step, log, archive                  |
-| `POST /api/build/cancel`    | `{id}`             | the build, stopped                                 |
-| `GET /api/roads`            |                    | the roads (as the page has them) and the track     |
-| `GET /api/context`          |                    | the track's models seen from above                 |
-| `GET /api/drawings`         |                    | strokes drawn over the map                         |
-| `GET /api/meshes`           |                    | road meshes not described yet                      |
-| `GET /api/tile`             | `?l=&x=&y=`        | a satellite tile (JPEG)                            |
-| `POST /api/save`            | `{roads, deleted}` | `{ok, changed, roads}`                             |
-| `POST /api/mesh`            | `{road, roads}`    | a road's mesh as the build makes it                |
-| `POST /api/surface`         | `{roads, window}`  | the merged surface there, and its seam problems    |
-| `POST /api/bring`           | `{model, name}`    | a mesh read as roads                               |
-| `POST /api/fit`             | `{road}`           | a curve fitted to a road's points                  |
-| `GET /api/objects`          |                    | the objects placed, `{objects, seeded}`            |
-| `POST /api/objects`         | `{objects}`        | `{ok, objects}`: checked, written                  |
-| `GET /api/terrain`          |                    | the terrain as saved: `{exists, doc, why, image}`  |
-| `GET /api/terrain/image`    |                    | the picture of the ground round the track (JPEG)   |
-| `GET /api/terrain/raster`   | `?file=`           | a raster edit's values (float32, base64)           |
-| `POST /api/terrain/layers`  | `{doc?, want?}`    | its grids (16 bit, base64) and heights, worked out |
-| `POST /api/terrain`         | `{doc}`            | `{ok, ...}`: checked, written, its pictures made   |
-| `GET /api/wizard`           |                    | the providers, which keys are set, where tracks go |
-| `GET /api/wizard/search`    | `?q=`              | places found by name (OpenStreetMap)               |
-| `GET /api/wizard/tile`      | `?p=&z=&x=&y=`     | a picture provider's tile for its map (JPEG)       |
-| `GET /api/wizard/job`       | `?id=`             | a track being made: its step, progress and log     |
-| `POST /api/wizard/keys`     | `{name, value}`    | a key kept on this computer (blank: forgotten)     |
-| `POST /api/wizard/estimate` | `{plan}`           | what making it asks of the providers               |
-| `POST /api/wizard/start`    | `{plan}`           | the job, made in the background                    |
-| `POST /api/wizard/cancel`   | `{id}`             | the job, stopping                                  |
+![A marker board picked: its card as it will read, what it is, and its form](docs/images/objects.webp)
 
-The types are in [src/api/types.ts](src/api/types.ts). A call that fails says why, and the page shows it.
+Light poles, tyre walls, cones and boards, scenery (trees, fences), buildings and static objects are all placed the
+same way:
 
-## The objects
+1. Pick the category, then **Place** beside the kind (or press `O`). Where a kind has several models, choose one by
+   its picture first.
+2. Click on the map to put one down. It faces the way the last one did, or along the nearest road.
+3. Drag it to move it; drag its white handle to turn it. `Shift` moves or turns all of its kind in the layout.
 
-Besides the roads, the editor places the track's objects: each layout's grid, pit boxes, hotlap start, timing
-gates, cones and boards, and the light poles and tyre walls of every layout. They are kept in the track's
-`tools/reference/objects.json` (the track file's `objects`), which the track's build reads to place them. The format
-is in [src/engine/objectsfile.ts](src/engine/objectsfile.ts). A tyre wall is a curve of Bezier pieces,
-edited as a road's middle is (nodes, handles, corners): the build lays a stack every `spacing` metres along it,
-`rows` deep (each row further to its right). Read from the models, each wall's curve is fitted to its stacks. Marks
-are paint on the roads for every layout (a start, a heading, a length, width, colour, solid or dotted), laid by the
-build on the road surface.
+**What you picked** shows at the top of the inspector: its picture, what it is, its size, how it's hit (not at all,
+a box round it, a wall along it, or knocked about), and which layouts have it. Below that is its form: where it stands, its heading, its
+scale and its layouts.
 
-While the track has no objects file, the engine reads the objects from its models (`vp_*.glb`, `velopark_poles.glb`,
-`velopark_tyres.glb`) and the page says so; saving writes the file. Edits to a layout's grid, pits... go to every
-other layout with the same set too, unless "with the same" is off in the Objects panel.
+**To find one**, pick it on the map, or open **Find one in the list** and search by its name. The list stays shut
+until you need it, so what you picked has the room.
 
-## The categories
+**Marker boards** say whatever you type in their **Text**, drawn as large as fits the card (`|` starts a second
+line). Left empty, a board says what its name does: `BOARD_PIT` says PIT.
 
-The sidebar splits the work into categories (keys 1 to 9, then 0, - and =): the Overview (everything at once), Roads (shapes, joints,
-run-offs), Rumbles, Paint (the lines along the roads and the paint marks), Grid & timing (grid, pits, hotlap, gates),
-Light poles, Tyre walls, Cones & boards, Scenery, Buildings, Static objects, and Terrain. In a category only its own things can be picked on the map, the toolbar
-offers only its tools, and the inspector on the right holds its flow; the rest of the map is shown, dimmed or hidden.
-They are in [src/domain/categories.ts](src/domain/categories.ts).
-
-Each kind has a picture: in the kinds' table, in the list of what is placed, and in the drop-downs that choose a
-kind or a model.
-
-Things are shown by what they are and their number (Road 3, Grid slot 2). Their names are the game's and matter only
-to the export: each form keeps them under Export name.
-
-## Laying out along a line
-
-In Grid & timing, "Lay Out Along a Line" puts down a layout's grid slots or pit boxes at once. You set:
-
-- how many, in one line or in rows of 2 or 3 (staggered or not, the first on the left or the right);
-- how far apart, or spread to fit the line;
-- which way they face (back to the line's start, as a grid behind its pole, or along it);
-- a lean, for boxes set at a slant.
-
-Draw the line on the map: click where the first one stands, then the way the rest go. A preview follows the mouse
-until you place them. Placing replaces the layout's set, and those of the layouts with the same set.
-
-Their paint is apart: in Paint, Paint Marks has the same panel for the grid's and the pit boxes' paint. Each kind
-has its own line and settings, and a shape (a box, open at the back, or a front line), its size, line width and
-colour. "Paint Round" paints round the layout's own slots or boxes as they stand. Paint is every layout's: laying it
-out again replaces what was laid out before (marks named `MARK_GRID_` and `MARK_PIT_`). "Paint a Line Across a
-Road" paints a line from one edge of the road clicked to the other, such as a start line.
-
-A road's start and end edges turn with their Bezier handle. The node form shows how far an end's edge is off
-square; type an angle, or Square to make it follow the road again.
-
-## The scenery
-
-The Scenery category (key 9) places models as they are, for every layout: trees (eucalyptus, young eucalyptus, broad
-leaf, palm, bamboo, and the Velopark's own) and fence panels (concrete or steel posts). Buildings (key 0) places the
-buildings (a white shed, the judges' tower, the paddock's, the farm's, the houses), and Static objects (key -) the
-rest that stands as it is (a marshal's shelter, a chair, a timing table, banners, flagpoles, bins, a gate, a lamp)
-and parked karts; a model the catalogue has not is a static object. The start gantry is Grid & timing's. Each kind's
-drop-down chooses the model that Place adds, and a placed one's form can change its model. The map draws each one
-seen from above, at scale, turned its way. A new fence panel faces the nearest road, so it runs along it.
-
-They are kept in the objects file under `scenery`, by kind: `{model, x, z, heading}`, where `model` is an id from
-[models/catalogue.json](models/catalogue.json). The models and how they are made are in
-[models/README.md](models/README.md). The track's build does not place the scenery yet; it is in the file for when
-it does.
+**Tyre walls and fences** are curves: drag their nodes and handles like a road's, `A` adds a node, and `S` smooths
+it. The build lays the stacks or panels along the curve.
 
 ## The terrain
 
-The Terrain category (key =) edits the ground the track lies on: the track's `tools/reference/terrain` folder, which
-the ground is made from, as the first step of its build. Its `terrain.json` says where the heights come from, the
-filters that tell the ground from the tops of trees and roofs among them, and the edits to the ground. The engine
-works them out as the track's build does ([src/engine/terrain.ts](src/engine/terrain.ts)), so the page shows what the
-build makes, and keeps its previews in its own cache, never the build's.
+![The Terrain category: the ground under the track, lit and coloured by height, and its edits](docs/images/terrain.webp)
 
-- **Shown:** a layer over the satellite: the original heights, the filtered (the ground the filters keep, filled
-  in), the ground (with the edits), the edits' change (red up, blue down) or what the filters took out. It is lit
-  (relief, made taller to read), coloured by height, with contours if asked. The wider picture of the ground round
-  the track goes under it. The heights can be shown as points, coloured by why the filters took each out. Under
-  the mouse, the inspector gives each layer's height.
-- **Filters:** their rules' numbers, and areas drawn on the map that are the ground (or not) whatever the rules
-  find. Each change is worked out again a moment after (about 2 s).
-- **Edits,** in order, each made over the ground the ones before it left: Flat (at a height, or at its point's
-  height and some metres over it, sloped if asked), Raise (by some metres) and Smooth rings, each easing out over
-  some metres; and the Brush (raise, lower, smooth, flatten to a height; Alt-click takes the height there). The
-  brush paints a raster edit (an `.npz` in the folder) and shows each stroke at once. The engine works the ground
-  out again when the stroke ends.
-- **Drawing:** click a ring's points; its first point, a double-click or Enter ends it, Esc drops it. Picked, a
-  ring is dragged whole or by its points; Shift on a side adds a point, Alt on one takes it out.
-- **Saving:** Ctrl+S while the terrain is worked on writes `terrain.json` and the rasters painted. The one before
-  goes to the backups. The terrain's pictures and points are made again, and the track's next build starts from
-  them.
+The **Terrain** category edits the ground the track lies on. **Shown** chooses what the map shows: the heights as
+measured, the ground once trees and roofs are filtered out, the ground with your edits, or just the edits.
 
-## Faces checked as they are made
+- **Filters** tell the ground from the tops of trees and buildings. Draw areas that are, or aren't, the ground
+  whatever the filters find.
+- **Edits** change the ground, each over the ones before it: **Flat**, **Raise** and **Smooth** areas, and the
+  **Brush** (raise, lower, smooth, or flatten to a height; `Alt`-click takes the height under the cursor).
+- **Save terrain** (or `Ctrl`+`S` while in Terrain) keeps the terrain; the next build starts from it.
 
-Each road mesh the engine makes (as the track's build makes it, for the wireframe) is checked for faces that would be
-wrong in the game: facing down or on edge, or without area (no normal: the game's normals go wrong round them). The
-road's form says what was found, all right or not, and the map shows those faces in red while the road is selected.
-The meshes are made whatever the View menu shows. The surface check reports them too, with its seam problems. The
-models of [models/](models/) were checked the same way when they were made (the catalogue's `wrong_faces`).
+**Ground** chooses the picture the games show on the ground: **The photo** (the satellite picture as it is) or
+**Generated from it**. Use the generated one when the photo may not be handed on, as with Google's pictures. The
+build reads the photo only to find what covers the ground where (grass, earth, paving) and the colour of each over
+every few metres. It then paints those shapes with textures of its own, so none of the photo's detail and none of its
+tree shadows end up in the games. Up close in Assetto Corsa the ground has a texture of its own on top: grass blades,
+sand with pebbles, or gravel, depending on what covers it. The editor keeps showing the photo, so you still edit over the real place. The
+generated picture is made once, and made again when the photo changes.
+
+## Saving
+
+**Save** (`Ctrl`+`S`) writes your roads and objects to the track's folder; the one before goes to its backups.
+`Ctrl`+`Z` and `Ctrl`+`Y` undo and redo. Closing with changes not saved asks whether to save them first.
 
 ## Building for the games
 
-The box in the toolbar builds the track for the games ticked in its dialog: Assetto Corsa, BeamNG.drive or both. The
-engine makes the track's models again from what is saved, then the AC track from them (only what changed is made
-again), and the BeamNG level from the AC track (one map of every layout, each its activities, packed as
-`build/dist/<track>_beamng.zip`). Assetto Corsa's is packed as the project's `release.ps1` does
-(`build/dist/<track>_ac.7z` with 7-Zip, else a `.zip`). It can install the AC track in the game too (`AC_TRACKS`
-names its tracks folder, else it is looked for in Steam's libraries), put the BeamNG level in BeamNG's mods
-(`BEAMNG_MODS`, else BeamNG's own user folder), or make every step again. A track is built only with every layout
-whole (its racing lines, grid, pits, timing and hotlap start).
+![The Build for the Games dialog](docs/images/build.webp)
 
-While it builds, the dialog shows how far it is: one bar for all of it, each stage weighed by what it took the last
-time (kept in `build/cache/editor_build.json`), and the time it may still take; every stage; what it is doing now,
-its last line and how long ago it said it; and 7-Zip's percentage while it packs. The build goes on in the engine
-with the dialog closed (a note at the top says so), can be stopped, and does not begin while another build holds the
-build's lock (`build/build.lock`, which the editor takes round all it does).
+**Build for the games** (the box in the toolbar) makes the track for the games you tick. It saves your changes
+first, then makes the track's models and each game's track from them. Only what changed is made again, so a second
+build is quicker.
 
-The marker boards' faces are drawn by the build: each board's text (its form's Text, else what its name says:
-`BOARD_PIT_2` says PIT) on a card of its own, as large as fits it (a `|` breaks a line), the cards on one sheet
-(`BoardCards.png`), each board's back a blank card.
+- **Assetto Corsa:** every layout, with its AI lines, pit boxes and lights. Tick **Install in the game too** to copy
+  it into AC's tracks folder (close AC first). **Make its archive too** packs a `.7z` to hand the track on.
+- **BeamNG.drive:** one map with every layout's races; **Install in BeamNG's mods too** puts it in your mods
+  folder. You can spawn at every layout's start, or only at those the track file lists in `beamng.spawns`; every
+  layout keeps its races either way.
+- **rFactor 2:** one location, each layout its own, with its cones and boards knocked about as in the other games.
+  **Copy into rFactor 2's ModDev too** puts it there to try in Mod Mode (close rFactor 2 first).
 
-### From the command line (CI)
+Each layout's pictures are renders of the built track, as the games' own tracks have, with the grass AC grows near
+the camera. A layout's picture shows the start gantry its lap runs under, seen from the track before it. A layout
+whose lap runs under no gantry is shown whole, from above at a slant. AC uses it as the layout's preview and draws
+the layout's outline over it (`outline.png`, drawn from its racing line). BeamNG uses it for the layout's spawn, race
+and time trial. rFactor 2 gets pictures like its own tracks': each layout's icon and thumbnail of its lap, its map for
+the wheel's screen, and a loading screen (the track seen from its start, with its data and its map over it). The
+location's icon is the track with every layout's roads drawn over it.
 
-A saved track is built with no window shown, its log printed as it goes, the exit code its end's (0 built, 1 failed
-or stopped, 2 wrong arguments):
+The dialog shows each stage, how long it may still take, and the log. You can close it and keep working while it
+builds. A track builds only when every layout is whole: its racing lines, grid, pits, timing gates and hotlap start.
 
-```sh
-npm run build-track -- --project <folder> [--games ac,beamng,rf2] [--install] [--install-beamng] [--install-rf2] [--no-pack] [--all]
-```
+Tracks can also be built with no window, for an automatic build:
+`npm run build-track -- --project <folder> [--games ac,beamng,rf2] [--install]`. See
+[DEVELOPMENT.md](DEVELOPMENT.md#from-the-command-line-ci).
 
-It is the desktop app's engine (`desktop/main.mjs --build`, `desktop/buildcli.mjs`), so it builds just as the dialog
-does: by default for AC, packed. `--install` and the others are the dialog's ticks; `--all` makes every step again.
-On Linux it needs a display: `xvfb-run npm run build-track -- ...` (and `--no-sandbox` where it runs as root).
+## Making a new track
 
-## A new track
+**New Track** (the globe in the toolbar) makes a new track's folder:
 
-The wizard (the globe in the toolbar, or `/wizard.html`) makes a new track's folder. You pick:
+1. **Its place:** search for it by name, or click the map. That point is the track's centre.
+2. **The area round it**, in metres.
+3. **Its picture:** Esri World Imagery (free, no key), Mapbox or Google; and how sharp.
+4. **Its heights:** AWS Terrain Tiles (free, no key), Mapbox Terrain or Google Elevation.
+5. **Its name and folder.**
 
-- **its place:** find it by name (OpenStreetMap), or click the map; the click is the track's origin (0, 0), x running
-  west and z north from it;
-- **the area round it:** metres across and deep;
-- **where its picture comes from:** Esri World Imagery (no key), Mapbox or Google; and how many metres a pixel;
-- **where its heights come from:** AWS Terrain Tiles (no key), Mapbox Terrain or Google Elevation; and how far
-  apart;
-- **whether to take OpenStreetMap's buildings** (their roofs are not the ground);
-- **its name, its folder** (next to this track's project unless a whole path) and how wide the editor's map picture
-  is.
+Before it starts, the wizard says how many pictures and heights it will fetch. Mapbox and Google need your own API
+key; it is kept on this computer only, never in a track. When it's done, open the new track from the track's name at
+the top left. It has its ground but no roads yet: draw them with **New Road**.
 
-Keys are kept on this computer (`%APPDATA%/top-race-editor/keys.json`, `~/.config/top-race-editor/` elsewhere, or
-`TOP_RACE_KEYS`), never in a project, and the page never gets them back. Before making it, the wizard says how many
-tiles and requests it will take. Making it fetches the picture and the heights, then the engine makes its terrain
-(`terrain.json` and its layers) in the new folder. It ends with the command that opens the track:
-`npm run desktop -- --project <folder>` (or open its folder from the track menu).
+## Keys and mouse
 
-A track the wizard made names the tools of the project the editor had open (its `track.json`'s `tools`). Its terrain
-opens in the Terrain category; its roads start empty.
+| Keys                                          | What they do                                       |
+| --------------------------------------------- | -------------------------------------------------- |
+| `1`–`9`, `0`, `-`, `=`                        | switch category                                    |
+| `\`                                           | show or hide the sidebar                           |
+| Wheel / right or middle drag / `Space` + drag | zoom / pan                                         |
+| `A` then click, or double-click               | add a node to what's picked                        |
+| `N`, clicks, `Enter`                          | a new road                                         |
+| `J`                                           | join a road's end to the nearest other road        |
+| `S`                                           | smooth the picked node, or the whole road or curve |
+| `O`                                           | place the kind chosen                              |
+| `M` then drag                                 | measure                                            |
+| `U`                                           | bump the roads' surface by hand                    |
+| `C`                                           | check the surface where you look                   |
+| `Delete` / `Shift`+`Delete`                   | delete the picked node or object / the whole road  |
+| `Esc`                                         | back to Select, nothing picked                     |
+| `Ctrl`+`Z` / `Ctrl`+`Y` / `Ctrl`+`S`          | undo / redo / save                                 |
+| `?`                                           | all the keys and mouse actions                     |
+
+## When something goes wrong
+
+- **"Assetto Corsa is running: close it before installing."** Close the game (Content Manager can stay open) and
+  build again. The same goes for BeamNG.drive and rFactor 2.
+- **The satellite picture is late** just after opening a track: the editor is working the ground out first. It
+  fills in on its own a few seconds later.
+- **The build stops with a layout not whole:** the message names the layout and what it lacks (a racing line, a
+  grid…). Add it in Grid, timing & lines and build again.
+- **Something looks wrong in the game but right in the editor:** tick **Make every step again** in the Build dialog
+  and build once more.

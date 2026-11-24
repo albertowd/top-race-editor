@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { readAiFile, writeAiFile } from './acai';
 import type { LineNode, RacingLine } from './ailines';
-import { aiLineOf, GRIP, PIT_OVERLAP, PIT_SIDE, PIT_SPEED, STEP, TOP } from './aimake';
+import { aiLineOf, GRIP, PIT_OVERLAP, PIT_SIDE, PIT_SPEED, pitRunsBackwards, STEP, TOP } from './aimake';
 
 /** An oval: two 200 m straights along z and bends of radius 30 m, its nodes' handles a circle's (kappa). */
 function oval(): RacingLine {
@@ -132,5 +132,36 @@ describe('a racing line made an AI line', () => {
       expect(run * STEP).toBeGreaterThanOrEqual(PIT_OVERLAP);
       expect(run * STEP).toBeLessThan(PIT_OVERLAP + 2);
     }
+  });
+});
+
+describe('a pit lane against the lap', () => {
+  // (the oval's fast line, and pit lanes as AI points at so many metres along it)
+  const fast = aiLineOf(
+    oval(),
+    () => 0,
+    () => true,
+  );
+  const pts = (s: number[]) => {
+    const out = new Float32Array(s.length * 3);
+    s.forEach((d, k) => {
+      let i = 0;
+      while (i < fast.along.length - 1 && (fast.along[i] as number) < d) i++;
+      out.set([fast.points[i * 3] as number, 0, fast.points[i * 3 + 2] as number], k * 3);
+    });
+    return { points: out };
+  };
+
+  it('is not backwards when it rejoins ahead of where it leaves', () => {
+    expect(pitRunsBackwards(fast, pts([20, 40, 60]))).toBe(false);
+  });
+
+  it('is backwards when it rejoins behind where it leaves', () => {
+    expect(pitRunsBackwards(fast, pts([60, 40, 20]))).toBe(true);
+  });
+
+  it('is not backwards across the start of the lap', () => {
+    const lap = fast.along[fast.along.length - 1] as number;
+    expect(pitRunsBackwards(fast, pts([lap - 30, lap - 5, 20]))).toBe(false);
   });
 });

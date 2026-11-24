@@ -23,6 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run lint && npm run test",
     "pictures": "node scripts/model-pictures.mjs",
+    "model:south-warehouse": "jiti scripts/south-warehouse.ts",
     "sonar:up": "docker compose up -d --wait sonarqube",
     "sonar:down": "docker compose down",
     "sonar": "npm run test:coverage && node scripts/sonar-reports.mjs && docker compose --profile scan run --rm scanner"

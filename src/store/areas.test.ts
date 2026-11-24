@@ -3,6 +3,7 @@
 // them; the whole taken away.
 import { describe, expect, it } from 'vitest';
 import { areaOf } from '../editing/areas';
+import { markLength } from '../editing/marks';
 import { loadedEditor, road } from '../test/fixtures';
 
 describe('the paved areas', () => {
@@ -20,7 +21,7 @@ describe('the paved areas', () => {
     const parks = () => (ed.get().objects?.marks ?? []).filter((m) => m.name.startsWith('PARK_AREA_1_'));
     ed.parkArea(2.5, 5);
     expect(parks()).toHaveLength(9);
-    expect(parks().every((m) => m.length === 5 && m.colour === 'white')).toBe(true);
+    expect(parks().every((m) => Math.abs(markLength(m) - 5) < 1e-9 && m.colour === 'white')).toBe(true);
     ed.parkArea(2.5, 5);
     expect(parks()).toHaveLength(9);
     // (the picked one: a corner added on its edge, where clicked)

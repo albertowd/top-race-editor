@@ -1,3 +1,4 @@
+import { MARK_PX } from '../domain/constants';
 import type { Layers, Road, Selection, Vec2 } from '../domain/types';
 import { kerbPieces, lineOffsets, type Offset, pieceOffsets } from '../geometry/paint';
 import { type AlongHandle, alongHandles, geo, type Lookup } from '../geometry/roads';
@@ -80,10 +81,30 @@ export function itemAt(c: HitContext, wx: number, wz: number): ItemHit | null {
   return hit;
 }
 
-const near = (c: HitContext, h: { x: number; z: number }, sx: number, sy: number, r: number) => {
+/** Screen pixels from (sx, sy) to a mark. */
+const away = (c: HitContext, h: { x: number; z: number }, sx: number, sy: number) => {
   const [x, y] = c.toScreen(h.x, h.z);
-  return Math.hypot(x - sx, y - sy) < r;
+  return Math.hypot(x - sx, y - sy);
 };
+
+/** The nearest of the marks within MARK_PX.grab of (sx, sy), if any. */
+function nearest<H extends { x: number; z: number }>(
+  c: HitContext,
+  hs: readonly H[],
+  sx: number,
+  sy: number,
+): H | null {
+  let best: H | null = null;
+  let bd: number = MARK_PX.grab;
+  for (const h of hs) {
+    const d = away(c, h, sx, sy);
+    if (d < bd) {
+      bd = d;
+      best = h;
+    }
+  }
+  return best;
+}
 
 /** A handle of the selected road under the mouse: a line's or rumble's end, a run-off's, a node's. */
 function handleAt(c: HitContext, sx: number, sy: number): HandleHit | null {
@@ -92,15 +113,12 @@ function handleAt(c: HitContext, sx: number, sy: number): HandleHit | null {
   const r = c.sel.r;
   const shape = c.shape !== false;
   const ends = [...endHandles(road, c.sel, c.find), ...(shape ? alongHandles(road, c.find) : [])];
-  const end = ends.find((h) => near(c, h, sx, sy, 9));
+  // (a line's or rumble's end first; then a node's marks, the nearest: a node's square, its handles' dots, its widths)
+  const end = nearest(c, ends, sx, sy);
   if (end) return { ...end, road: r };
   if (!shape) return null;
-  const hs = nodeHandles(road, c.find);
-  for (const kind of ['in', 'out', 'wl', 'wr', 'p'] as const) {
-    const h = hs.find((x) => x.kind === kind && near(c, x, sx, sy, 8));
-    if (h) return { ...h, road: r };
-  }
-  return null;
+  const h = nearest(c, nodeHandles(road, c.find), sx, sy);
+  return h ? { ...h, road: r } : null;
 }
 
 /** How near (wx, wz) is to road i (lower: nearer); Infinity if not on it nor within a few pixels. */

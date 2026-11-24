@@ -17,6 +17,7 @@
 // check() proves it: every edge of two faces (but on the world's edge), one height a point, the world covered once.
 import { Clipper64, ClipType, FillRule, Path64, Paths64, Point64 } from 'clipper2-js';
 import { geosOp, geosReady, geosTriangles } from './geos';
+import { earClip } from './polygon';
 import { type Box, TILE, TileIndex } from './tiles';
 import type { Triangle } from './triangle';
 
@@ -86,6 +87,8 @@ export const unit = (v: number) => roundEven(v / GRID);
 /** A whole number of GRID back to metres. */
 export const metres = (u: number) => u * GRID;
 const keyOf = (x: number, z: number) => `${x},${z}`;
+
+export { earClip };
 
 export type Pt = [number, number];
 /** A ring of grid points (no point repeated at its end). */
@@ -810,52 +813,6 @@ class PolyIndex {
     }
     return inn ? 'in' : 'out';
   }
-}
-
-/** A simple ring cut into triangles on its own points alone, ear by ear (a sliver, which a Delaunay fill cannot tell
- * the sides of). */
-export function earClip(ring: Ring): number[] {
-  const idx = ring.map((_, i) => i);
-  if (idx.length < 3) return [];
-  const sign = area2(ring) > 0 ? 1 : -1;
-  const out: number[] = [];
-  let guard = 0;
-  while (idx.length > 3 && guard++ < 10 * ring.length * ring.length) {
-    let best = -1;
-    let bi = -1;
-    for (let k = 0; k < idx.length; k++) {
-      const A = ring[idx[(k + idx.length - 1) % idx.length] as number] as Pt;
-      const B = ring[idx[k] as number] as Pt;
-      const C = ring[idx[(k + 1) % idx.length] as number] as Pt;
-      const cr = sign * ((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
-      if (cr <= 0) continue;
-      let blocked = false;
-      for (const j of idx) {
-        const P = ring[j] as Pt;
-        if (P === A || P === B || P === C) continue;
-        const d1 = (B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0]);
-        const d2 = (C[0] - B[0]) * (P[1] - B[1]) - (C[1] - B[1]) * (P[0] - B[0]);
-        const d3 = (A[0] - C[0]) * (P[1] - C[1]) - (A[1] - C[1]) * (P[0] - C[0]);
-        if (sign * d1 >= 0 && sign * d2 >= 0 && sign * d3 >= 0) {
-          blocked = true;
-          break;
-        }
-      }
-      if (!blocked && cr > best) {
-        best = cr;
-        bi = k;
-      }
-    }
-    if (bi < 0) break;
-    out.push(
-      idx[(bi + idx.length - 1) % idx.length] as number,
-      idx[bi] as number,
-      idx[(bi + 1) % idx.length] as number,
-    );
-    idx.splice(bi, 1);
-  }
-  if (idx.length === 3) out.push(...idx);
-  return out;
 }
 
 /** A face filled: its points (grid units, but those Triangle added inside the ground) and its triangles. */

@@ -5,7 +5,7 @@
 // file where it always was). A part is read from wherever it is, in its own file's form (what the stores work on); it
 // is written only into the track file, the one before kept in the backups, as Python's json writes it (pyjson), byte
 // for byte, as the track's own tools read it.
-import { cleanObjects, isV2, seedObjects } from './objectsfile';
+import { cleanObjects, isV2, seedObjects, withCurvedMarks } from './objectsfile';
 import type { HostFiles } from './placehost';
 import { type PyJson, readPyJson } from './pyjson';
 import { backup, mergeRoads, type Road, type TrackSettings, writePyJsonFile } from './trackfiles';
@@ -190,7 +190,7 @@ export async function trackObjects(
   if (given !== null)
     return isV2(given)
       ? { objects: cleanObjects(given) as PyJson, seeded: false, converted: true }
-      : { objects: given, seeded: false, converted: false };
+      : { objects: withCurvedMarks(given), seeded: false, converted: false };
   return { objects: cleanObjects(await seedObjects(files, models)) as PyJson, seeded: true, converted: false };
 }
 

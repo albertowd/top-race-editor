@@ -7,12 +7,15 @@ import type {
   Gate,
   LayoutKind,
   LayoutObjects,
+  MarkKind,
   ModelKind,
   ObjectCollision,
   ObjectKind,
   ObjectPick,
+  PaintMark,
   PlacedObject,
   Point,
+  RubberMark,
   Spot,
   TrackKind,
   TrackObjects,
@@ -31,11 +34,28 @@ import {
   moveLine,
   removeLineNode,
 } from './lines';
-import { MARK_LENGTH, MARK_WIDTH, markMiddle, markPoint, moveMarkEnd, offMark } from './marks';
+import { markMiddle, moveMarkNode, newMark, newRubber, offMark } from './marks';
 import { addWallNode, handleAt, moveWallHandle, nearestOnWall, TYRE_R, TYRE_SPACING } from './walls';
 
 export const LAYOUT_KINDS: readonly LayoutKind[] = ['grid', 'pits', 'hotlap', 'timing'];
-export const TRACK_KINDS: readonly TrackKind[] = ['marks', 'areas'];
+export const TRACK_KINDS: readonly TrackKind[] = ['marks', 'rubber', 'areas'];
+
+/** a rubber mark's width (m: a kart's band) and darkness where nothing says */
+export const NEW_RUBBER: Pick<RubberMark, 'width' | 'wear'> = { width: 1.5, wear: 'used' };
+
+/** Whether a kind is laid along a curve on the roads: paint marks, rubber marks. */
+export const isMarkKind = (k: ObjectKind): k is MarkKind => k === 'marks' || k === 'rubber';
+
+/** A mark kind's marks as they are (the rubber: none yet, none). */
+export const marksOf = (o: TrackObjects, kind: MarkKind): readonly (PaintMark | RubberMark)[] =>
+  kind === 'marks' ? o.marks : (o.rubber ?? []);
+
+/** A mark kind's list to change (the rubber's made where there is none yet). */
+function markList(o: TrackObjects, kind: MarkKind): (PaintMark | RubberMark)[] {
+  if (kind === 'marks') return o.marks;
+  o.rubber ??= [];
+  return o.rubber;
+}
 export const MODEL_KINDS: readonly ModelKind[] = [
   'cones',
   'boards',
@@ -55,6 +75,7 @@ export const OBJECT_KINDS: readonly ObjectKind[] = [
   'poles',
   'tyres',
   'marks',
+  'rubber',
   'areas',
   ...MODEL_KINDS.slice(4),
 ];
@@ -71,7 +92,12 @@ export const OBJECT_LABELS: Record<ObjectKind, { one: string; many: string; what
   marks: {
     one: 'Paint mark',
     many: 'Marks',
-    what: 'paint on the roads: a line from its start, its way and its length',
+    what: 'paint on the roads: a line along a curve; lines of one paint whose ends meet are painted as one',
+  },
+  rubber: {
+    one: 'Rubber mark',
+    many: 'Rubber',
+    what: 'rubber the cars have laid on the roads (in every layout): a dark band along a curve, as dark as its wear',
   },
   trees: { one: 'Tree', many: 'Trees', what: 'trees: eucalyptus, broad leaf, palms and bamboo' },
   fences: { one: 'Fence', many: 'Fences', what: 'fence panels: one, or a fence of them along a curve' },
@@ -194,7 +220,7 @@ const wrap = (h: number) => Math.atan2(Math.sin(h), Math.cos(h));
 
 /** How many of a kind (a layout's, or the objects in it). */
 export function countOf(o: TrackObjects, layout: string, kind: ObjectKind): number {
-  if (kind === 'marks') return o.marks.length;
+  if (isMarkKind(kind)) return marksOf(o, kind).length;
   if (kind === 'areas') return o.areas?.length ?? 0;
   if (isModelKind(kind)) return objectsOf(o, layout, kind).length;
   const lay = o.layouts[layout];
@@ -240,10 +266,11 @@ export function positionOf(o: TrackObjects, layout: string, p: ObjectPick): Poin
   const spot = spotOf(o, layout, p);
   if (spot) return spot;
   const lay = o.layouts[layout];
-  if (p.kind === 'marks') {
-    const m = o.marks[p.i];
+  if (isMarkKind(p.kind)) {
+    const m = marksOf(o, p.kind)[p.i];
     if (!m) return null;
-    const [x, z] = p.j >= 0 ? markPoint(m, p.j) : markMiddle(m);
+    const n = m.curve[p.j];
+    const [x, z] = n ? (p.h ? handleAt(n, p.h) : n.p) : markMiddle(m);
     return { x, z };
   }
   if (p.kind === 'areas') {
@@ -316,7 +343,8 @@ const half = (k: ObjectKind): number => {
 
 /** The object under (wx, wz), within tol metres of it (or of its own size), the nearest; of the kinds shown. A
  * curve's node picks that node (j); its curve, the whole of it (j -1); the handles of the curve picked, that handle
- * (h). */
+ * (h). A part dragged to edit (a node, a handle, a post, a corner, an end) is taken within grab metres (by default
+ * tol): its mark's reach on the screen. */
 export function objectAt(
   o: TrackObjects,
   layout: string,
@@ -325,13 +353,14 @@ export function objectAt(
   tol: number,
   kinds: readonly ObjectKind[] = OBJECT_KINDS,
   picked: ObjectPick | null = null,
+  grab = tol,
 ): ObjectPick | null {
   let best: ObjectPick | null = null;
   let bd = Infinity;
   // (rank: a part before the whole it is on, whatever is nearer: within its reach, a curve's handle or node is taken
   // before its curve, which runs through its nodes and is always as near)
   const consider = (kind: ObjectKind, i: number, j: number, d: number, reach: number, h?: 'in' | 'out', rank = 0) => {
-    const within = Math.max(tol, reach);
+    const within = Math.max(h || j !== -1 ? grab : tol, reach);
     const score = d - rank * within;
     if (d <= within && score < bd) {
       bd = score;
@@ -355,13 +384,30 @@ export function objectAt(
         const e = nearestEdge(a.points, wx, wz);
         consider(kind, i, -1, inside(a.points, wx, wz) ? 0 : e.d, 0.5);
       });
-    } else if (kind === 'marks') {
-      o.marks.forEach((m, i) => {
-        // (its ends before its line)
-        for (const j of [0, 1]) {
-          const [x, z] = markPoint(m, j);
-          consider(kind, i, j, Math.hypot(x - wx, z - wz) - 1e-6, OBJECT_SIZES.post);
-        }
+    } else if (isMarkKind(kind)) {
+      marksOf(o, kind).forEach((m, i) => {
+        // (the picked one's handles and its nodes, the nearest (its ends before the rest), then its line: a straight
+        // one's handles lie on it, near its nodes)
+        if (picked?.kind === kind && picked.i === i)
+          m.curve.forEach((n, j) => {
+            for (const h of ['in', 'out'] as const) {
+              if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
+              const [x, z] = handleAt(n, h);
+              consider(kind, i, j, Math.hypot(x - wx, z - wz), 0, h, 1);
+            }
+          });
+        m.curve.forEach((n, j) => {
+          const end = j === 0 || j === m.curve.length - 1;
+          consider(
+            kind,
+            i,
+            j,
+            Math.hypot(n.p[0] - wx, n.p[1] - wz) - (end ? 1e-6 : 0),
+            OBJECT_SIZES.post,
+            undefined,
+            1,
+          );
+        });
         consider(kind, i, -1, offMark(m, wx, wz), m.width / 2);
       });
     } else if (isLineKind(kind)) {
@@ -436,9 +482,13 @@ export function moveObject(o: TrackObjects, layout: string, p: ObjectPick, dx: n
     q.z += dz;
   };
   const lay = o.layouts[layout];
-  if (p.kind === 'marks') {
-    const m = o.marks[p.i];
-    if (m) m.p = [m.p[0] + dx, m.p[1] + dz];
+  if (isMarkKind(p.kind)) {
+    const m = markList(o, p.kind)[p.i];
+    if (!m) return;
+    if (!whole && p.j >= 0 && !p.h) {
+      const n = m.curve[p.j];
+      if (n) moveMarkNode(m, p.j, n.p[0] + dx, n.p[1] + dz);
+    } else for (const n of m.curve) n.p = [n.p[0] + dx, n.p[1] + dz];
     return;
   }
   if (p.kind === 'areas') {
@@ -499,11 +549,13 @@ export function turnAll(o: TrackObjects, layout: string, p: ObjectPick, d: numbe
   const pt = (q: Point) => {
     [q.x, q.z] = turned(q.x, q.z, cx, cz, d);
   };
-  if (p.kind === 'marks') {
-    for (const m of o.marks) {
-      m.p = turned(m.p[0], m.p[1], cx, cz, d);
-      m.heading = wrap(m.heading + d);
-    }
+  if (isMarkKind(p.kind)) {
+    for (const m of markList(o, p.kind))
+      for (const n of m.curve) {
+        n.p = turned(n.p[0], n.p[1], cx, cz, d);
+        n.in = turned(n.in[0], n.in[1], 0, 0, d);
+        n.out = turned(n.out[0], n.out[1], 0, 0, d);
+      }
     return;
   }
   if (isModelKind(p.kind)) {
@@ -542,6 +594,7 @@ export function freeName(prefix: string, taken: Iterable<string>, from = 0): str
 export const names = (o: TrackObjects): string[] => [
   ...o.objects.map((t) => t.name),
   ...o.marks.map((m) => m.name),
+  ...(o.rubber ?? []).map((m) => m.name),
   ...(o.areas ?? []).map((a) => a.name),
 ];
 
@@ -580,7 +633,15 @@ export function addObject(
   x: number,
   z: number,
   heading: number,
-  extra: { within?: number; gate?: Gate; name?: string; tol?: number; model?: string } = {},
+  extra: {
+    within?: number;
+    gate?: Gate;
+    name?: string;
+    tol?: number;
+    model?: string;
+    /** a new rubber mark's width and darkness */
+    rubber?: Pick<RubberMark, 'width' | 'wear'>;
+  } = {},
 ): ObjectPick {
   const spot = (name?: string): Spot => ({ ...(name ? { name } : {}), x, z, heading: wrap(heading) });
   if (kind === 'areas') {
@@ -590,17 +651,16 @@ export function addObject(
     if (a && j !== null) return { kind, i: extra.within as number, j };
     return { kind, i: addArea(o, x, z, heading, extra.name ?? areaName(names(o)), extra.model), j: -1 };
   }
-  if (kind === 'marks') {
-    o.marks.push({
-      name: extra.name ?? freeName('MARK_', names(o), 1),
-      p: [x, z],
-      heading: wrap(heading),
-      length: MARK_LENGTH,
-      width: MARK_WIDTH,
-      colour: 'white',
-      style: 'solid',
-    });
-    return { kind, i: o.marks.length - 1, j: -1 };
+  if (isMarkKind(kind)) {
+    // (into the mark picked: a node on its curve where clicked, else on past its nearer end; else a new one, its far
+    // end picked to drag on)
+    const list = markList(o, kind);
+    const m = extra.within === undefined ? undefined : list[extra.within];
+    if (m && extra.within !== undefined) return { kind, i: extra.within, j: addWallNode(m, x, z, extra.tol ?? 0.5) };
+    if (kind === 'rubber')
+      list.push(newRubber(extra.name ?? freeName('RUBBER_', names(o), 1), x, z, heading, extra.rubber ?? NEW_RUBBER));
+    else list.push(newMark(extra.name ?? freeName('MARK_', names(o), 1), x, z, heading));
+    return { kind, i: list.length - 1, j: 1 };
   }
   if (isModelKind(kind)) {
     const w = extra.within === undefined ? undefined : o.objects[extra.within];
@@ -652,7 +712,20 @@ export function addObject(
 
 /** What is picked taken away (a curve's node: that node, the object with its last); whether anything was. */
 export function removeObject(o: TrackObjects, layout: string, p: ObjectPick): boolean {
-  if (p.kind === 'marks') return o.marks.splice(p.i, 1).length > 0;
+  if (isMarkKind(p.kind)) {
+    // (a node, of a mark with more than two: that node; else the whole mark)
+    const list = markList(o, p.kind);
+    const m = list[p.i];
+    if (!m) return false;
+    if (p.j >= 0 && !p.h && m.curve.length > 2) {
+      m.curve.splice(p.j, 1);
+      if (m.curve.length < 3) delete m.closed;
+      return true;
+    }
+    const gone = list.splice(p.i, 1).length > 0;
+    if (p.kind === 'rubber' && !list.length) delete o.rubber;
+    return gone;
+  }
   if (p.kind === 'areas') return removeCorner(o, p.i, p.h ? -1 : p.j);
   if (isModelKind(p.kind)) {
     const it = o.objects[p.i];
@@ -695,7 +768,7 @@ export function reorderObject(o: TrackObjects, layout: string, p: ObjectPick, by
   let list: unknown[] | undefined;
   if (isLineKind(p.kind)) return null;
   if (p.kind === 'areas') return null;
-  if (p.kind === 'marks') list = o.marks;
+  if (isMarkKind(p.kind)) list = markList(o, p.kind);
   else if (p.kind !== 'hotlap') list = o.layouts[layout]?.[p.kind];
   const j = p.i + by;
   if (!list || j < 0 || j >= list.length) return null;
@@ -723,15 +796,16 @@ export function moveObjectHandle(o: TrackObjects, p: ObjectPick, x: number, z: n
     keepPitOn(lay?.lines);
     return;
   }
-  const n = p.h ? objectOf(o, p)?.curve[p.j] : undefined;
+  const c = isMarkKind(p.kind) ? markList(o, p.kind)[p.i] : objectOf(o, p);
+  const n = p.h ? c?.curve[p.j] : undefined;
   if (n && p.h) moveWallHandle(n, p.h, x, z, corner);
 }
 
-/** The end picked of a mark (j: 0 its start, 1 its far end) to (x, z): it stretches and turns (snap: its way to
- * whole 15 degrees). */
+/** The node picked of a mark to (x, z): the pieces either side that ran straight still straight (snap, a mark of two
+ * nodes: its way to whole 15 degrees). */
 export function moveObjectEnd(o: TrackObjects, p: ObjectPick, x: number, z: number, snap = false) {
-  const m = p.kind === 'marks' && p.j >= 0 ? o.marks[p.i] : undefined;
-  if (m) moveMarkEnd(m, p.j, x, z, snap);
+  const m = isMarkKind(p.kind) && p.j >= 0 && !p.h ? markList(o, p.kind)[p.i] : undefined;
+  if (m) moveMarkNode(m, p.j, x, z, snap);
 }
 
 /** An object's layouts set: every one (none listed), or those (in the file's order of layouts). */

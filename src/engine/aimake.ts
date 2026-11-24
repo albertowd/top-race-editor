@@ -1,17 +1,21 @@
 // A layout's AI lines made from its racing lines (TRACK_FORMAT's "Racing lines": AC's ai/fast_lane.ai,
 // data/ideal_line.ai and ai/pit_lane.ai, written by acai.ts): each line a point every STEP metres along its curve on
 // the floor, and at each the values AC drives by (acai.ts's EXTRA): its way (forward, its grade the way's rise), the
-// floor's normal and camber across it, the radius it turns (a circle through the points TURN_SPAN metres either side)
+// floor's normal and camber across it, the radius it turns (a circle through the points TURN_SPAN metres either side, its curvature averaged over CURVE_SPAN)
 // and which way, the road to either side of it (to its edges, SIDE_MIN to SIDE_MAX metres), and its speed: as fast as
 // GRIP lets it round its turns, no more than TOP, braking at BRAKE and speeding up at ACCEL, the throttle and brake
-// from that.
+// from that. Its points are first kept clear of the road's edges (aiclear.ts): the kart's wheels off its kerbs and
+// off a pit wall's nose, the corners taken out of it.
 
+import { followFast, keepClear } from './aiclear';
 import type { RacingLine } from './ailines';
 
 /** metres between a line's points */
 export const STEP = 0.5;
 /** metres either side of a point the circle of its turn is drawn through */
 export const TURN_SPAN = 2;
+/** metres either side a point's curvature is averaged over, for its radius, its way and its speed */
+export const CURVE_SPAN = 3;
 /** the most a line's radius is (a straight's) */
 export const STRAIGHT = 5000;
 /** metres of road either side of a line, at least and at most */
@@ -81,6 +85,13 @@ export function pointsAlong(line: RacingLine, step = STEP): V2[] {
   return out;
 }
 
+/** How far the point of pts nearest p is. */
+function nearestOf(pts: V2[], p: V2): number {
+  let best = Infinity;
+  for (const q of pts) best = Math.min(best, Math.hypot(q[0] - p[0], q[1] - p[1]));
+  return best;
+}
+
 /** A pit lane's points run on along the fast line's (fast: every step metres round it) at either end, so that each end
  * is on it for PIT_OVERLAP metres at least: before where it leaves, after where it joins. */
 export function onFastAtEnds(P: V2[], fast: V2[], step = STEP): V2[] {
@@ -116,6 +127,42 @@ export function onFastAtEnds(P: V2[], fast: V2[], step = STEP): V2[] {
   return [...before, ...P, ...after];
 }
 
+/** Whether a pit lane (its AI points) joins the fast line (its AI points and how far along each is, round a lap)
+ * behind where it leaves it: more than half a lap on from its first point to its last. AC takes a pit lane's exit to
+ * be ahead of its entry, and read one that comes back behind it (Velopark's karts leave after the start line and
+ * rejoin before it) as nearly the whole lap: every AI kart was going to the pits from the grid, and a driver in the
+ * lane was shown going the wrong way. */
+export function pitRunsBackwards(
+  fast: { points: Float32Array; along: Float32Array },
+  pit: { points: Float32Array },
+): boolean {
+  const n = fast.along.length;
+  const m = pit.points.length / 3;
+  if (n < 2 || m < 2) return false;
+  const lap =
+    (fast.along[n - 1] as number) +
+    Math.hypot(
+      (fast.points[0] as number) - (fast.points[(n - 1) * 3] as number),
+      (fast.points[2] as number) - (fast.points[(n - 1) * 3 + 2] as number),
+    );
+  const sAt = (k: number) => {
+    const x = pit.points[k * 3] as number;
+    const z = pit.points[k * 3 + 2] as number;
+    let best = 0;
+    let bd = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.hypot((fast.points[i * 3] as number) - x, (fast.points[i * 3 + 2] as number) - z);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return fast.along[best] as number;
+  };
+  const on = (((sAt(m - 1) - sAt(0)) % lap) + lap) % lap;
+  return on > lap / 2;
+}
+
 /** A racing line as AC's AI line: its points (x, y, z) on the floor, how far along each is, and its extra values (18
  * each). floor: the floor's height (NaN off it); onRoad: whether a point is on a road. A pit lane's (pit): its road no
  * wider than PIT_SIDE either side (the pit road's, not the track's it runs beside where they meet), driven no faster
@@ -126,9 +173,32 @@ export function aiLineOf(
   onRoad: (x: number, z: number) => boolean,
   step = STEP,
   pit?: { fast?: RacingLine },
+  clearRoad?: (x: number, z: number) => boolean,
+  /** metres of road either side of a car's middle it keeps (aiclear.ts's CLEAR: a kart's) */
+  margin?: number,
 ): { points: Float32Array; along: Float32Array; extra: Float32Array } {
-  const drawn = pointsAlong(line, step);
-  const P = pit?.fast ? onFastAtEnds(drawn, pointsAlong(pit.fast, step), step) : drawn;
+  // (the road a kart keeps CLEAR of the edges of, and its sides measured to: the one given, kerbs left out, else onRoad)
+  const clear = clearRoad ?? onRoad;
+  let drawn = pointsAlong(line, step);
+  let fastAt: V2[] | null = null;
+  if (pit?.fast) {
+    // (the fast line as its own AI line has it, kept clear; the pit lane leaving and joining it there)
+    const F0 = pointsAlong(pit.fast, step);
+    fastAt = keepClear(F0, true, clear, { step, margin });
+    drawn = followFast(drawn, F0, fastAt, ON_LINE);
+    const runs = (pts: V2[]) => {
+      let k = 0;
+      while (k < pts.length - 1 && nearestOf(fastAt as V2[], pts[k] as V2) <= ON_LINE) k++;
+      return k;
+    };
+    drawn = keepClear(drawn, false, clear, {
+      pinned: [runs(drawn), runs([...drawn].reverse())],
+      side: PIT_SIDE,
+      step,
+      margin,
+    });
+  } else drawn = keepClear(drawn, line.closed, clear, pit ? { side: PIT_SIDE, step, margin } : { step, margin });
+  const P = fastAt ? onFastAtEnds(drawn, fastAt, step) : drawn;
   const n = P.length;
   const closed = line.closed;
   const at = (i: number) => (closed ? (P[((i % n) + n) % n] as V2) : (P[Math.min(Math.max(i, 0), n - 1)] as V2));
@@ -165,10 +235,25 @@ export function aiLineOf(
     const ap = Math.hypot(p[0] - a[0], p[1] - a[1]);
     const pb = Math.hypot(b[0] - p[0], b[1] - p[1]);
     const cross = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
-    const r = Math.abs(cross) > 1e-9 ? (ab * ap * pb) / (2 * Math.abs(cross)) : STRAIGHT;
-    radius[i] = Math.min(r, STRAIGHT);
-    // (AC's way: -1 turning left, as the line's own left is (-tz, tx); 1 right)
-    turn[i] = Math.abs(cross) > 1e-9 ? -Math.sign(cross) : i ? (turn[i - 1] as number) : 1;
+    // (its curvature, signed as AC's way: -1 turning left, as the line's own left is (-tz, tx); 1 right)
+    radius[i] = Math.abs(cross) > 1e-9 ? (-Math.sign(cross) * 2 * Math.abs(cross)) / (ab * ap * pb || 1) : 0;
+  }
+  // (the curvature averaged over CURVE_SPAN either side: a line drawn within a few centimetres of where it should be
+  // turns tighter and looser by turns over a few metres, and its radius, its way and its speed with it)
+  const cspan = Math.max(0, Math.round(CURVE_SPAN / step));
+  const k = Float64Array.from(radius);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    let m = 0;
+    for (let d = -cspan; d <= cspan; d++) {
+      const j = closed ? (((i + d) % n) + n) % n : i + d;
+      if (j < 0 || j >= n) continue;
+      sum += k[j] as number;
+      m++;
+    }
+    const c = sum / (m || 1);
+    radius[i] = Math.min(Math.abs(c) > 1e-9 ? 1 / Math.abs(c) : STRAIGHT, STRAIGHT);
+    turn[i] = Math.abs(c) > 1e-9 ? Math.sign(c) : i ? (turn[i - 1] as number) : 1;
   }
   // (eased over EASE points either side where it changes)
   const way = Float64Array.from(turn, (_, i) => {
@@ -214,7 +299,7 @@ export function aiLineOf(
     const side = (sx: number, sz: number) => {
       let d = 0;
       const most = pit ? PIT_SIDE : SIDE_MAX;
-      while (d < most && onRoad(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
+      while (d < most && clear(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
       // (a pit lane off the road's pictures there (its edge, a gap): its own road's width still)
       if (pit && d === 0) return PIT_SIDE;
       return Math.min(most, Math.max(SIDE_MIN, d));

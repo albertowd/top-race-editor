@@ -46,6 +46,12 @@ const PATHS = {
       <path d="M8 4.5v4M6 6.5h4" />
     </>
   ),
+  bumps: (
+    <>
+      <path d="M1.5 11.5c1.5 0 1.8-3 3.3-3s1.6 2 3 2 1.7-5 3.3-5 1.6 6 3.4 6" strokeLinejoin="round" />
+      <path d="M1.5 14h13" />
+    </>
+  ),
   bring: (
     <>
       <path d="M2 9.5v3a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3" />
@@ -196,6 +202,7 @@ export const MODE_ICONS: Record<Mode, IconName> = {
   new: 'new',
   measure: 'measure',
   place: 'place',
+  bumps: 'bumps',
 };
 
 export const CATEGORY_ICONS: Record<Category, IconName> = {

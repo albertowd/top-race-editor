@@ -1,4 +1,4 @@
-// What is laid along nodes: a road, a tyre wall, a fence, a paved area, a racing line. Each is edited the same way,
+// What is laid along nodes: a road, a tyre wall, a fence, a paint or rubber mark, a paved area, a racing line. Each is edited the same way,
 // whatever it is: a node added where clicked (Add Node, A, or a double click on it while selecting), a node deleted
 // with the whole still picked, a node that has to stay kept (and why), its handles smoothed (S).
 import { CATEGORIES, type Category } from '../domain/categories';
@@ -7,21 +7,28 @@ import { geo, lookup } from '../geometry/roads';
 import { nearestOn, pointAt } from '../geometry/samples';
 import { addCorner, inside, nearestEdge } from './areas';
 import { addLineNode, FORK, isLineKind, lineOf, MERGE } from './lines';
-import { addObject, CURVED_KINDS, isModelKind, OBJECT_LABELS } from './objects';
+import { addObject, CURVED_KINDS, isMarkKind, isModelKind, marksOf, OBJECT_LABELS } from './objects';
 import { nearestOnWall, smoothWall } from './walls';
 
 /** The objects' kinds laid along nodes. */
-export const NODE_KINDS: ReadonlySet<ObjectKind> = new Set<ObjectKind>([...CURVED_KINDS, 'areas', 'fast', 'pit']);
+export const NODE_KINDS: ReadonlySet<ObjectKind> = new Set<ObjectKind>([
+  ...CURVED_KINDS,
+  'marks',
+  'rubber',
+  'areas',
+  'fast',
+  'pit',
+]);
 
 export const hasNodes = (kind: ObjectKind): boolean => NODE_KINDS.has(kind);
 
 /** One of them, picked: a road (its index), or an object (its kind and index). */
 export type Strand = { of: 'road'; r: number } | { of: 'object'; kind: ObjectKind; i: number };
 
-/** Whether placing a kind lays it along nodes, one click a node (a tyre wall, a fence, an area): its first click
- * makes one, the next add to it. */
+/** Whether placing a kind lays it along nodes, one click a node (a tyre wall, a fence, a paint mark, an area): its
+ * first click makes one, the next add to it. */
 export const placedAlong = (kind: ObjectKind): boolean =>
-  (isModelKind(kind) && CURVED_KINDS.has(kind)) || kind === 'areas';
+  (isModelKind(kind) && CURVED_KINDS.has(kind)) || isMarkKind(kind) || kind === 'areas';
 
 /** The object placing adds the next node to: the one of the kind placed that placing made, while it is still picked
  * (one picked before placing began is left alone: the next click makes a new one). */
@@ -54,6 +61,7 @@ export function nodesOf(w: StrandWorld, st: Strand): Vec2[] {
   const o = w.objects;
   if (!o) return [];
   if (st.kind === 'areas') return o.areas?.[st.i]?.points ?? [];
+  if (isMarkKind(st.kind)) return marksOf(o, st.kind)[st.i]?.curve.map((n) => n.p) ?? [];
   if (isLineKind(st.kind)) return lineOf(o.layouts[w.layout], st.kind)?.curve.map((n) => n.p) ?? [];
   return o.objects[st.i]?.curve.map((n) => n.p) ?? [];
 }
@@ -75,7 +83,7 @@ export function offStrand(w: StrandWorld, st: Strand, x: number, z: number): num
     if (!a) return Infinity;
     return inside(a.points, x, z) ? 0 : nearestEdge(a.points, x, z).d;
   }
-  const c = isLineKind(st.kind) ? lineOf(o.layouts[w.layout], st.kind) : o.objects[st.i];
+  const c = curveOf(o, w.layout, st.kind, st.i);
   if (!c?.curve.length) return Infinity;
   if (c.curve.length === 1) {
     const [p] = c.curve;
@@ -88,8 +96,15 @@ export function offStrand(w: StrandWorld, st: Strand, x: number, z: number): num
 export const onNode = (w: StrandWorld, st: Strand, x: number, z: number, tol: number): boolean =>
   nodesOf(w, st).some(([px, pz]) => Math.hypot(px - x, pz - z) <= tol);
 
-/** A node added at (x, z) to an object laid along nodes (on a draft): a tyre wall or a fence (into it where within tol
- * of it, else on past its nearer end), an area (a corner on its nearest edge), a racing line (into it, else on past
+/** The curve of an object laid along one: a racing line's, a paint mark's, a tyre wall's or a fence's. */
+function curveOf(o: TrackObjects, layout: string, kind: ObjectKind, i: number) {
+  if (isLineKind(kind)) return lineOf(o.layouts[layout], kind);
+  if (isMarkKind(kind)) return marksOf(o, kind)[i];
+  return isModelKind(kind) ? o.objects[i] : undefined;
+}
+
+/** A node added at (x, z) to an object laid along nodes (on a draft): a tyre wall, a fence or a paint mark (into it
+ * where within tol of it, else on past its nearer end), an area (a corner on its nearest edge), a racing line (into it, else on past
  * its nearer end). The node's pick, or null. */
 export function addObjectNode(
   o: TrackObjects,
@@ -110,14 +125,17 @@ export function addObjectNode(
     const j = lay ? addLineNode(lay, kind, x, z, tol) : null;
     return j === null ? null : { kind, i: 0, j };
   }
-  if (isModelKind(kind) && CURVED_KINDS.has(kind) && o.objects[i])
+  if (
+    ((isModelKind(kind) && CURVED_KINDS.has(kind)) || isMarkKind(kind)) &&
+    (isMarkKind(kind) ? marksOf(o, kind)[i] : o.objects[i])
+  )
     return addObject(o, layout, kind, x, z, 0, { within: i, tol });
   return null;
 }
 
 /** Its handles smoothed (on a draft): the node j's, else every node's. Whether it has any (an area has not). */
 export function smoothObject(o: TrackObjects, layout: string, kind: ObjectKind, i: number, j = -1): boolean {
-  const c = isLineKind(kind) ? lineOf(o.layouts[layout], kind) : isModelKind(kind) ? o.objects[i] : undefined;
+  const c = curveOf(o, layout, kind, i);
   if (!c || c.curve.length < 2) return false;
   smoothWall(c, j);
   return true;
@@ -131,5 +149,7 @@ export function keptWhy(p: ObjectPick | { of: 'road' }): string {
     return 'the pit line forks off and merges into the fast line there: drag them along it (to take the pit line away: pick its curve, then Delete)';
   if (p.kind === 'fast') return 'the fast line keeps three nodes at least';
   if (p.kind === 'pit') return 'the pit line keeps its ends and one node between them';
+  if (p.kind === 'marks') return 'a paint mark keeps two nodes at least';
+  if (p.kind === 'rubber') return 'a rubber mark keeps two nodes at least';
   return `that node of the ${OBJECT_LABELS[p.kind].one.toLowerCase()} is kept`;
 }

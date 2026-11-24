@@ -112,6 +112,18 @@ export async function png16(v: Uint16Array, cols: number, rows: number): Promise
       raw[at + 2 + c * 2] = x & 0xff;
     }
   }
+  return pngOf(raw, cols, rows, 16, 0);
+}
+
+/** An 8-bit RGBA PNG: rows of cols pixels (r, g, b, a), row after row. */
+export async function pngRgba(rgba: Uint8Array, cols: number, rows: number): Promise<Uint8Array> {
+  const raw = new Uint8Array(rows * (1 + cols * 4));
+  for (let r = 0; r < rows; r++) raw.set(rgba.subarray(r * cols * 4, (r + 1) * cols * 4), r * (1 + cols * 4) + 1);
+  return pngOf(raw, cols, rows, 8, 6);
+}
+
+/** A PNG of its rows as filtered (raw: each row its filter byte, 0, then its bytes): its depth and colour type. */
+async function pngOf(raw: Uint8Array, cols: number, rows: number, depth: number, type: number): Promise<Uint8Array> {
   const chunk = (type: string, data: Uint8Array) => {
     const td = new Uint8Array(4 + data.length);
     td.set(new TextEncoder().encode(type));
@@ -127,7 +139,7 @@ export async function png16(v: Uint16Array, cols: number, rows: number): Promise
   const hv = new DataView(head.buffer);
   hv.setUint32(0, cols);
   hv.setUint32(4, rows);
-  head.set([16, 0, 0, 0, 0], 8);
+  head.set([depth, type, 0, 0, 0], 8);
   const parts = [
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', head),

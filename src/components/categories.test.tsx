@@ -119,8 +119,11 @@ describe('the sidebar and the inspector', () => {
     render(<App editor={ed} />);
     const sidebar = screen.getByRole('navigation', { name: 'Categories' });
     const inspector = screen.getByRole('complementary', { name: 'Inspector' });
-    // (the overview: the categories with their counts)
+    // (the overview: its categories only with the sidebar hidden, which lists them itself)
+    expect(within(inspector).queryByRole('list', { name: 'Categories' })).toBeNull();
+    act(() => ed.toggleSidebar(false));
     expect(within(inspector).getByRole('button', { name: /Grid, timing & lines/ })).toHaveTextContent('5');
+    act(() => ed.toggleSidebar(true));
     await userEvent.click(within(sidebar).getByRole('button', { name: /Grid, timing & lines/ }));
     expect(within(sidebar).getByRole('button', { name: /Grid, timing & lines/ })).toHaveAttribute(
       'aria-current',
@@ -132,7 +135,11 @@ describe('the sidebar and the inspector', () => {
     const tools = screen.getByRole('toolbar', { name: 'Tools' });
     expect(within(tools).queryByRole('button', { name: 'New Road' })).toBeNull();
     expect(within(tools).getByRole('button', { name: 'Place' })).toBeInTheDocument();
-    // (its things listed by kind and number; one picked, its form shown, its name only for the export)
+    // (its things listed by kind and number, the list shut until asked for; one picked, its form shown, its name
+    // only for the export)
+    expect(within(inspector).queryByRole('list', { name: 'Placed' })).toBeNull();
+    expect(within(inspector).getByText(/Pick one on the map/)).toBeInTheDocument();
+    await userEvent.click(within(inspector).getByRole('button', { name: /Find one in the list/ }));
     await userEvent.click(within(inspector).getByRole('button', { name: 'Grid slot 2' }));
     expect(ed.get().obj).toMatchObject({ kind: 'grid', i: 1 });
     expect(within(inspector).getByRole('heading', { name: 'Grid slot 2 of 2 — vp_a' })).toBeInTheDocument();
@@ -282,13 +289,26 @@ describe('the scenery', () => {
     expect(ed.get()).toMatchObject({ mode: 'place', place: 'trees', models: { trees: 'palm_n1' } });
     expect(within(kinds).queryByRole('group', { name: 'Tree to place' })).toBeNull();
     // (placed: listed by kind, number and model, with the model's picture)
-    const placed = within(inspector).getByRole('list', { name: 'Placed' });
-    await userEvent.click(within(placed).getByRole('button', { name: 'Tree 1 · broad leaf tree 1' }));
+    await userEvent.click(within(inspector).getByRole('button', { name: /Find one in the list/ }));
+    expect(within(inspector).getByRole('list', { name: 'Placed' })).toBeInTheDocument();
+    // (searched by what each is called)
+    const search = within(inspector).getByRole('searchbox', { name: 'Search what is placed' });
+    await userEvent.type(search, 'palm');
+    expect(within(inspector).getByText('Nothing here is called that.')).toBeInTheDocument();
+    await userEvent.clear(search);
+    await userEvent.type(search, 'leaf tree 1');
+    await userEvent.click(
+      within(within(inspector).getByRole('list', { name: 'Placed' })).getByRole('button', {
+        name: 'Tree 1 · broad leaf tree 1',
+      }),
+    );
     expect(container.querySelector('img[src$="models/broad_1.png"]')).not.toBeNull();
     await userEvent.click(within(inspector).getByRole('button', { name: 'Model: Broad leaf tree 1' }));
     await userEvent.keyboard('{ArrowDown}{Enter}');
     expect(ed.get().objects?.objects[4]?.model).not.toBe('broad_1');
-    expect(within(inspector).getByText(/m high \(models\//)).toBeInTheDocument();
+    // (what is picked at a glance: what it is, its size)
+    const about = within(inspector).getByRole('list', { name: 'About it' });
+    expect(within(about).getByText(/high$/)).toBeInTheDocument();
   });
 });
 

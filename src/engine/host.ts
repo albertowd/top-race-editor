@@ -125,9 +125,7 @@ const METHODS: Record<string, Method> = {
 
 /** The engine's calls answered on a port. */
 export function answer(port: PortLike, env: HostEnv): void {
-  port.onmessage = async (e) => {
-    const call = e.data as Call;
-    if (!call || typeof call.id !== 'number') return;
+  const reply = async (call: Call) => {
     try {
       const method = METHODS[call.method];
       if (!method) throw new Error(`the engine has no ${call.method}`);
@@ -139,5 +137,10 @@ export function answer(port: PortLike, env: HostEnv): void {
         error: err instanceof Error ? err.message : String(err),
       } satisfies Answer);
     }
+  };
+  // (each call answered as it ends: its failure posted back, never thrown out of the handler)
+  port.onmessage = (e) => {
+    const call = e.data as Call;
+    if (call && typeof call.id === 'number') void reply(call);
   };
 }

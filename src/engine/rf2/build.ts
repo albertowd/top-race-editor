@@ -13,8 +13,10 @@
 // Each layout's scene loads the GMTs of its models (track.json's layouts.<layout>.models) and its own beams; its AIW
 // is made from its racing lines on the floor of its models (aimake.ts, as AC's AI lines are). A material is drawn with
 // rFactor's plain diffuse shader (L2DIFFUSET0, as Joesville's buildings are), see-through ones blended; one driven on
-// is named after its ground (surfaces.json's targets.rf2) so the TDF finds it. Not yet: the lamps, the knockable
-// cones, the trackside cameras, packing into a MAS and an rFCMP (ModMgr).
+// is named after its ground (surfaces.json's targets.rf2) so the TDF finds it. Each layout's placed objects (its cones
+// and its marker board, its card drawn on it as the AC build's) are knocked about as Joesville's cones (rf2/objects.ts);
+// the venue's and each layout's pictures, its loading screen among them, are drawn as rFactor's own tracks' are where
+// the engine has a canvas (rf2/pictures.ts). Not yet: the trackside cameras, packing into a MAS and an rFCMP (ModMgr).
 
 import type { LayoutObjects } from '../../domain/types';
 import { acFolder, sha1 } from '../acbuild';
@@ -22,20 +24,50 @@ import { type LightsData, lightsData } from '../aclights';
 import type { RacingLine, RacingLines } from '../ailines';
 import { aiLineOf, STEP } from '../aimake';
 import { CORNER, groundOf as meshGround, type OwnMaterial, type TrackMesh, trackModel } from '../beamng/trackmodel';
-import { acDds, convert, ddsChain, ddsOf, readPicture, readPng, resizeLanczos, type TextureAc } from '../dds';
+import {
+  BOARD_SHEET_MATERIAL,
+  boardText,
+  CARDS_MATERIAL,
+  CARDS_PICTURE,
+  type CardPainter,
+  type CardSheet,
+  canvasCards,
+  cardSheet,
+  onCards,
+} from '../boardfaces';
+import { acDds, convert, ddsChain, ddsOf, isDds, isPng, readPicture, resizeLanczos, type TextureAc } from '../dds';
+import { layoutTitle } from '../layoutmap';
 import type { HostFiles } from '../placehost';
+import type { PhysicsObject, PlacesDoc } from '../places';
 import { type PyJson, plain } from '../pyjson';
 import { Surface } from '../surface';
+import { type CatalogueSource, catalogue, editorModelsOf, loadTemplate, type TemplatePart } from '../templates';
 import { readPart } from '../trackdoc';
 import { settingsOf } from '../trackfiles';
+import { layoutViews, type Shot, trackScene, type View } from '../trackrender';
 import { type Axes, aiwText, aiwTiming, type Beam, TRACK_TO_RF2, type V3 } from './aiw';
 import { boxOf, facesOf, floatWord, type Gmt, type GmtMaterial, type GmtMesh, type GmtVertex, writeGmt } from './gmt';
+import { objectGmt, objectInstance, objectKey, objectName, turnedMesh } from './objects';
+import {
+  clockwise,
+  type LoadingPanel,
+  layoutPictureFiles,
+  mapLine,
+  RF2_PICTURE_SIZE,
+  type Rf2Picture,
+  type Rf2PictureHost,
+  rf2File,
+  roadMap,
+  startOn,
+  venueIconFile,
+} from './pictures';
 import {
   type Ground,
   gdbText,
   groundOf,
   type Instance,
   type Light,
+  MAX_VEHICLES,
   materialName,
   scnText,
   tdfText,
@@ -71,6 +103,14 @@ export interface Rf2Options {
   /** rFactor 2's folder: the location copied into its ModDev/Locations as well, to try in its Mod Mode */
   install?: string;
   axes?: Axes;
+  /** the editor's models (the placed objects' catalogue) */
+  editorModels?: string;
+  /** the boards' cards drawn (by default on Chromium's canvas) */
+  cards?: CardPainter;
+  /** what draws the location's pictures, and renders the track under some (none: no pictures) */
+  pictures?: Rf2PictureHost;
+  /** the AC build's track, its models rendered under the pictures */
+  acTrack?: string;
   log?: (line: string) => void;
 }
 
@@ -333,10 +373,10 @@ export function powerOfTwoDds(dds: Uint8Array): boolean {
   return pow2(v.getUint32(12, true)) && pow2(v.getUint32(16, true));
 }
 
-/** A PNG made a DDS of sides powers of two (each the next up, at most 4096), with its mips: in the library's DXT
- * format, else DXT5. */
-export async function squareDds(png: Uint8Array, fmt: string): Promise<Uint8Array> {
-  const img = await readPng(png);
+/** A picture (PNG, or a JPEG by the browser's decoder) made a DDS of sides powers of two (each the next up, at most
+ * 4096), with its mips: in the library's DXT format, else DXT5. */
+export async function squareDds(pic: Uint8Array, fmt: string): Promise<Uint8Array> {
+  const img = await readPicture(pic);
   const up = (n: number) => Math.min(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 4))));
   const sized = pow2(img.width) && pow2(img.height) ? img : resizeLanczos(img, up(img.width), up(img.height));
   return ddsChain(sized, fmt === 'DXT1' || fmt === 'DXT3' || fmt === 'DXT5' ? fmt : 'DXT5');
@@ -450,6 +490,139 @@ export function tilesOf(m: TrackMesh, size: number): Map<string, TrackMesh> {
   return out;
 }
 
+/** A layout's lap, for its pictures: its line (the map's axes), its points (the track's), its length, title and
+ * place. */
+interface Lap {
+  line: number[];
+  points: Float32Array;
+  lap: number;
+  title: string;
+  location?: string;
+}
+
+/** The location's pictures (rf2/pictures.ts), drawn by the host over renders of the AC build's track where it has a
+ * GPU: the venue's icon (its longest lap's place, all its laps' map) and each layout's. */
+async function drawPictures(
+  files: HostFiles,
+  host: Rf2PictureHost,
+  o: {
+    out: string;
+    venue: string;
+    trackName: string;
+    layouts: string[];
+    laps: Map<string, Lap>;
+    placed: PlacesDoc['layouts'];
+    acTrack?: string;
+    put: (path: string, data: Uint8Array) => Promise<void>;
+    log: (line: string) => void;
+  },
+): Promise<void> {
+  const { laps, placed, log } = o;
+  const placesOf = (l: string) => {
+    const sp = new Map((placed[l]?.spots ?? []).map((s) => [s.name, s]));
+    const start = (l.includes('hotlap') ? sp.get('HOTLAP_START_0') : undefined) ?? sp.get('START_0') ?? null;
+    const pit = sp.get('PIT_0') ?? null;
+    const line = laps.get(l)?.line ?? [];
+    const on = start && line.length > 6 ? startOn(line, start) : null;
+    const pm = pit ? mapLine([pit.x, pit.y, pit.z]) : null;
+    return {
+      start: on?.at ?? null,
+      fwd: on?.fwd ?? null,
+      pit: pm ? ([pm[0], pm[1]] as [number, number]) : null,
+    };
+  };
+  const drawn = o.layouts.filter((l) => (laps.get(l)?.line.length ?? 0) > 6);
+  if (!drawn.length) return;
+  const main = drawn.reduce((a, b) => ((laps.get(b)?.lap ?? 0) > (laps.get(a)?.lap ?? 0) ? b : a));
+  // (rendered under the venue's icon and the loading screens where the engine has a GPU: the gantry each lap runs
+  // under, else all its lap from above, as the AC and BeamNG pictures are)
+  const backdrops = new Map<string, Uint8Array>();
+  let venueBackdrop: Uint8Array | undefined;
+  if (host.render && o.acTrack && (await files.exists(o.acTrack))) {
+    try {
+      const { scene, drawn: models } = await trackScene(files, o.acTrack, drawn);
+      const shown = drawn.filter((l) => models[l]?.length);
+      const acLine = (l: string): V3[] => {
+        const P = laps.get(l)?.points ?? new Float32Array(0);
+        const out: V3[] = [];
+        for (let i = 0; i + 2 < P.length; i += 3) out.push([P[i] as number, P[i + 1] as number, P[i + 2] as number]);
+        return out;
+      };
+      const lines = new Map(shown.map((l) => [l, acLine(l)]));
+      const wide = layoutViews(scene, models, lines, RF2_PICTURE_SIZE.loading);
+      const square = layoutViews(scene, models, lines, RF2_PICTURE_SIZE.venue);
+      const loads = shown.filter((l) => wide.has(l));
+      const shots: Shot[] = loads.map((l) => ({
+        ...(wide.get(l) as View),
+        models: models[l] as string[],
+        size: RF2_PICTURE_SIZE.loading,
+        format: 'jpeg',
+      }));
+      const venueShot = square.has(main) && !!models[main]?.length;
+      if (venueShot)
+        shots.push({
+          ...(square.get(main) as View),
+          models: models[main] as string[],
+          size: RF2_PICTURE_SIZE.venue,
+          format: 'jpeg',
+        });
+      const made = await host.render(scene, shots);
+      loads.forEach((l, i) => {
+        backdrops.set(l, made[i] as Uint8Array);
+      });
+      if (venueShot) venueBackdrop = made[made.length - 1];
+    } catch (e) {
+      log(`  pictures: the track not rendered (${(e as Error).message}), drawn without it`);
+    }
+  }
+  const draw = (spec: Rf2Picture) => host.picture(spec);
+  await o.put(
+    `${o.out}/${venueIconFile(o.venue)}`,
+    await rf2File(
+      'venue',
+      await draw({
+        kind: 'venue',
+        // (its roads each once: its longest lap whole, of the others what they run on alone)
+        ...(() => {
+          const map = roadMap([main, ...drawn.filter((l) => l !== main)].map((l) => laps.get(l)?.line ?? []));
+          return { lines: map.laps, runs: map.runs };
+        })(),
+        ...placesOf(main),
+        backdrop: venueBackdrop,
+      }),
+    ),
+  );
+  for (const l of drawn) {
+    const lap = laps.get(l) as Lap;
+    const base = { lines: [lap.line], ...placesOf(l) };
+    const f = layoutPictureFiles(l);
+    for (const kind of ['icon', 'thumb', 'tile', 'wheel'] as const)
+      await o.put(`${o.out}/${l}/${f[kind]}`, await rf2File(kind, await draw({ kind, ...base })));
+    const km = lap.lap / 1000;
+    const panel: LoadingPanel = {
+      rows: [
+        ['Track', o.trackName],
+        ['Type', 'Road Course'],
+        ['Length', `${km.toFixed(2)} km / ${(km / 1.609344).toFixed(2)} mi`],
+        ...(lap.location ? ([['Location', lap.location]] as [string, string][]) : []),
+        ['Max vehicles', String(MAX_VEHICLES)],
+        ['Default start', 'Standing'],
+      ],
+      venue: o.trackName,
+      // (the layout's own name: the track's is in the panel above it)
+      layout: layoutTitle(lap.title, o.trackName, l),
+      clockwise: clockwise(lap.line),
+    };
+    await o.put(
+      `${o.out}/${l}/${f.loading}`,
+      await draw({ kind: 'loading', ...base, backdrop: backdrops.get(l), panel }),
+    );
+  }
+  log(
+    `  pictures: the venue's icon; ${drawn.length} layouts' icons, thumbnails, wheel maps and loading screens (${backdrops.size} over the track rendered)`,
+  );
+}
+
 /** The location made (see the module's note). */
 export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Built> {
   const log = o.log ?? (() => {});
@@ -513,10 +686,10 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
     const fmt = texAc[png]?.ac ?? 'DXT1';
     const key = await sha1([b, enc(fmt), new Uint8Array([texAc[png]?.normal ? 1 : 0])]);
     const kept = `${ddsCache}/${key}.dds`;
-    let dds: Uint8Array;
-    if (await files.exists(kept)) dds = await files.read(kept);
-    else {
-      dds = await acDds(`${png.replace(/\.[^.]*$/, '')}.dds`, b, texAc);
+    // (a cached one that is no DDS made again: AC's build passes a library's JPEG on as it is)
+    let dds: Uint8Array | null = (await files.exists(kept)) ? await files.read(kept) : null;
+    if (!dds || !isDds(dds)) {
+      dds = isPng(b) ? await acDds(`${png.replace(/\.[^.]*$/, '')}.dds`, b, texAc) : await squareDds(b, fmt);
       await files.write(kept, dds);
     }
     if (!powerOfTwoDds(dds)) dds = await squareDds(b, fmt);
@@ -654,6 +827,103 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
     log(`  ${stem}: ${inst.length} GMT${inst.length === 1 ? '' : 's'}`);
   }
 
+  // ---- each layout's placed objects (places.json: its cones, its marker board), knocked about: a GMT each, the
+  // same object in two layouts one
+  const placesFile = `${models}/places.json`;
+  const placed = (await files.exists(placesFile)) ? (await readJson<PlacesDoc>(placesFile)).layouts : {};
+  const objectsOf = new Map<string, Instance[]>();
+  const anyPlaced = layouts.some((l) => placed[l]?.objects?.length);
+  if (anyPlaced) {
+    const src: CatalogueSource = {
+      read: (f) => files.read(f),
+      exists: (f) => files.exists(f),
+      editorModels: editorModelsOf(project, o.editorModels),
+      textures: `${project}/source/textures`,
+    };
+    const cat = await catalogue(src);
+    const partsOf = new Map<string, Promise<TemplatePart[]>>();
+    const partsFor = (model: string) => {
+      let ps = partsOf.get(model);
+      if (!ps) {
+        const meta = cat[model];
+        if (!meta) throw new Error(`a placed object of a model the catalogue has not: ${model}`);
+        ps = loadTemplate(src, meta);
+        partsOf.set(model, ps);
+      }
+      return ps;
+    };
+    // (the boards' cards: one sheet of every board's text, as the AC build draws it)
+    const boards = layouts.flatMap((l) => (placed[l]?.objects ?? []).filter((ob) => cat[ob.model]?.kind === 'boards'));
+    let cards: { sheet: CardSheet; texture: string } | null = null;
+    if (boards.length) {
+      const sheet = cardSheet(boards.map((ob) => boardText(ob.name, ob.text)));
+      try {
+        const png = await (o.cards ?? canvasCards)(sheet);
+        cards = { sheet, texture: await ownTextureOf({ colour: { name: CARDS_PICTURE, data: png }, alpha: 'opaque' }) };
+        log(`  the boards' cards: ${sheet.texts.map((t) => JSON.stringify(t)).join(', ') || 'blank'}`);
+      } catch (e) {
+        log(`  the boards' cards: ${(e as Error).message}, left blank`);
+      }
+    }
+    const madeObjects = new Map<string, string>();
+    const objectMaterials = new Map<string, GmtMaterial>();
+    const objectMaterial = async (part: TemplatePart, model: string): Promise<GmtMaterial> => {
+      const key = part.material;
+      let m = objectMaterials.get(key);
+      if (!m) {
+        const e = lib[part.material];
+        const tex = part.material === CARDS_MATERIAL && cards ? cards.texture : await textureOf(e?.colour, model);
+        m = diffuseMaterial(
+          materialName(part.material, null),
+          tex,
+          e?.alpha === 'blend' ? 'blend' : e?.alpha === 'mask' ? 'mask' : 'opaque',
+        );
+        objectMaterials.set(key, m);
+      }
+      return m;
+    };
+    const objectOf = async (ob: PhysicsObject): Promise<string> => {
+      const key = objectKey(ob);
+      const had = madeObjects.get(key);
+      if (had) return had;
+      const name = objectName(ob.model, await sha1([enc(key)]));
+      const own = (await partsFor(ob.model)).filter((p) => p.part !== 'hull');
+      const shown =
+        cards && cat[ob.model]?.kind === 'boards'
+          ? onCards(own, BOARD_SHEET_MATERIAL, cards.sheet, boardText(ob.name, ob.text))
+          : own;
+      const meshes: GmtMesh[] = [];
+      const materials: GmtMaterial[] = [];
+      for (const p of shown) {
+        const mat = await objectMaterial(p, ob.model);
+        let k = materials.indexOf(mat);
+        if (k < 0) k = materials.push(mat) - 1;
+        const gm = gmtMeshOf(turnedMesh(p, ob.heading), k, axes);
+        if (gm) meshes.push(gm);
+      }
+      await put(`${gmtDir}/${name}.gmt`, writeGmt(objectGmt(name, ob, meshes, materials, staticGmt, axes)));
+      gmts++;
+      madeObjects.set(key, name);
+      return name;
+    };
+    for (const l of layouts) {
+      const list: Instance[] = [];
+      const seen = new Set<string>();
+      for (const ob of placed[l]?.objects ?? []) {
+        if (!cat[ob.model]) {
+          log(`  ${l}: ${ob.name}, a ${ob.model} the catalogue has not, left out`);
+          continue;
+        }
+        const name = await objectOf(ob);
+        if (seen.has(name)) continue;
+        seen.add(name);
+        list.push(objectInstance(name));
+      }
+      objectsOf.set(l, list);
+    }
+    log(`  placed objects: ${madeObjects.size} GMTs, knocked about in ${objectsOf.size} layouts`);
+  }
+
   // ---- the grounds
   // ---- the lamps, lit at night (the track's, as the AC build has them)
   const lights = nightLights(await lightsData(files, project, models), axes);
@@ -676,6 +946,7 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
     const p = `${project}/source/track/ui/${l}/ui_track.json`;
     return (await files.exists(p)) ? await readJson<Record<string, string>>(p) : {};
   };
+  const laps = new Map<string, Lap>();
   for (const l of layouts) {
     const dir = `${out}/${l}`;
     const lay = objects.layouts?.[l] as LayoutObjects & { lines: RacingLines };
@@ -712,11 +983,17 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
       : undefined;
     const ui = await uiOf(l);
     const title = ui.name || `${trackName} ${l}`;
+    const location = ui.city && ui.country ? `${ui.city}, ${ui.country}` : undefined;
+    laps.set(l, { line: mapLine(fast.points), points: fast.points, lap: timing.lap, title, location });
     await put(
       `${dir}/${l}.scn`,
       scnText({
         searchPaths: ['.', venue, `${venue}\\${l}`, `${venue}\\Assets\\GMT`, `${venue}\\Assets\\Maps`],
-        instances: [...(lists[l] ?? []).flatMap((s) => instancesOf.get(s) ?? []), ...beams],
+        instances: [
+          ...(lists[l] ?? []).flatMap((s) => instancesOf.get(s) ?? []),
+          ...(objectsOf.get(l) ?? []),
+          ...beams,
+        ],
         lights,
         centre,
       }),
@@ -730,12 +1007,28 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
         venueName: trackName,
         length: timing.lap,
         tdf: `..\\${tdf}`,
-        location: ui.city && ui.country ? `${ui.city}, ${ui.country}` : undefined,
+        location,
+        venueIcon: o.pictures ? `${venue}\\${venueIconFile(venue)}` : undefined,
       }),
     );
     await put(`${dir}/${l}.wet`, wetText());
     log(`  ${l}: ${(timing.lap / 1000).toFixed(3)} km, ${beams.length} timing beams`);
   }
+
+  // ---- the pictures: the venue's icon, each layout's icons, thumbnail, wheel map and loading screen
+  if (o.pictures)
+    await drawPictures(files, o.pictures, {
+      out,
+      venue,
+      trackName,
+      layouts,
+      laps,
+      placed,
+      acTrack: o.acTrack,
+      put,
+      log,
+    });
+  else log('  pictures: none drawn here (no canvas): the game shows none, and loads on black');
 
   // ---- tried in rFactor 2's Mod Mode: the location copied into its ModDev/Locations
   let installed: string | null = null;

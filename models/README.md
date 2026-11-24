@@ -40,8 +40,9 @@ first is the one a new one of it is). Each model:
 
 `materials` is one of:
 
-- `own`: its materials are its own, their textures inside its file (made in Blender). Its meshes are its parts,
-  their names lower-cased.
+- `own`: its materials are its own, their textures inside its file (made in Blender, or in code: the south
+  warehouse by `npm run model:south-warehouse`, [scripts/south-warehouse.ts](../scripts/south-warehouse.ts)). Its
+  meshes are its parts, their names lower-cased.
 - `library`: its materials are named only; the track's material library (`source/materials.json`) gives each, by its
   name. Each mesh is a part as its node is named, its points as they are kept (position, normal, UV, the tangent's
   first three); its hull is the mesh named `hull`. The trees, the cone, the board, the light pole, the tyre stack and

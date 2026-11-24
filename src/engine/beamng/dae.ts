@@ -73,7 +73,7 @@ function document(mats: Iterable<string>, geo: string[], scene: string): string 
 /** A shape of meshes. All drawn at one detail, 2 (a name ending in a number does not make a detail of its own), or
  * sizes gives each mesh's: the shape's size on screen in pixels from which it is drawn. collide: each mesh also a
  * Colmesh at detail -1 (what vehicles hit, with its material for the ground); collision: meshes only hit, drawn at
- * no detail. */
+ * no detail (with no meshes, the shape is only hit: its one detail drawing nothing). */
 export function writeDae(
   meshes: DaeMesh[],
   o: { collide?: boolean; sizes?: number[]; collision?: DaeMesh[] } = {},
@@ -103,6 +103,8 @@ export function writeDae(
     .sort((a, b) => b - a)
     .map((x) => `<node id="detail${x}" name="detail${x}"/>`)
     .join('');
+  // (a shape only hit: a detail with nothing to draw, as BeamNG's own are)
+  if (!meshes.length) details += '<node id="nulldetail1" name="nulldetail1"/>';
   if (collide) details += '<node id="collision-1" name="collision-1"/>';
   return document(
     all.map(([m]) => m.material),

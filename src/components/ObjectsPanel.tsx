@@ -16,13 +16,15 @@ import type {
   PaintMark,
   PlacedObject,
   Point,
+  RubberMark,
+  RubberWear,
   Spot,
   StartLineStyle,
   TrackObjects,
 } from '../domain/types';
 import { areaOf, BAY } from '../editing/areas';
 import { isLineKind, keepPitOn, lineOf } from '../editing/lines';
-import { markEnd, moveMarkEnd } from '../editing/marks';
+import { markLength, moveMarkNode } from '../editing/marks';
 import {
   countOf,
   isCurve,
@@ -131,14 +133,25 @@ export function ObjectsPanel({ kinds = OBJECT_KINDS }: Readonly<{ kinds?: readon
                 </td>
                 {isLineKind(k) ? (
                   <td>
-                    <button
-                      type="button"
-                      className="small"
-                      title={`Make the ${OBJECT_LABELS[k].one.toLowerCase()} along roads: click them in order`}
-                      onClick={() => ed.startRouting(k)}
-                    >
-                      From roads
-                    </button>
+                    {k === 'fast' ? (
+                      <button
+                        type="button"
+                        className="small"
+                        title="The fast line a car takes: out wide into each bend, its apex, out wide again, within the road (and its rumbles' low ramps) less half the cars' width. None yet: click the lap's roads in order first"
+                        onClick={() => ed.optimiseFast()}
+                      >
+                        Optimise
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="small"
+                        title={`Make the ${OBJECT_LABELS[k].one.toLowerCase()} along roads: click them in order`}
+                        onClick={() => ed.startRouting(k)}
+                      >
+                        From roads
+                      </button>
+                    )}
                   </td>
                 ) : choices.length > 1 && isModelKind(k) ? (
                   <td>
@@ -260,19 +273,73 @@ function itemLabel(o: TrackObjects, layout: string, kind: ObjectKind, i: number)
   }
   const n = numberOf(o, layout, kind, i);
   const placed = placedOf(o, kind, i);
-  if (placed && kind === 'boards')
-    return `${one} ${n} · ${placed.name
-      .replace(/^BOARD_/, '')
-      .replaceAll('_', ' ')
-      .toLowerCase()}`;
+  if (placed && kind === 'boards') return `${one} ${n} · ${boardText(placed.name, placed.text) || 'blank'}`;
   if (placed && isModelKind(kind) && modelsOf(kind).length > 1)
     return `${one} ${n} · ${(modelInfo(placed.model)?.label ?? placed.model).toLowerCase()}`;
   if (placed && isCurve(placed)) return `${one} ${n} · ${placed.curve.length} nodes`;
   return `${one} ${n}`;
 }
 
-/** Every object of the kinds (in the layout shown, for a layout's own), to pick one: the map going to it. */
-export function ObjectList({ kinds }: Readonly<{ kinds: readonly ObjectKind[] }>) {
+/** Every object of the kinds (in the layout shown, for a layout's own). */
+function placedItems(objects: TrackObjects, layout: string, kinds: readonly ObjectKind[]) {
+  return kinds.flatMap((kind): { kind: ObjectKind; i: number }[] =>
+    isModelKind(kind)
+      ? objectsOf(objects, layout, kind).map((i) => ({ kind, i }))
+      : Array.from({ length: countOf(objects, layout, kind) }, (_, i) => ({ kind, i })),
+  );
+}
+
+/** The list of everything placed, to find one in: shut by default (what is picked has the room then), opened with
+ * its disclosure; searched by what each is called. */
+export function ObjectFinder({ kinds }: Readonly<{ kinds: readonly ObjectKind[] }>) {
+  const ed = useEditor();
+  const { objects, layout, open } = useEditorShallow((s) => ({
+    objects: s.objects,
+    layout: s.layout,
+    open: s.objectList,
+  }));
+  const [filter, setFilter] = useState('');
+  if (!objects) return null;
+  const all = placedItems(objects, layout, kinds);
+  if (!all.length) return <p className="empty-state">None yet: choose Place, then click on the map.</p>;
+  const words = filter.trim().toLowerCase();
+  const items = words
+    ? all.filter(({ kind, i }) => itemLabel(objects, layout, kind, i).toLowerCase().includes(words))
+    : all;
+  return (
+    <section className="finder" aria-label="Find one">
+      <button
+        type="button"
+        className="disclosure"
+        aria-expanded={open}
+        aria-controls="placed-list"
+        onClick={() => ed.toggleObjectList()}
+      >
+        <Icon name="down" size={14} />
+        <span>{open ? 'Hide the list' : 'Find one in the list'}</span>
+        <span className="badge">{all.length}</span>
+      </button>
+      {open ? (
+        <div id="placed-list">
+          <div className="search">
+            <Icon name="search" size={14} />
+            <input
+              type="search"
+              aria-label="Search what is placed"
+              placeholder={`Search ${all.length} placed`}
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </div>
+          {items.length ? <ObjectList items={items} /> : <p className="empty-state">Nothing here is called that.</p>}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Objects listed, to pick one: the map going to it. */
+export function ObjectList({ items }: Readonly<{ items: { kind: ObjectKind; i: number }[] }>) {
   const ed = useEditor();
   const { objects, layout, picked } = useEditorShallow((s) => ({
     objects: s.objects,
@@ -280,13 +347,7 @@ export function ObjectList({ kinds }: Readonly<{ kinds: readonly ObjectKind[] }>
     picked: s.obj,
   }));
   if (!objects) return null;
-  const items: { kind: ObjectKind; i: number }[] = kinds.flatMap((kind): { kind: ObjectKind; i: number }[] =>
-    isModelKind(kind)
-      ? objectsOf(objects, layout, kind).map((i) => ({ kind, i }))
-      : Array.from({ length: countOf(objects, layout, kind) }, (_, i) => ({ kind, i })),
-  );
-  if (!items.length) return <p className="empty-state">None yet: choose Place, then click on the map.</p>;
-  // (a forest's thousands not listed: the first LISTED, the rest picked on the map)
+  // (a forest's thousands not listed: the first LISTED, the rest picked on the map or found by searching)
   const shown = items.slice(0, LISTED);
   const pick = (kind: ObjectKind, i: number) => {
     const p: ObjectPick = { kind, i, j: -1 };
@@ -317,7 +378,7 @@ export function ObjectList({ kinds }: Readonly<{ kinds: readonly ObjectKind[] }>
         })}
       </ul>
       {items.length > shown.length ? (
-        <p className="note">{items.length - shown.length} more not listed: pick them on the map.</p>
+        <p className="note">{items.length - shown.length} more not listed: search for them, or pick them on the map.</p>
       ) : null}
     </>
   );
@@ -363,7 +424,7 @@ function CopyRow({
   );
 }
 
-const ORDERED: readonly ObjectKind[] = ['grid', 'pits', 'timing', 'boards', 'poles', 'tyres', 'marks'];
+const ORDERED: readonly ObjectKind[] = ['grid', 'pits', 'timing', 'boards', 'poles', 'tyres', 'marks', 'rubber'];
 
 const SINGLE: readonly ObjectCollision[] = ['none', 'static', 'dynamic', 'model'];
 const ALONG: readonly ObjectCollision[] = ['none', 'wall'];
@@ -403,10 +464,12 @@ export function ObjectForm() {
         </button>
       }
     >
+      <ObjectHero objects={objects} layout={layout} pick={obj} />
       {spot ? <SpotRows spot={spot} pick={obj} change={change} /> : null}
       {isModelKind(obj.kind) ? <ObjectRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
       {obj.kind === 'timing' ? <GateRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
       {obj.kind === 'marks' ? <MarkRows objects={objects} pick={obj} change={change} /> : null}
+      {obj.kind === 'rubber' ? <RubberRows objects={objects} pick={obj} change={change} /> : null}
       {isLineKind(obj.kind) ? <LineRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
       {obj.kind === 'areas' ? <AreaRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
       {ORDERED.includes(obj.kind) ? (
@@ -429,26 +492,67 @@ export function ObjectForm() {
 
 type Change = (fn: (o: TrackObjects) => void) => void;
 
+/** What is picked at a glance: its picture (a board: its card as it will read), what it is, and the few facts about it
+ * that matter (its size, what is hit of it, its layouts, its lights). */
+function ObjectHero({ objects, layout, pick }: Readonly<{ objects: TrackObjects; layout: string; pick: ObjectPick }>) {
+  const catalogue = useEditorState((s) => s.catalogue);
+  const it = placedOf(objects, pick.kind, pick.i);
+  const label = OBJECT_LABELS[pick.kind];
+  const info = it ? modelInfo(it.model) : undefined;
+  const track = it ? catalogue?.[it.model] : undefined;
+  const facts: string[] = [];
+  if (it) {
+    if (info) facts.push(`${metres(info.size[0])} × ${metres(info.size[2])} × ${metres(info.size[1])} high`);
+    if (isCurve(it)) facts.push(`${it.curve.length} nodes along a curve`);
+    facts.push(COLLISION_LABELS[it.collision as keyof typeof COLLISION_LABELS] ?? it.collision);
+    const all = Object.keys(objects.layouts).length;
+    facts.push(it.layouts ? `in ${it.layouts.length} of ${all} layouts` : 'in every layout');
+    const lights = track?.lights?.length ?? 0;
+    if (lights) facts.push(`${lights} light${lights === 1 ? '' : 's'}`);
+  } else if (isLayoutKind(pick.kind) || isLineKind(pick.kind)) facts.push(`in ${layout}`);
+  const text = it && pick.kind === 'boards' ? boardText(it.name, it.text) : null;
+  return (
+    <div className="object-hero">
+      {text !== null ? (
+        <div className="card-preview" aria-hidden="true">
+          <span style={{ fontSize: `${Math.max(11, Math.min(34, 120 / Math.max(text.length, 1)))}px` }}>{text}</span>
+        </div>
+      ) : (
+        <img
+          className="hero-picture"
+          src={it ? modelIcon(it.model) : kindIcon(pick.kind)}
+          alt=""
+          width={72}
+          height={72}
+        />
+      )}
+      <div className="hero-text">
+        <strong>{info?.label ?? (it ? it.model : label.one)}</strong>
+        <p className="hero-what">{track?.description ?? info?.description ?? label.what}</p>
+        {facts.length ? (
+          <ul className="facts" aria-label="About it">
+            {facts.map((f) => (
+              <li key={f} className="fact">
+                {f}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /** The model a placed thing is: another of its kind chosen (and placing goes on with it). */
+/** Its model, to change it, where its kind has more than one (what it is, its size: the hero's). */
 function ModelRow({ kind, model }: Readonly<{ kind: ModelKind; model: string | undefined }>) {
   const ed = useEditor();
   const choices = modelsOf(kind);
-  const info = model ? modelInfo(model) : undefined;
+  if (choices.length <= 1) return null;
   return (
-    <>
-      <Row label="Model">
-        {choices.length > 1 ? (
-          <IconSelect label="Model" value={model ?? ''} options={modelOptions(choices)} onChange={ed.setModel} />
-        ) : (
-          <span>{info?.label ?? model}</span>
-        )}
-      </Row>
-      {info ? (
-        <p className="note">
-          {metres(info.size[0])} across, {metres(info.size[2])} deep, {metres(info.size[1])} high (models/{info.file})
-        </p>
-      ) : null}
-    </>
+    <Row label="Model">
+      <IconSelect label="Model" value={model ?? ''} options={modelOptions(choices)} onChange={ed.setModel} />
+    </Row>
   );
 }
 
@@ -730,7 +834,6 @@ function ObjectRows({ objects, layout, pick, change }: Readonly<PartProps>) {
   return (
     <>
       <ModelRow kind={kind} model={it.model} />
-      {track?.description ? <p className="note">{track.description}</p> : null}
       {kind === 'boards' ? (
         <Row label="Text">
           <TextField
@@ -1110,6 +1213,96 @@ const STYLES: Options<LineStyle> = [
   ['dotted', 'dotted'],
 ];
 
+/** A mark's curve (a paint mark's, a rubber mark's): how long it is, the node picked, whether it is a ring, its width. */
+function MarkCurveRows({
+  m,
+  pick,
+  edit,
+}: Readonly<{
+  m: Pick<PaintMark, 'curve' | 'closed' | 'width'>;
+  pick: ObjectPick;
+  edit: (fn: (k: Pick<PaintMark, 'curve' | 'closed' | 'width'>) => void) => void;
+}>) {
+  const ed = useEditor();
+  const num =
+    (fn: (k: Pick<PaintMark, 'curve' | 'closed' | 'width'>, v: number) => void, min = 0) =>
+    (v: number | null) =>
+      v != null && v > min && edit((k) => fn(k, v));
+  const node = pick.h ? undefined : m.curve[pick.j];
+  return (
+    <>
+      <Row label="Line">
+        {m.curve.length} nodes, {Math.round(markLength(m) * 100) / 100} m long
+      </Row>
+      {node ? (
+        <>
+          <PointRows
+            label={`Node ${pick.j + 1}`}
+            at={{ x: node.p[0], z: node.p[1] }}
+            set={(c, v) =>
+              edit((k) => {
+                const n = k.curve[pick.j];
+                if (n) moveMarkNode(k, pick.j, c === 'x' ? v : n.p[0], c === 'z' ? v : n.p[1]);
+              })
+            }
+          />
+          <Row label="">
+            <label title="Its handles apart: dragging one leaves the other as it is">
+              <input
+                type="checkbox"
+                checked={!!node.corner}
+                onChange={(e) =>
+                  edit((k) => {
+                    const n = k.curve[pick.j];
+                    if (!n) return;
+                    if (e.target.checked) n.corner = true;
+                    else delete n.corner;
+                  })
+                }
+              />{' '}
+              corner
+            </label>
+          </Row>
+        </>
+      ) : null}
+      <Row label="">
+        <label>
+          <input
+            type="checkbox"
+            checked={!!m.closed}
+            disabled={m.curve.length < 3}
+            onChange={(e) =>
+              edit((k) => {
+                if (e.target.checked) k.closed = true;
+                else delete k.closed;
+              })
+            }
+          />{' '}
+          closed (a ring)
+        </label>
+        <button
+          type="button"
+          className="small"
+          title="Its handles along the way through its neighbours (S): the node picked, or every node"
+          onClick={() => ed.smoothPicked()}
+        >
+          Smooth {node ? 'node' : 'all'}
+        </button>
+      </Row>
+      <Row label="Width">
+        <NumberField
+          label="Width (m)"
+          value={m.width}
+          onCommit={num((k, v) => {
+            k.width = v;
+          })}
+        />
+        <span>m wide</span>
+      </Row>
+    </>
+  );
+}
+
 function MarkRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>) {
   const m = objects.marks[pick.i];
   if (!m) return null;
@@ -1122,55 +1315,9 @@ function MarkRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>
     (fn: (k: PaintMark, v: number) => void, min = 0) =>
     (v: number | null) =>
       v != null && v > min && edit((k) => fn(k, v));
-  const end = markEnd(m);
   return (
     <>
-      <PointRows
-        label="Start"
-        at={{ x: m.p[0], z: m.p[1] }}
-        set={(c, v) =>
-          edit((k) => {
-            k.p = c === 'x' ? [v, k.p[1]] : [k.p[0], v];
-          })
-        }
-      />
-      <PointRows
-        label="End"
-        at={{ x: end[0], z: end[1] }}
-        set={(c, v) => edit((k) => moveMarkEnd(k, 1, c === 'x' ? v : end[0], c === 'z' ? v : end[1]))}
-      />
-      <Row label="Heading">
-        <NumberField
-          label="Heading (degrees)"
-          step={1}
-          value={Math.round(m.heading * DEG * 10) / 10}
-          onCommit={(v) =>
-            v != null &&
-            edit((k) => {
-              k.heading = Math.atan2(Math.sin(v / DEG), Math.cos(v / DEG));
-            })
-          }
-        />
-        <span>° from north (+z), turned about its start</span>
-      </Row>
-      <Row label="Size">
-        <NumberField
-          label="Length (m)"
-          value={m.length}
-          onCommit={num((k, v) => {
-            k.length = v;
-          })}
-        />
-        <span>m long,</span>
-        <NumberField
-          label="Width (m)"
-          value={m.width}
-          onCommit={num((k, v) => {
-            k.width = v;
-          })}
-        />
-        <span>m wide</span>
-      </Row>
+      <MarkCurveRows m={m} pick={pick} edit={edit} />
       <Row label="Paint">
         <SelectField
           label="Colour"
@@ -1218,8 +1365,61 @@ function MarkRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>
         </Row>
       ) : null}
       <p className="note">
-        Drag it to move it, an end to stretch and turn it (Shift: its way by 15°). Placing: drag from its start to its
-        end.
+        As a tyre wall: drag a node (square) to move it, a handle (circle) to bend the line (Alt: a corner), the line to
+        move the whole of it. A node dragged near another mark&apos;s end snaps onto it (Ctrl: not; Shift: its way by
+        15° instead). Add Node (A) and a click, or a double click on it, adds a node. Placing: drag from its start to
+        its end, then click on for more nodes. Marks of the same paint whose ends meet are painted as one line, their
+        corners mitred; where they overlap, painted once.
+      </p>
+      <ExportName
+        value={m.name}
+        onCommit={(v) =>
+          v &&
+          edit((k) => {
+            k.name = v;
+          })
+        }
+      />
+    </>
+  );
+}
+
+/** how dark each rubber mark can be */
+const RUBBER_DARKNESS: Options<RubberWear> = [
+  ['almost_new', 'Almost new'],
+  ['used', 'Used'],
+  ['very_used', 'Very used'],
+];
+
+function RubberRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>) {
+  const m = objects.rubber?.[pick.i];
+  if (!m) return null;
+  const edit = (fn: (k: RubberMark) => void) =>
+    change((o) => {
+      const k = o.rubber?.[pick.i];
+      if (k) fn(k);
+    });
+  return (
+    <>
+      <MarkCurveRows m={m} pick={pick} edit={edit} />
+      <Row label="Rubber">
+        <SelectField
+          label="Darkness"
+          value={m.wear}
+          options={RUBBER_DARKNESS}
+          onChange={(v) =>
+            edit((k) => {
+              k.wear = v;
+            })
+          }
+        />
+        <span>wider where it turns tight, as the cars slide there</span>
+      </Row>
+      <p className="note">
+        Rubber is the track&apos;s, laid in every layout, over the road, its paint and its rumbles. Drag a node (square)
+        to move it, a handle (circle) to bend it (Alt: a corner), the band to move the whole of it; a node dragged near
+        another rubber mark&apos;s snaps onto it (Ctrl: not). Add Node (A) and a click, or a double click on it, adds a
+        node. Placing: drag from its start to its end, then click on for more nodes.
       </p>
       <ExportName
         value={m.name}

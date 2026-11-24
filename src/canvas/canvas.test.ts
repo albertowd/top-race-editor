@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TileCache, visibleTiles } from './tiles';
+import { RETRY_MS, TileCache, visibleTiles } from './tiles';
 import { panned, toScreen, toWorld, viewBox, zoomAt } from './viewport';
 
 const size = { w: 800, h: 600 };
@@ -58,6 +58,30 @@ describe('satellite tiles', () => {
     expect(cache.size).toBe(2);
     expect(url).toHaveBeenCalledTimes(3);
     expect(a.src).toContain('/t/0/0/0');
+  });
+
+  it('asks again for one not had, and draws the map again a moment later', async () => {
+    vi.useFakeTimers();
+    try {
+      let fail = true;
+      const url = vi.fn(() => (fail ? Promise.reject(new Error('busy')) : Promise.resolve('/t/ok')));
+      const redraw = vi.fn();
+      const cache = new TileCache(url, redraw);
+      const a = cache.get(0, 0, 0);
+      await vi.runAllTicks();
+      await Promise.resolve();
+      // (forgotten at once; the map drawn again after RETRY_MS, which asks for it again)
+      expect(cache.size).toBe(0);
+      expect(redraw).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(RETRY_MS);
+      expect(redraw).toHaveBeenCalledTimes(1);
+      fail = false;
+      const b = cache.get(0, 0, 0);
+      expect(b).not.toBe(a);
+      expect(url).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

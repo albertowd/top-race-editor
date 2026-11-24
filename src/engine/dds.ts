@@ -21,10 +21,18 @@ async function inflate(b: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
 
-/** A picture read: a PNG as readPng reads it; another kind (an editor's model's JPEG) by the browser's own decoder,
- * where the engine runs in one, as RGBA. */
+/** Whether bytes are a PNG (its signature's first four). */
+export const isPng = (b: Uint8Array): boolean =>
+  b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+
+/** Whether bytes are a DDS (its magic, 'DDS '). */
+export const isDds = (b: Uint8Array): boolean =>
+  b.length > 128 && b[0] === 0x44 && b[1] === 0x44 && b[2] === 0x53 && b[3] === 0x20;
+
+/** A picture read: a PNG as readPng reads it; another kind (an editor's model's JPEG, a library's) by the browser's
+ * own decoder, where the engine runs in one, as RGBA. */
 export async function readPicture(b: Uint8Array): Promise<Picture> {
-  if (b[0] === 0x89 && b[1] === 0x50) return readPng(b);
+  if (isPng(b)) return readPng(b);
   if (typeof createImageBitmap === 'undefined') throw new Error('no decoder here for a picture not a PNG');
   const bmp = await createImageBitmap(new Blob([b as Uint8Array<ArrayBuffer>]), {
     colorSpaceConversion: 'none',
@@ -561,8 +569,7 @@ export interface TextureAc {
 /** A texture's bytes as AC's build needs them (materials.py's ac_dds): a PNG named X.dds made DDS in the format the
  * library has for it (X.png's entry; a normal map's green turned down first); anything else as it is. */
 export async function acDds(name: string, data: Uint8Array, textures: Record<string, TextureAc>): Promise<Uint8Array> {
-  const png = data.length > 8 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
-  if (!png || !name.toLowerCase().endsWith('.dds')) return data;
+  if (!isPng(data) || !name.toLowerCase().endsWith('.dds')) return data;
   const base = name.split(/[\\/]/).pop() as string;
   const t = textures[`${base.slice(0, -4)}.png`] ?? {};
   const fmt = t.ac ?? 'DXT1';

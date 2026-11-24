@@ -5,15 +5,20 @@
 // of it; each region's mesh written back into the model its region came from, in its material, one normal at each
 // point across the seams. The hand-made ground (the near ground, its old strips) gives way to the place's.
 
+import type { SurfaceRoughness } from '../domain/types';
+import { type Bumps, bumpAt } from '../editing/bumps';
+import { bumped } from './bumpsfile';
 import { type Kn5Model, meshNode } from './floorwrite';
 import { type Kn5, type Kn5Mesh, type Mat4, VERT } from './kn5tree';
 import { above } from './layer';
 import { type Filler, type MergeOptions, type Mesh, merge, type Region } from './merge';
 import { meshes, triangles } from './mesh';
+import { byCodePoint } from './order';
 import { KERB_MATERIALS, kerbGeometry, pictureAspects, type Roads } from './paint';
 import { type PlaceHost, placeOf } from './placehost';
 import { asBuilt, fine, mesh, priority, type RoadDesc, type RoadMesh } from './roads';
 import { crop, roadsTop } from './roadshost';
+import { roughnessOf } from './roughness';
 import { Surface } from './surface';
 import type { Box } from './tiles';
 import type { Triangle } from './triangle';
@@ -298,6 +303,10 @@ export interface FloorOptions {
   own?: string[];
   /** the ground's material and its picture's mapping, where no hand-made ground gives them */
   ground?: { material: string; uv: (x: number, z: number) => [number, number] };
+  /** the roads' bumps made by hand: every point of the floor as merged moved by them where it is */
+  bumps?: Bumps;
+  /** the roads' surface made imperfect all over (roughness.ts): with the bumps, every point moved by it */
+  surface?: SurfaceRoughness;
   log?: (line: string) => void;
 }
 
@@ -524,6 +533,14 @@ export async function buildFloor(
     ...more,
     log: (s, ms) => log(`  ${s} ${(ms / 1000).toFixed(1)} s`),
   });
+  // (the bumps made by hand: every point moved by them where it is, the same in each mesh, before anything is laid on
+  // it)
+  const rough = roughnessOf(o.roads, o.surface);
+  if (o.bumps || rough) {
+    const hand = o.bumps;
+    const n = bumped(result, (x, z) => (hand ? bumpAt(hand, x, z) : 0) + (rough ? rough(x, z) : 0));
+    if (n) log(`the bumps${rough ? " and the surface's roughness" : ''}: ${n} points of the floor moved`);
+  }
   // (written: the meshes it takes the place of emptied, each region's mesh in its model, one normal at each point)
   writeFloor(o.models, result, owners, dropped);
   // (the far ground made again round it, in place of the hand-made one: in its model, under its first mesh's name)
@@ -549,7 +566,7 @@ export async function buildFloor(
     list.push(rn.split('@')[0] as string);
     merged[own.model] = list;
   }
-  for (const v of Object.values(merged)) v.sort();
+  for (const v of Object.values(merged)) v.sort(byCodePoint);
   return {
     window,
     merged,

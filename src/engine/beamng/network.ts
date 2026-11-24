@@ -7,6 +7,8 @@
 // across), so the layouts share their road and part at junctions, as the real track's roads do. BeamNG's AI routes its
 // race from checkpoint to checkpoint along the network: with each layout a loop of its own, laid over the others, a
 // checkpoint took the nearest of them, often another layout's, which no road joined to the next.
+
+import { byCodePoint } from '../order';
 import type { RacePath, V3 } from './races';
 
 export const WAYPOINT_STEP = 5;
@@ -354,12 +356,12 @@ export function routeRaces(
     const n = lap.length;
     if (n < 2) continue;
     const where = new Map(lap.map((x, i) => [x, i]));
-    const own = new Set(lap.map((x, i) => [x, lap[(i + 1) % n] as string].sort().join('|')));
+    const own = new Set(lap.map((x, i) => [x, lap[(i + 1) % n] as string].sort(byCodePoint).join('|')));
     const strays = (w: string[]) => {
       for (let i = 0; i + 1 < w.length; i++) {
         const x = w[i] as string;
         const y = w[i + 1] as string;
-        if (own.has([x, y].sort().join('|'))) continue;
+        if (own.has([x, y].sort(byCodePoint).join('|'))) continue;
         for (const q of [spot(x), spot(y)]) {
           let m = Infinity;
           for (let k = 0; k < n; k++) {

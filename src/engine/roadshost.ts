@@ -10,7 +10,6 @@ import {
   kerbGeometry,
   layPaint,
   type Mark,
-  markPaint,
   type PaintMesh,
   pictureAspects,
   type Roads,
@@ -317,16 +316,9 @@ export async function mergeRoads(
     log: (stage, ms) => stages.push({ stage, ms: Math.round(ms) }),
   });
   const tLines = performance.now();
-  // (the edge lines laid on it: on the roads and rumbles as merged, from each road's own mesh)
+  // (the edge lines and the marks of its objects.json, if it has one, laid on it: on the roads and rumbles as merged,
+  // painted as one where they meet; and the start lines, on the road only, LINE_LIFT over the floor)
   const floor = floorOf(out);
-  const own = new Map(built.map(({ name, m }) => [name, m]));
-  const lines: PaintMesh[] = layPaint(roads as Roads, floor, (name) => {
-    const m = own.get(name);
-    if (!m) return null;
-    const S = surfaceOf(m);
-    return (x, z) => S.y(x, z);
-  });
-  // (and the marks and start lines of its objects.json, if it has one: on the road only, LINE_LIFT over the floor)
   const objects = (await partOf(host, p.project, 'objects', p.objects)) as {
     marks?: Mark[];
     layouts?: Parameters<typeof startLinePaint>[0];
@@ -338,13 +330,8 @@ export async function mergeRoads(
     const y = all.y(x, z);
     return Number.isNaN(y) ? 0 : y;
   };
-  if (objects) {
-    const onRoad = (x: number, z: number) => !Number.isNaN(floor.y(x, z));
-    lines.push(
-      ...markPaint(objects.marks ?? [], onRoad, top),
-      ...startLinePaint(objects.layouts ?? {}, roads as Roads, top),
-    );
-  }
+  const lines: PaintMesh[] = await layPaint(roads as Roads, floor, objects?.marks ?? []);
+  if (objects) lines.push(...startLinePaint(objects.layouts ?? {}, roads as Roads, top));
   stages.push({ stage: 'the lines laid', ms: performance.now() - tLines });
   // (and its objects laid on the floor, of the editor's catalogue)
   const tObjects = performance.now();

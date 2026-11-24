@@ -26,6 +26,7 @@ import {
   type TrackObjects,
   type Vec2,
 } from '../domain/types';
+import { BUMP_BRUSH, type BumpBrush, type Bumps, noBumps } from '../editing/bumps';
 import { LINE_UPS, type LineUp, type LineUpKind } from '../editing/lineup';
 import { firstModel, MODEL_KINDS } from '../editing/objects';
 import type { SnapMark } from '../editing/snap';
@@ -70,6 +71,7 @@ export interface BringState {
 export interface Snapshot {
   roads: Road[];
   objects: TrackObjects | null;
+  bumps: Bumps;
 }
 
 const NO_LINE: LineOf = Object.freeze({ a: null, b: null });
@@ -113,12 +115,20 @@ export interface EditorState {
   space: boolean;
   sel: Selection;
   mode: Mode;
+  /** the roads' bumps made by hand (editing/bumps.ts) */
+  bumps: Bumps;
+  /** how the bumps are made: a point at a time, or a brush */
+  bumpBrush: BumpBrush;
+  /** the point of a road's mesh picked to bump (Bumps, a point at a time) */
+  bumpPick: Vec2 | null;
   /** the category worked on: only its things can be picked */
   focus: Category;
   /** how the other categories' things are shown meanwhile */
   others: Others;
   /** the categories' sidebar shown */
   sidebar: boolean;
+  /** a category's list of everything placed shown (else only what is picked, with more room) */
+  objectList: boolean;
   layers: Layers;
   surface: SurfaceCheck | null;
   snapMark: SnapMark | null;
@@ -148,8 +158,8 @@ export interface EditorState {
   obj: ObjectPick | null;
   /** what placing adds */
   place: ObjectKind;
-  /** the object laid along nodes (a tyre wall, a fence, an area) that placing made: its next clicks add its nodes while
-   * it is picked; anything picked before placing began is left as it is (placing makes a new one) */
+  /** the object laid along nodes (a tyre wall, a fence, a paint mark, an area) that placing made: its next clicks add
+   * its nodes while it is picked; anything picked before placing began is left as it is (placing makes a new one) */
   placing: { kind: ObjectKind; i: number } | null;
   /** placing a paint mark: a line across the road clicked, edge to edge (a start line) */
   markAcross: boolean;
@@ -181,9 +191,13 @@ export const initialState = (): EditorState => ({
   space: false,
   sel: { ...NO_SELECTION },
   mode: 'select',
+  bumps: noBumps(),
+  bumpBrush: { ...BUMP_BRUSH },
+  bumpPick: null,
   focus: 'all',
   others: 'dim',
   sidebar: true,
+  objectList: false,
   layers: {
     sat: true,
     ctx: true,

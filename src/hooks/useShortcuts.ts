@@ -42,6 +42,7 @@ const KEYS: Record<string, Act> = {
   n: (ed) => ed.setMode('new'),
   m: (ed) => ed.setMode(ed.get().mode === 'measure' ? 'select' : 'measure'),
   o: (ed) => ed.setMode(ed.get().mode === 'place' ? 'select' : 'place'),
+  u: (ed) => ed.setMode(ed.get().mode === 'bumps' ? 'select' : 'bumps'),
   s: (ed) => ed.smoothPicked(),
   '?': (ed) => ed.toggleHelp(),
   '\\': (ed) => ed.toggleSidebar(),

@@ -3,6 +3,7 @@
 // taken away (three kept); the whole moved. What the mouse is on: a corner, else an edge or inside (the whole).
 
 import type { PaintMark, PavedArea, TrackObjects, Vec2 } from '../domain/types';
+import { markThrough } from './marks';
 
 /** metres a parking bay is across and deep, unless said */
 export const BAY: Vec2 = [2.5, 5];
@@ -133,16 +134,13 @@ export function parkingMarks(a: PavedArea, bay = BAY[0], depth = BAY[1]): PaintM
   const count = Math.floor(len / bay);
   if (!count) return [];
   const from = (len - count * bay) / 2;
-  const heading = Math.atan2(nn[0], nn[1]);
-  return Array.from({ length: count + 1 }, (_, k) => ({
-    name: `PARK_${a.name}_${k + 1}`,
-    p: [p[0] + t[0] * (from + k * bay), p[1] + t[1] * (from + k * bay)] as Vec2,
-    heading,
-    length: depth,
-    width: PARK_LINE,
-    colour: 'white' as const,
-    style: 'solid' as const,
-  }));
+  return Array.from({ length: count + 1 }, (_, k) => {
+    const q: Vec2 = [p[0] + t[0] * (from + k * bay), p[1] + t[1] * (from + k * bay)];
+    return markThrough(`PARK_${a.name}_${k + 1}`, [q, [q[0] + nn[0] * depth, q[1] + nn[1] * depth]], {
+      width: PARK_LINE,
+      colour: 'white',
+    });
+  });
 }
 
 /** The name a new area takes: AREA_<n>, free among taken. */

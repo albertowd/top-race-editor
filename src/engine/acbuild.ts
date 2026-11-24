@@ -8,10 +8,12 @@
 // Patch config made from its own settings and the track's lights and screens (aclights.ts); each layout's pit boxes
 // in its ui_track.json. Only what changed since the last build is made again.
 
+import type { AiSettings } from '../domain/types';
 import { writeAiFile } from './acai';
 import { AC_LIGHTS, acLightsText, lightsData } from './aclights';
+import { AI_WIDTH, CLEAR_MORE } from './aiclear';
 import type { RacingLine, RacingLines } from './ailines';
-import { aiLineOf, STEP } from './aimake';
+import { aiLineOf, pitRunsBackwards, STEP } from './aimake';
 import {
   BOARD_SHEET_MATERIAL,
   boardText,
@@ -28,9 +30,12 @@ import { libraryMaterial, loadKn5, type MaterialLibrary, pictureMaterial } from 
 import { dump, type Kn5, type Kn5Material, type Kn5Mesh, VERT } from './kn5tree';
 import { libraryOf } from './materials';
 import { meshes, sphere, triangles } from './mesh';
+import { byCodePoint } from './order';
+import { kerbsToDrive, type Roads } from './paint';
 import type { HostFiles } from './placehost';
 import type { LayoutPlaces, PlacesDoc } from './places';
 import { type PyJson, plain } from './pyjson';
+import type { RoadDesc } from './roads';
 import { Surface } from './surface';
 import {
   type CatalogueModel,
@@ -42,8 +47,9 @@ import {
   type TemplatePart,
 } from './templates';
 import { dedupeTextures } from './texturepool';
-import { readPart } from './trackdoc';
+import { readPart, trackRoads } from './trackdoc';
 import { settingsOf } from './trackfiles';
+import { isRubberPage } from './wear';
 
 export interface AcBuildOptions {
   project: string;
@@ -260,7 +266,7 @@ export async function sha1(parts: Uint8Array[]): Promise<string> {
 /** A folder's files, all the way down (paths relative to it, with /). */
 export async function filesUnder(files: HostFiles, dir: string, rel = ''): Promise<string[]> {
   const out: string[] = [];
-  for (const name of (await files.list(`${dir}${rel ? `/${rel}` : ''}`)).sort()) {
+  for (const name of (await files.list(`${dir}${rel ? `/${rel}` : ''}`)).sort(byCodePoint)) {
     const r = rel ? `${rel}/${name}` : name;
     // (a folder is what lists; a file what does not)
     let kids: string[] | null = null;
@@ -282,6 +288,9 @@ const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every(
  * they do) */
 const FLOOR_MESH = /^(1GRASS|1ROAD|1KERB|GRASS)/;
 const ROAD_MESH = /^(1ROAD|1KERB)/;
+/** the roads a car's AI keeps its wheels on (aiclear.ts), and its sides end where they do: the roads but their
+ * kerbs (their low ramps given back from the roads' description: paint.ts's kerbsToDrive), which throw a car */
+const CLEAR_MESH = /^1ROAD(?!_KERB)/;
 
 /** Each layout's AI lines made from its racing lines and written into the track built (aimake.ts, acai.ts), on the
  * floor of its models: how many files written. */
@@ -294,8 +303,16 @@ async function aiFromLines(
   layouts: string[],
   log: (line: string) => void,
 ): Promise<number> {
-  const doc = await readPart(files, await settingsOf(files, project), 'objects');
-  const lines = (plain((doc ?? {}) as PyJson) as { layouts?: Record<string, { lines?: RacingLines }> }).layouts ?? {};
+  const settings = await settingsOf(files, project);
+  const doc = await readPart(files, settings, 'objects');
+  const read = plain((doc ?? {}) as PyJson) as {
+    layouts?: Record<string, { lines?: RacingLines }>;
+    ai?: AiSettings;
+  };
+  const lines = read.layouts ?? {};
+  // (the cars' width: half of it, and a little, kept clear of the edges and of the rumbles' raised parts)
+  const width = read.ai?.width ?? AI_WIDTH;
+  const margin = width / 2 + CLEAR_MORE;
   const want = layouts.filter((l) => lines[l]?.lines?.fast?.curve?.length);
   if (!want.length) {
     log('  no racing lines: the recorded AI lines kept');
@@ -303,12 +320,14 @@ async function aiFromLines(
   }
   const floor: Float64Array[] = [];
   const road: Float64Array[] = [];
+  const clearRoad: Float64Array[] = [];
   for (const f of (await files.list(models)).filter((x) => x.endsWith('.glb')))
     for (const [n, m] of meshes(await loadKn5(files, `${models}/${f}`, library))) {
       if (!n.faces.length || !FLOOR_MESH.test(n.name)) continue;
       const T = triangles(n as Kn5Mesh, m);
       floor.push(T);
       if (ROAD_MESH.test(n.name)) road.push(T);
+      if (CLEAR_MESH.test(n.name)) clearRoad.push(T);
     }
   const together = (parts: Float64Array[]) => {
     const all = new Float64Array(parts.reduce((a, p) => a + p.length, 0));
@@ -323,20 +342,32 @@ async function aiFromLines(
   const R = together(road);
   const y = (x: number, z: number) => F.y(x, z);
   const onRoad = (x: number, z: number) => !Number.isNaN(R.y(x, z));
+  const C = together(clearRoad);
+  // (and the rumbles' low ramps: a car may run over those, not over their concrete nor off their backs)
+  const described = plain((await trackRoads(files, settings)) as unknown as PyJson) as unknown as RoadDesc[];
+  const ramps = kerbsToDrive(Object.fromEntries(described.map((r) => [r.name, r])) as Roads);
+  const clear = (x: number, z: number) => !Number.isNaN(C.y(x, z)) || ramps(x, z);
   let written = 0;
   for (const l of want) {
     const L = lines[l]?.lines as RacingLines;
-    const fast = aiLineOf(L.fast as RacingLine, y, onRoad);
+    const fast = aiLineOf(L.fast as RacingLine, y, onRoad, STEP, undefined, clear, margin);
     const lap = writeAiFile(fast.points, fast.along, fast.extra, true);
     await files.write(`${out}/${l}/ai/fast_lane.ai`, lap);
     await files.write(`${out}/${l}/data/ideal_line.ai`, lap);
     written += 2;
     let said = `  ${l}: its AI lines from its racing lines (${fast.along.length} points`;
     if (L.pit?.curve?.length) {
-      const pit = aiLineOf(L.pit, y, onRoad, STEP, { fast: L.fast as RacingLine });
-      await files.write(`${out}/${l}/ai/pit_lane.ai`, writeAiFile(pit.points, pit.along, pit.extra, false));
-      written++;
-      said += `, its pit lane ${pit.along.length}`;
+      const pit = aiLineOf(L.pit, y, onRoad, STEP, { fast: L.fast as RacingLine }, clear, margin);
+      if (pitRunsBackwards(fast, pit)) {
+        // (none: its AI karts don't pit, and a driver's pit lane is the track's own; any pit_lane.ai a build before
+        // left is taken away)
+        if (await files.exists(`${out}/${l}/ai/pit_lane.ai`)) await files.remove?.(`${out}/${l}/ai/pit_lane.ai`);
+        said += ', no pit lane (it rejoins the track behind where it leaves it, which AC takes for the whole lap)';
+      } else {
+        await files.write(`${out}/${l}/ai/pit_lane.ai`, writeAiFile(pit.points, pit.along, pit.extra, false));
+        written++;
+        said += `, its pit lane ${pit.along.length}`;
+      }
     }
     log(`${said})`);
   }
@@ -372,7 +403,7 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
   const stems = (await files.list(models))
     .filter((f) => f.endsWith('.glb'))
     .map((f) => f.slice(0, -4))
-    .sort();
+    .sort(byCodePoint);
   // (what each model was made of last time: its model, the library, its places, its textures, by their SHA-1)
   const stateFile = `${project}/build/ac/models.editor.json`;
   const state: Record<string, string> =
@@ -440,6 +471,16 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
   let twins = 0;
   for (const k of loaded.values()) twins += dedupeTextures(k).renamed;
   if (twins) log(`  pictures: ${twins} material slots named after a twin picture of their model`);
+  // (the rubber's pages: DDS of their own alpha (DXT5), their mips made, not PNG the game draws as they are)
+  const acTextures: Record<string, TextureAc> = { ...textures };
+  for (const k of loaded.values())
+    for (const tex of k.textures) {
+      if (!isRubberPage(tex.name) || !tex.name.toLowerCase().endsWith('.png')) continue;
+      const dds = `${tex.name.slice(0, -4)}.dds`;
+      for (const m of k.materials) for (const slot of m.textures) if (slot.name === tex.name) slot.name = dds;
+      acTextures[tex.name] = { ac: 'DXT5' };
+      tex.name = dds;
+    }
   for (const stem of stems) {
     const glb = `${models}/${stem}.glb`;
     const kn5File = `${out}/${stem}.kn5`;
@@ -461,13 +502,13 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
       const png = tex.data[0] === 0x89 && tex.data[1] === 0x50 && tex.name.toLowerCase().endsWith('.dds');
       if (!png) continue;
       const base = tex.name.split(/[\\/]/).pop() as string;
-      const e = textures[`${base.slice(0, -4)}.png`] ?? {};
+      const e = acTextures[`${base.slice(0, -4)}.png`] ?? {};
       const fmt = e.ac ?? 'DXT1';
       const key = await sha1([tex.data, new TextEncoder().encode(fmt), new Uint8Array([e.normal ? 1 : 0])]);
       const kept = `${cache}/${key}.dds`;
       if (await files.exists(kept)) tex.data = await files.read(kept);
       else {
-        tex.data = await ddsOf(tex.name, tex.data, textures);
+        tex.data = await ddsOf(tex.name, tex.data, acTextures);
         await files.write(kept, tex.data);
       }
     }

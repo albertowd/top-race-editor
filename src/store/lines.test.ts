@@ -1,8 +1,11 @@
 // A layout's racing lines made from roads clicked in the editor (the store's routing): the fast line along a
 // triangle's three roads, round from its start line, closed; the pit lane along a fourth, forking off the fast line
-// and merging back into it where its ends meet it; a click on the last road again takes it off.
+// and merging back into it where its ends meet it; a click on the last road again takes it off. The fast line
+// optimised as it is made (racingline.ts).
 import { describe, expect, it } from 'vitest';
+import type { RacingLine } from '../domain/types';
 import { forkAndMerge } from '../editing/lines';
+import { wallPath } from '../editing/walls';
 import { loadedEditor, road } from '../test/fixtures';
 
 describe('the racing lines made from roads', () => {
@@ -45,6 +48,12 @@ describe('the racing lines made from roads', () => {
       Math.min(...corners.map(([x, z]) => Math.hypot(x - (start[0] as number), z - (start[1] as number)))) + 1,
     );
     expect(ed.get().obj).toEqual({ kind: 'fast', i: 0, j: -1 });
+    // (optimised: off the roads' middles where they turn, never nearer an edge than half a kart and 0.3 m)
+    const along = wallPath(fast as RacingLine, 0.5).P;
+    const onA = along.filter(([x, z]) => x > 20 && x < 80 && Math.abs(z) < 10);
+    expect(onA.length).toBeGreaterThan(0);
+    for (const [, z] of onA) expect(Math.abs(z)).toBeLessThanOrEqual(3.05);
+    expect(Math.max(...onA.map(([, z]) => Math.abs(z)))).toBeGreaterThan(0.5);
     // (a node of it deleted: the line still picked)
     const nodes = fast?.curve.length ?? 0;
     if (nodes > 3) {
@@ -60,8 +69,9 @@ describe('the racing lines made from roads', () => {
     const pit = ed.get().objects?.layouts[layout]?.lines?.pit;
     expect(pit?.closed).toBe(false);
     const fm = forkAndMerge(ed.get().objects?.layouts[layout]?.lines);
-    expect(fm?.fork[1]).toBeCloseTo(0, 0);
-    expect(fm?.merge[1]).toBeCloseTo(0, 0);
+    // (on the fast line, as optimised: within road A, no nearer its edges (4 m out) than half a kart and 0.3 m)
+    expect(Math.abs(fm?.fork[1] ?? 9)).toBeLessThanOrEqual(3.05);
+    expect(Math.abs(fm?.merge[1] ?? 9)).toBeLessThanOrEqual(3.05);
     expect(pit?.curve[0]?.p).toEqual(fm?.fork);
     expect(ed.get().dirty).toBe(true);
     // (undone: as it was)

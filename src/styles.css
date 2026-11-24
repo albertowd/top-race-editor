@@ -137,6 +137,7 @@ button.primary.dirty::before {
   box-shadow: 0 0 0 1.5px #fff;
 }
 .icon-button {
+  flex: none;
   width: 30px;
   min-height: 28px;
   padding: 0;
@@ -563,6 +564,12 @@ main {
   color: var(--label-2);
   font-size: 12px;
 }
+/* (a row's numbers share what is left beside its label: three of them, a scale's, on one line) */
+.row > input[type="number"] {
+  flex: 1 1 0;
+  min-width: 52px;
+  max-width: 96px;
+}
 .row.actions {
   padding: 4px 0 10px;
   margin: 0;
@@ -801,8 +808,13 @@ table.items td:first-child {
   width: 18px;
   color: var(--label-2);
 }
-table.kinds td {
+table.kinds td,
+table.kinds th[scope="row"] {
   padding: 5px 3px;
+}
+table.kinds th[scope="row"] {
+  font-weight: inherit;
+  text-align: left;
 }
 table.kinds td.count {
   font-variant-numeric: tabular-nums;
@@ -1173,6 +1185,15 @@ dialog#helpbox {
 }
 /* the inspector a sheet over the map's lower half */
 @media (max-width: 680px) {
+  /* (the bar's buttons kept their size, never squeezed onto one another: the bar scrolls instead) */
+  #bar {
+    overflow-x: auto;
+  }
+  #bar > .bar-lead,
+  #bar > .segmented,
+  #bar > .bar-trail {
+    flex: none;
+  }
   #bar {
     gap: 6px;
     padding: 0 8px;
@@ -1226,6 +1247,17 @@ dialog#helpbox {
 .row-button.terrain-edit-pick {
   flex: 1;
   min-width: 0;
+}
+/* (a long name cut short, its detail kept whole beside it: not drawn over each other) */
+.terrain-edit-pick .row-title {
+  display: block;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terrain-edit-pick .dim {
+  flex: none;
 }
 .terrain-status {
   min-height: 1.2em;
@@ -1397,4 +1429,140 @@ dialog#helpbox {
 .mesh-bad {
   color: var(--bad);
   font-size: 12px;
+}
+
+/* ---- what is picked, and finding one (the category's list shut by default: what is picked has the room) */
+
+/* (a hint after a row's fields: under them, quiet, lined up with them) */
+.row > span:not(:first-child) {
+  flex-basis: calc(100% - 84px);
+  margin-left: 84px;
+  color: var(--label-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+.row > span:first-child + span {
+  flex-basis: auto;
+  margin-left: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.object-hero {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 4px 0 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--fill-quiet);
+}
+.hero-picture {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  background: var(--field);
+  object-fit: contain;
+}
+.card-preview {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  padding: 6px;
+  border: 3px solid #b9b5ac;
+  border-radius: 6px;
+  background: #f1efe9;
+  color: #141414;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.hero-text {
+  min-width: 0;
+}
+.hero-text strong {
+  display: block;
+  font-size: 15px;
+}
+.hero-what {
+  margin: 2px 0 6px;
+  color: var(--label-2);
+  font-size: 12px;
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fact {
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: var(--fill);
+  font-size: 11px;
+}
+
+.pick-hint {
+  margin: 4px 0;
+}
+.finder {
+  margin-top: 10px;
+  border-top: 1px solid var(--sep);
+  padding-top: 6px;
+}
+.disclosure {
+  width: 100%;
+  min-height: 30px;
+  justify-content: flex-start;
+  gap: 8px;
+  background: transparent;
+  font-weight: 500;
+}
+.disclosure .icon {
+  transition: transform 0.15s;
+}
+/* (pointing in while shut, down while open: a disclosure triangle's way) */
+.disclosure[aria-expanded="false"] .icon {
+  transform: rotate(-90deg);
+}
+.finder .search {
+  margin: 6px 0;
+}
+
+/* (a layout's checkboxes: two columns, each a target 24 px high at least) */
+.layouts-of {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  margin: 8px 0;
+  padding: 6px 10px 8px;
+  border: 1px solid var(--sep);
+  border-radius: 10px;
+}
+.layouts-of legend {
+  padding: 0 4px;
+  color: var(--label-2);
+  font-size: 12px;
+}
+.layouts-of label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  font-size: 12px;
+}
+.layouts-of label:first-of-type {
+  grid-column: 1 / -1;
+}
+.layouts-of input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }

@@ -6,6 +6,7 @@
 import { bytesOf, own, sha1, Writer } from './bin';
 import { type Grid, gaussianFilter, greyOpening, grid, Sampler, uniformFilter } from './ndimage';
 import { readNpz } from './npz';
+import { byCodePoint } from './order';
 import { type Grey, resizeBox } from './pictures';
 import { distance, inside, type Ring, within } from './polygon';
 import { type Box, TileIndex } from './tiles';
@@ -494,7 +495,7 @@ function sortedJson(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(sortedJson).join(',')}]`;
   if (v && typeof v === 'object')
     return `{${Object.keys(v)
-      .sort()
+      .sort(byCodePoint)
       .map((k) => `${JSON.stringify(k)}:${sortedJson((v as Record<string, unknown>)[k])}`)
       .join(',')}}`;
   return JSON.stringify(v);

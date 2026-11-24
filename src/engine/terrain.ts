@@ -9,6 +9,7 @@
 import { sha1 } from './bin';
 import { type Grid, grid } from './ndimage';
 import { readNpz, writeNpz } from './npz';
+import { byCodePoint } from './order';
 import { png16 } from './pictures';
 import {
   arange,
@@ -529,7 +530,7 @@ const sortedKeys = (v: PyJson): PyJson => {
   if (isDict(v))
     return Object.fromEntries(
       Object.keys(v)
-        .sort()
+        .sort(byCodePoint)
         .map((k) => [k, sortedKeys((v as J)[k] as PyJson)]),
     );
   return v;

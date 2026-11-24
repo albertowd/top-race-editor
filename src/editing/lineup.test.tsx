@@ -4,8 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { MapInteractions, type Pointer } from '../canvas/interactions';
 import { toScreen } from '../canvas/viewport';
+import type { PaintMark } from '../domain/types';
 import { loadedEditor } from '../test/fixtures';
 import { boxMarks, LINE_UPS, type LineUp, lineUp, spacingOf } from './lineup';
+import { markLength } from './marks';
 
 type Ed = Awaited<ReturnType<typeof loadedEditor>>['ed'];
 
@@ -61,21 +63,34 @@ describe('a line-up', () => {
     expect(lean[0].heading).toBeCloseTo(Math.PI / 4, 4);
   });
 
-  it('painted: a box round each, open at its back, or a line across its front', () => {
+  it('painted: a box round each, open at its back, or a line across its front, each one mark', () => {
     const spot = [{ x: 0, z: 0, heading: 0 }];
     const box = { shape: 'box', width: 2, length: 4, line: 0.1, colour: 'white' } as const;
+    const nodes = (m: PaintMark | undefined) => m?.curve.map((n) => n.p);
     const marks = boxMarks(spot, box, 'MARK_GRID_');
-    expect(marks.map((m) => m.name)).toEqual(['MARK_GRID_1', 'MARK_GRID_2', 'MARK_GRID_3', 'MARK_GRID_4']);
-    // (its front: across, at z 2, 2 m long)
-    expect(marks[0]).toMatchObject({ p: [1, 2], length: 2, width: 0.1, colour: 'white', style: 'solid' });
-    expect(boxMarks(spot, { ...box, shape: 'open' }, 'X')).toHaveLength(3);
-    expect(boxMarks(spot, { ...box, shape: 'front' }, 'X')).toHaveLength(1);
+    expect(marks.map((m) => m.name)).toEqual(['MARK_GRID_1']);
+    // (round from its back left to its front, across it, back down its right, closed: its corners mitred)
+    expect(marks[0]).toMatchObject({ closed: true, width: 0.1, colour: 'white', style: 'solid' });
+    expect(nodes(marks[0])).toEqual([
+      [1, -2],
+      [1, 2],
+      [-1, 2],
+      [-1, -2],
+    ]);
+    const open = boxMarks(spot, { ...box, shape: 'open' }, 'X');
+    expect(open).toHaveLength(1);
+    expect(open[0]?.closed).toBeUndefined();
+    expect(nodes(boxMarks(spot, { ...box, shape: 'front' }, 'X')[0])).toEqual([
+      [1, 2],
+      [-1, 2],
+    ]);
     // (a bracket: its front, and its ends turned back half a metre, as the old grid marks were: [ )
     const bracket = boxMarks(spot, { ...box, shape: 'bracket', arm: 0.5 }, 'X');
-    expect(bracket).toHaveLength(3);
-    expect(bracket.slice(1).map((m) => [m.p, m.length])).toEqual([
-      [[1, 2], 0.5],
-      [[-1, 2], 0.5],
+    expect(nodes(bracket[0])).toEqual([
+      [1, 1.5],
+      [1, 2],
+      [-1, 2],
+      [-1, 1.5],
     ]);
     // (the paint's default for the grid and the pit boxes: white brackets)
     expect(LINE_UPS.gridPaint.box).toMatchObject({ shape: 'bracket', colour: 'white' });
@@ -107,16 +122,16 @@ describe('laying out along a line', () => {
     click(ed, mouse, 30, 0);
     click(ed, mouse, 10, 0);
     ed.placeLining();
-    expect(ed.get().objects?.marks.length).toBe(marks + 6);
+    expect(ed.get().objects?.marks.length).toBe(marks + 2);
     ed.placeLining();
-    expect(ed.get().objects?.marks.length).toBe(marks + 6);
+    expect(ed.get().objects?.marks.length).toBe(marks + 2);
     // (round the layout's own slots: the paint along the line, away from them, kept; numbered on)
     ed.paintRoundSpots();
     const painted = () => ed.get().objects?.marks.filter((m) => m.name.startsWith('MARK_GRID_')) ?? [];
-    expect(painted()).toHaveLength(18 + 6);
-    expect(new Set(painted().map((m) => m.name)).size).toBe(24);
+    expect(painted()).toHaveLength(6 + 2);
+    expect(new Set(painted().map((m) => m.name)).size).toBe(8);
     ed.paintRoundSpots();
-    expect(painted()).toHaveLength(24);
+    expect(painted()).toHaveLength(8);
     // (Esc stops drawing first)
     ed.drawLine();
     ed.escape();
@@ -129,7 +144,8 @@ describe('laying out along a line', () => {
     expect(ed.get()).toMatchObject({ mode: 'place', place: 'marks', markAcross: true });
     click(ed, mouse, 70, 1);
     const m = ed.get().objects?.marks.at(-1);
-    expect(m).toMatchObject({ name: 'MARK_START_1', width: 0.3, length: 8 });
+    expect(m).toMatchObject({ name: 'MARK_START_1', width: 0.3 });
+    expect(markLength(m as PaintMark)).toBeCloseTo(8, 6);
     expect(ed.get().obj).toMatchObject({ kind: 'marks', j: -1 });
     // (off the roads: nothing)
     const n = ed.get().objects?.marks.length;

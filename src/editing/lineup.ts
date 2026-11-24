@@ -4,7 +4,7 @@
 // (paint marks, for every layout), apart from the layout's slots and boxes.
 
 import type { LineColour, PaintMark, Spot, Vec2 } from '../domain/types';
-import { markMiddle } from './marks';
+import { markMiddle, markThrough } from './marks';
 
 /** the grid's slots, the pit boxes (a layout's), or the paint of each (every layout's) */
 export type LineUpKind = 'grid' | 'pits' | 'gridPaint' | 'pitPaint';
@@ -144,8 +144,8 @@ export function lineUp(u: LineUp, a: Vec2, b: Vec2): Spot[] {
   return out;
 }
 
-/** The marks painting a box round each spot (its front the way it faces), named prefix and their number from
- * after + 1. */
+/** The marks painting a box round each spot (its front the way it faces), one a box, its corners mitred: named prefix
+ * and their number from after + 1. */
 export function boxMarks(spots: readonly Spot[], box: BoxPaint, prefix: string, after = 0): PaintMark[] {
   const out: PaintMark[] = [];
   const hw = box.width / 2;
@@ -158,23 +158,20 @@ export function boxMarks(spots: readonly Spot[], box: BoxPaint, prefix: string, 
     const fr = at(-hw, hl);
     const bl = at(hw, -hl);
     const br = at(-hw, -hl);
-    const lines: [Vec2, Vec2][] = [[fl, fr]];
+    // (its front, and its sides back from it: a bracket's arms, a box's sides round to its back)
+    let points: Vec2[] = [fl, fr];
     if (box.shape === 'bracket') {
       const arm = Math.min(box.arm ?? BRACKET_ARM, box.length);
-      lines.push([fl, at(hw, hl - arm)], [fr, at(-hw, hl - arm)]);
-    } else if (box.shape !== 'front') lines.push([fl, bl], [fr, br]);
-    if (box.shape === 'box') lines.push([bl, br]);
-    for (const [a, b] of lines) {
-      out.push({
-        name: `${prefix}${after + out.length + 1}`,
-        p: [r3(a[0]), r3(a[1])],
-        heading: Math.round(Math.atan2(b[0] - a[0], b[1] - a[1]) * 1e4) / 1e4,
-        length: r3(Math.hypot(b[0] - a[0], b[1] - a[1])),
-        width: box.line,
-        colour: box.colour,
-        style: 'solid',
-      });
-    }
+      points = [at(hw, hl - arm), fl, fr, at(-hw, hl - arm)];
+    } else if (box.shape !== 'front') points = [bl, fl, fr, br];
+    const closed = box.shape === 'box';
+    out.push(
+      markThrough(
+        `${prefix}${after + out.length + 1}`,
+        points.map((q): Vec2 => [r3(q[0]), r3(q[1])]),
+        { width: box.line, colour: box.colour, closed },
+      ),
+    );
   }
   return out;
 }

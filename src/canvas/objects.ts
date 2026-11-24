@@ -1,23 +1,29 @@
+import { MARK_PX } from '../domain/constants';
 import { modelInfo, type TrackCatalogue } from '../domain/models';
 import type {
   Box,
+  LineColour,
   ModelKind,
   ObjectKind,
   ObjectPick,
   PlacedObject,
   RacingLine,
+  RubberMark,
   Spot,
   TrackObjects,
   Vec2,
+  WallNode,
 } from '../domain/types';
 import { FORK, forkAndMerge, LINE_KINDS, MERGE } from '../editing/lines';
 import { boxMarks, isPaint, lineUp } from '../editing/lineup';
-import { markEnd, markPieces } from '../editing/marks';
+import { isRing, markPath } from '../editing/marks';
 import { along, inLayout, isCurve, kindOfModel, OBJECT_SIZES, objectsOf, poseOf, spacingOf } from '../editing/objects';
 import { handleAt, TYRE_R, wallPath, wallStacks } from '../editing/walls';
 import { objectLit } from '../engine/lightoptions';
+import { RUBBER, rubberAlpha } from '../engine/wear';
 import { boxesMeet, emptyBox, grow, inBox } from '../geometry/samples';
 import type { Lining } from '../store/state';
+import { type PaintDrawn, paintInView, paintOf, strokePaint } from './paint';
 import { topPicture } from './pictures';
 
 /** What each kind is drawn in. */
@@ -31,6 +37,7 @@ export const OBJECT_COLOURS: Record<ObjectKind, string> = {
   poles: '#d8dce4',
   tyres: '#9aa3b5',
   marks: '#f2f2f2',
+  rubber: '#3a3633',
   trees: '#6fcf7a',
   fences: '#c3ccd6',
   sheds: '#f2f2f2',
@@ -100,6 +107,8 @@ interface ObjectsFrame {
   kinds?: ReadonlySet<ObjectKind>;
   /** the track's own catalogue (its models' lights) */
   catalogue?: TrackCatalogue | null;
+  /** the paint as drawn, the roads' edge lines and the marks together (none: the marks alone) */
+  paint?: readonly PaintDrawn[];
 }
 
 const drawn = (f: ObjectsFrame, kind: ObjectKind) => !f.kinds || f.kinds.has(kind);
@@ -379,7 +388,7 @@ function drawPlacedOne(
 
 /** The picked curve's points and handles as a road's are marked (renderer.ts): the handles' arms, each handle a light
  * blue circle, each point a white square (the one taken blue), all edged black so they show over its line. */
-function drawCurveMarks(f: ObjectsFrame, it: PlacedObject) {
+function drawCurveMarks(f: ObjectsFrame, it: { curve: readonly WallNode[] }) {
   const { g, picked, b, ppm } = f;
   const px = 1 / ppm;
   g.strokeStyle = ARM;
@@ -398,7 +407,7 @@ function drawCurveMarks(f: ObjectsFrame, it: PlacedObject) {
     for (const h of ['in', 'out'] as const) {
       if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
       const [x, z] = handleAt(n, h);
-      circle(g, x, z, 4.5 * px);
+      circle(g, x, z, MARK_PX.dot * px);
       g.fillStyle = picked?.j === j && picked.h === h ? PICKED : HANDLE;
       g.fill();
       g.stroke();
@@ -406,7 +415,7 @@ function drawCurveMarks(f: ObjectsFrame, it: PlacedObject) {
     const q = n.p;
     if (!inBox(b, q[0], q[1], 1)) continue;
     g.beginPath();
-    g.rect(q[0] - 5 * px, q[1] - 5 * px, 10 * px, 10 * px);
+    g.rect(q[0] - (MARK_PX.node / 2) * px, q[1] - (MARK_PX.node / 2) * px, MARK_PX.node * px, MARK_PX.node * px);
     g.fillStyle = picked?.j === j && !picked.h ? PICKED : '#ffffff';
     g.fill();
     g.stroke();
@@ -432,7 +441,7 @@ function drawAreas(f: ObjectsFrame) {
     g.lineWidth = (me ? 2.5 : 1.5) * px;
     g.stroke();
     if (!me) return;
-    const hs = 4 * px;
+    const hs = (MARK_PX.node / 2) * px;
     a.points.forEach(([x, z], j) => {
       g.fillStyle = picked?.j === j ? '#ffffff' : PICKED;
       g.fillRect(x - hs, z - hs, hs * 2, hs * 2);
@@ -470,7 +479,7 @@ function drawLines(f: ObjectsFrame) {
     g.stroke();
     g.setLineDash([]);
     if (!me) continue;
-    const hs = 4 * px;
+    const hs = (MARK_PX.node / 2) * px;
     for (const [j, n] of line.curve.entries()) {
       // (a pit line's ends: their handles (the way it leaves and joins), their places the fork's and merge's diamonds)
       const end = kind === 'pit' && (j === 0 || j === line.curve.length - 1);
@@ -483,7 +492,7 @@ function drawLines(f: ObjectsFrame) {
         g.moveTo(n.p[0], n.p[1]);
         g.lineTo(x, z);
         g.stroke();
-        circle(g, x, z, 3.5 * px);
+        circle(g, x, z, MARK_PX.dot * px);
         g.fillStyle = picked?.j === j && picked.h === h ? '#ffffff' : '#cfe6ff';
         g.fill();
       }
@@ -498,7 +507,7 @@ function drawLines(f: ObjectsFrame) {
     [FORK, fm.fork],
     [MERGE, fm.merge],
   ] as const) {
-    const r = 6 * px;
+    const r = MARK_PX.point * px;
     g.beginPath();
     g.moveTo(q[0], q[1] - r);
     g.lineTo(q[0] + r, q[1]);
@@ -513,6 +522,118 @@ function drawLines(f: ObjectsFrame) {
   }
 }
 
+/** A line of points: its path begun (closed: round to its first). */
+function pathOf(g: CanvasRenderingContext2D, P: readonly Vec2[], closed: boolean) {
+  g.beginPath();
+  for (const [k, q] of P.entries()) {
+    if (k) g.lineTo(q[0], q[1]);
+    else g.moveTo(q[0], q[1]);
+  }
+  if (closed) g.closePath();
+}
+
+/** The marks as painted: each line of them in its paint, its corners mitred, dotted in its dashes; the one picked
+ * outlined under its paint, its nodes and handles over it. */
+function drawMarks(f: ObjectsFrame) {
+  const { g, o, picked, b, ppm } = f;
+  const px = 1 / ppm;
+  const all = f.paint ?? paintOf([], o.marks, () => undefined);
+  const me = picked?.kind === 'marks' ? o.marks[picked.i] : undefined;
+  g.lineCap = 'butt';
+  g.lineJoin = 'miter';
+  g.miterLimit = 5;
+  if (me) {
+    g.strokeStyle = PICKED;
+    g.lineWidth = Math.max(me.width, 1.5 * px) + 4 * px;
+    const P = markPath(me).P;
+    pathOf(g, isRing(me) ? P.slice(0, -1) : P, isRing(me));
+    g.stroke();
+  }
+  // (and a line of a road's with the picked mark in it again, over its outline)
+  for (const { chain: c } of paintInView(all, b, false, me ? (picked?.i ?? -1) : -1))
+    strokePaint(g, c, PAINT[c.colour as LineColour] ?? PAINT.white, 1.5 * px);
+  g.lineJoin = 'round';
+  if (me) drawCurveMarks(f, me);
+}
+
+/** each rubber mark's line and box, kept while the mark is the same */
+const rubberShapes = new WeakMap<RubberMark, { P: Vec2[]; box: Box }>();
+
+function rubberShape(m: RubberMark) {
+  let d = rubberShapes.get(m);
+  if (!d) {
+    const P = markPath(m).P;
+    const box = emptyBox();
+    for (const [x, z] of P) grow(box, x, z, m.width);
+    d = { P: isRing(m) ? P.slice(0, -1) : P, box };
+    rubberShapes.set(m, d);
+  }
+  return d;
+}
+
+/** the layer the rubber is drawn on first (as large as the map's canvas), kept for the next frame */
+let rubberLayer: OffscreenCanvasRenderingContext2D | null = null;
+
+function layerAs(c: { width: number; height: number }): OffscreenCanvasRenderingContext2D | null {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  if (rubberLayer?.canvas.width !== c.width || rubberLayer.canvas.height !== c.height)
+    rubberLayer = new OffscreenCanvas(c.width, c.height).getContext('2d');
+  return rubberLayer;
+}
+
+/** The rubber as laid: each mark a dark band its width wide, as dark as its wear (as the build lays it, but for its
+ * widening in tight turns and its cores); where marks meet, as dark as the darker of them (each drawn on a layer of
+ * its own in grey, the darker kept, the layer then multiplied over the map); the one picked outlined under it, its
+ * nodes and handles over it. */
+function drawRubber(f: ObjectsFrame) {
+  const { g, o, picked, b, ppm } = f;
+  const all = o.rubber ?? [];
+  if (!all.length) return;
+  const px = 1 / ppm;
+  const me = picked?.kind === 'rubber' ? all[picked.i] : undefined;
+  g.lineCap = 'butt';
+  g.lineJoin = 'round';
+  if (me) {
+    const { P } = rubberShape(me);
+    g.strokeStyle = PICKED;
+    g.lineWidth = Math.max(me.width, 1.5 * px) + 4 * px;
+    pathOf(g, P, isRing(me));
+    g.stroke();
+  }
+  const layer = layerAs(g.canvas);
+  const on: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D = layer ?? g;
+  if (layer) {
+    layer.setTransform(1, 0, 0, 1, 0, 0);
+    layer.globalCompositeOperation = 'source-over';
+    layer.fillStyle = '#ffffff';
+    layer.fillRect(0, 0, layer.canvas.width, layer.canvas.height);
+    layer.setTransform(g.getTransform());
+    layer.globalCompositeOperation = 'darken';
+    layer.lineCap = 'butt';
+    layer.lineJoin = 'round';
+  }
+  const [r, gr, bl] = RUBBER.rgb;
+  for (const m of all) {
+    const { P, box } = rubberShape(m);
+    if (!boxesMeet(box, b)) continue;
+    const a = Math.max(0.15, rubberAlpha(m.wear));
+    // (on the layer: the grey multiplying the map as the rubber would darken it)
+    const grey = (c: number) => Math.round(255 - a * (255 - c));
+    on.strokeStyle = layer ? `rgb(${grey(r)},${grey(gr)},${grey(bl)})` : `rgba(${r},${gr},${bl},${a})`;
+    on.lineWidth = Math.max(m.width, 1.5 * px);
+    pathOf(on as CanvasRenderingContext2D, P, isRing(m));
+    on.stroke();
+  }
+  if (layer) {
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalCompositeOperation = 'multiply';
+    g.drawImage(layer.canvas, 0, 0);
+    g.restore();
+  }
+  if (me) drawCurveMarks(f, me);
+}
+
 /** The objects drawn in metres (the canvas in the world's transform). */
 export function drawObjectsWorld(f: ObjectsFrame) {
   const { g, o, layout, picked, b, ppm } = f;
@@ -522,37 +643,10 @@ export function drawObjectsWorld(f: ObjectsFrame) {
   drawAreas(f);
   drawLines(f);
   drawPlaced(f);
-  // the marks: paint on the roads (under the rest); the picked one outlined, its ends ringed
-  o.marks.forEach((m, i) => {
-    if (!drawn(f, 'marks')) return;
-    const e = markEnd(m);
-    if (!inBox(b, m.p[0], m.p[1], m.length + 1) && !inBox(b, e[0], e[1], 1)) return;
-    const me = same(picked, 'marks', i);
-    const [ax, az] = [(e[0] - m.p[0]) / (m.length || 1), (e[1] - m.p[1]) / (m.length || 1)];
-    g.lineCap = 'butt';
-    if (me) {
-      g.strokeStyle = PICKED;
-      g.lineWidth = Math.max(m.width, 1.5 * px) + 4 * px;
-      g.beginPath();
-      g.moveTo(m.p[0], m.p[1]);
-      g.lineTo(e[0], e[1]);
-      g.stroke();
-    }
-    g.strokeStyle = PAINT[m.colour] ?? PAINT.white;
-    g.lineWidth = Math.max(m.width, 1.5 * px);
-    g.beginPath();
-    for (const [a, c] of markPieces(m)) {
-      g.moveTo(m.p[0] + ax * a, m.p[1] + az * a);
-      g.lineTo(m.p[0] + ax * c, m.p[1] + az * c);
-    }
-    g.stroke();
-    if (me)
-      for (const [j, q] of [m.p, e].entries()) {
-        circle(g, q[0], q[1], 4 * px);
-        g.fillStyle = picked?.j === j ? '#ffffff' : PICKED;
-        g.fill();
-      }
-  });
+  // the marks: paint on the roads (under the rest), as the build paints them; the picked one outlined, its nodes
+  if (drawn(f, 'marks')) drawMarks(f);
+  // the rubber, over the paint as the build lays it
+  if (drawn(f, 'rubber')) drawRubber(f);
   if (!lay) return;
   const spots = (kind: 'grid' | 'pits', list: Spot[], across: number, long: number) => {
     list.forEach((s, i) => {
@@ -682,12 +776,13 @@ export function drawLining(g: CanvasRenderingContext2D, lining: Lining, ppm: num
     g.strokeStyle = box.colour === 'yellow' ? '#ffd400' : '#f2f2f2';
     g.lineWidth = Math.max(box.line, 2 * px);
     g.lineCap = 'butt';
-    g.beginPath();
+    g.lineJoin = 'miter';
     for (const m of boxMarks(spots, box, '')) {
-      g.moveTo(...m.p);
-      g.lineTo(...markEnd(m));
+      const P = markPath(m).P;
+      pathOf(g, isRing(m) ? P.slice(0, -1) : P, isRing(m));
+      g.stroke();
     }
-    g.stroke();
+    g.lineJoin = 'round';
     return;
   }
   const [across, long] = kind === 'pits' ? OBJECT_SIZES.pits : OBJECT_SIZES.grid;

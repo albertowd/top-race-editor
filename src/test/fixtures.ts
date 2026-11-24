@@ -1,6 +1,7 @@
 import { EngineClient, type LocalEngine } from '../api/client';
 import type { MeshResponse, RoadMesh, RoadsResponse, SaveResponse, SurfaceResponse } from '../api/types';
 import type { CurveNode, Road, TrackObjects, Vec2 } from '../domain/types';
+import type { BumpsJson } from '../editing/bumps';
 import type { TreePlacement } from '../editing/trees';
 import { createEditor } from '../store/editor';
 import type { Dialogs } from '../ui/dialogs';
@@ -68,7 +69,16 @@ export function someObjects(): TrackObjects {
       { name: 'KART_0', model: 'kart', curve: one(130, -30), heading: Math.PI, collision: 'none' },
     ],
     marks: [
-      { name: 'MARK_1', p: [50, -2], heading: Math.PI / 2, length: 4, width: 0.1, colour: 'white', style: 'solid' },
+      {
+        name: 'MARK_1',
+        curve: [
+          { p: [50, -2], in: [0, 0], out: [4 / 3, 0] },
+          { p: [54, -2], in: [-4 / 3, 0], out: [0, 0] },
+        ],
+        width: 0.1,
+        colour: 'white',
+        style: 'solid',
+      },
     ],
   };
 }
@@ -84,6 +94,8 @@ export interface FakeEngine {
   /** the track file's layouts: each its models */
   layouts: Record<string, { models: string[]; from?: string }>;
   meshes: RoadMesh[];
+  /** the track's bumps (source/bumps.json) */
+  bumps: BumpsJson;
   fail: Record<string, string>;
   /** the track's folder (another opened: that one's) */
   folder: string;
@@ -118,6 +130,7 @@ export function fakeEngine(roads: Road[] = threeRoads()): FakeEngine {
     trees: [],
     layouts: { vp_a: { models: ['track', 'vp_a'] }, vp_b: { models: ['track', 'vp_b'] } },
     meshes: [{ model: 'm.glb', name: '1ROAD_X', material: 'Pavers', area: 50, box: [0, 0, 10, 10] }],
+    bumps: { version: 1, cell: 0.1, tile: 128, tiles: {} },
     fail: {},
     folder: 'D:/tracks/test',
     hold: {},
@@ -193,6 +206,12 @@ export function fakeEngine(roads: Road[] = threeRoads()): FakeEngine {
           return { ok: true, objects: fe.objects };
         }
         return fe.objects ? { objects: fe.objects, seeded: fe.seeded } : null;
+      case '/api/bumps':
+        if (body) {
+          fe.bumps = body.bumps as BumpsJson;
+          return { ok: true, bumps: fe.bumps };
+        }
+        return fe.bumps;
       case '/api/layouts':
         if (body) {
           fe.layouts = body.layouts as FakeEngine['layouts'];

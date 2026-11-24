@@ -1,6 +1,8 @@
 // A track's place where the engine runs: its files read through what it is handed (the engine window's preload: the
 // disk), its pictures decoded there, its layers kept in the engine's cache folder (not the track's), and the place
 // kept in memory while its key stays the same.
+
+import { byCodePoint } from './order';
 import type { Grey } from './pictures';
 import { makePlace, type Place, type PlaceCache, type PlaceSource, placeKey, type TerrainDoc } from './place';
 import { plain } from './pyjson';
@@ -51,7 +53,7 @@ export function placeSource(
       if (!(await host.files.exists(at(dir)))) return [];
       return (await host.files.list(at(dir)))
         .filter((n) => re.test(n))
-        .sort()
+        .sort(byCodePoint)
         .map((n) => `${dir}/${n}`);
     },
     grey: async (p) => host.decodeGrey(await host.files.read(at(p))),

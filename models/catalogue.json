@@ -1824,6 +1824,21 @@
       "source": "tools/reference/templates/hotlap_building.glb"
     },
     {
+      "id": "south_warehouse",
+      "file": "south_warehouse.glb",
+      "kind": "sheds",
+      "label": "South warehouse",
+      "description": "The big warehouse south of the Velopark, beyond the road, as the satellite photo and the onboard videos show it: 121 by 133 m; ribbed light cladding over a precast concrete base, a dark flashing round its parapet, downpipes; green graphics at the east end of its north wall; loading docks with black shelters along its west wall and on its south wall; a ribbed metal roof, a low gable (its ridge east to west) with a vent along it and lighter sheets at its north corners. Its own materials, their pictures made in code. At its own origin, its front (+z) its north side.",
+      "materials": "own",
+      "size": [121.1, 13.5, 132.6],
+      "top": 139.2,
+      "triangles": 1380,
+      "fits": ["place"],
+      "collision": ["model"],
+      "lights": [],
+      "source": "scripts/south-warehouse.ts"
+    },
+    {
       "id": "east_shed_n",
       "file": "east_shed_n.glb",
       "kind": "sheds",

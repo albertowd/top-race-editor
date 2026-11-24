@@ -265,9 +265,9 @@ describe('the roads merged by the engine', () => {
       expect(first.regions.map((r) => r.name)).toContain('ground');
       expect(first.regions.length).toBeGreaterThan(2);
       expect(first.kept).toBe(0);
-      // (its rumbles merged first, its lines laid)
+      // (its rumbles merged first, its lines laid: A's right line and B's, B going on from A's end, painted as one)
       expect(first.regions.map((r) => r.name)).toContain('1ROAD_KERB_E_A_0');
-      expect(first.paint.lines).toBe(4);
+      expect(first.paint.lines).toBe(3);
       expect(first.paint.faces).toBeGreaterThan(100);
       const again = (await ch.call('roads.merge', params)) as RoadsMerged;
       expect([again.filled, again.kept]).toEqual([0, first.filled]);

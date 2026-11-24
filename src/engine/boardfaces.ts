@@ -6,8 +6,11 @@
 // front the first cell of the first row (u 0 to 0.5, v 0 to 0.25), its back the first of the last row (v 0.75 to 1).
 // Where its points are within those cells is kept within its card.
 
+import { byCodePoint } from './order';
+
 /** the board model's material: the old sheet of boards */
 export const BOARD_SHEET_MATERIAL = 'MarkerBoards';
+
 /** the material the cards are drawn with, and its picture */
 export const CARDS_MATERIAL = 'BoardCards';
 export const CARDS_PICTURE = 'BoardCards.png';
@@ -38,7 +41,7 @@ export interface CardSheet {
 }
 
 export function cardSheet(texts: Iterable<string>): CardSheet {
-  const list = [...new Set([...texts].filter((t) => t.trim()))].sort();
+  const list = [...new Set([...texts].filter((t) => t.trim()))].sort(byCodePoint);
   const blank = list.length;
   const used = Math.ceil((list.length + 1) / CARDS_ACROSS);
   const down = 2 ** Math.ceil(Math.log2(Math.max(used, 1)));

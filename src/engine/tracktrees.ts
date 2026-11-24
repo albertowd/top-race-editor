@@ -8,6 +8,7 @@
 
 import type { Kn5 } from './kn5tree';
 import { type Floor, type LaidObject, type Tree, treesGone } from './laying';
+import { byCodePoint } from './order';
 import type { CatalogueModel, TemplatePart } from './templates';
 import { world } from './templates';
 import { MERGE_MAX, objectNode } from './trackobjects';
@@ -159,5 +160,5 @@ export function writeTrees(
       k.root.children.push(objectNode(k, name, V, F, w.material, materials, false));
       made++;
     });
-  return { count, cleared: gone.size, offFloor, unknown: [...unknown].sort(), meshes: made, planted };
+  return { count, cleared: gone.size, offFloor, unknown: [...unknown].sort(byCodePoint), meshes: made, planted };
 }

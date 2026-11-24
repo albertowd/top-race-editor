@@ -9,6 +9,7 @@ import type { Kn5, Kn5Mesh, Mat4 } from './kn5tree';
 import { VERT } from './kn5tree';
 import { metres, outlineOf, unit } from './merge';
 import { meshes, triangles } from './mesh';
+import { byCodePoint } from './order';
 import type { HostFiles } from './placehost';
 import { fitCurve, type Road } from './trackfiles';
 
@@ -766,7 +767,7 @@ async function described(files: HostFiles, s: BringSettings): Promise<Set<string
 export async function roadMeshesOffered(files: HostFiles, s: BringSettings, library?: MaterialLibrary) {
   const have = await described(files, s);
   if (!s.roadModels && !(await files.exists(s.models))) return [];
-  const list = s.roadModels ?? (await files.list(s.models)).filter((f) => f.endsWith('.glb')).sort();
+  const list = s.roadModels ?? (await files.list(s.models)).filter((f) => f.endsWith('.glb')).sort(byCodePoint);
   const out: { model: string; name: string; material: string; area: number; box: number[] }[] = [];
   for (const f of list) {
     const path = await meshModel(files, s, f);

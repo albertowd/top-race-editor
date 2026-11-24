@@ -254,7 +254,12 @@ export interface Layout {
   timezone?: number;
   maxVehicles?: number;
   pitKph?: number;
+  /** the venue's icon, from rFactor's Locations (<venue>\<venue>Icon.dds) */
+  venueIcon?: string;
 }
+
+/** cars a race takes where a layout does not say */
+export const MAX_VEHICLES = 20;
 
 export function gdbText(l: Layout): string {
   const km = l.length / 1000;
@@ -266,12 +271,13 @@ export function gdbText(l: Layout): string {
     `  TrackName = ${l.trackName}`,
     `  EventName = ${l.eventName}`,
     `  VenueName = ${l.venueName}`,
+    ...(l.venueIcon ? [`  VenueIcon = ${l.venueIcon}`] : []),
     ...(l.location ? [`  Location = ${l.location}`] : []),
     `  Length = ${km.toFixed(3)} KM / ${(km / 1.609344).toFixed(2)} Miles`,
     '  TrackType = Road Course',
     `  TerrainDataFile=${l.tdf}`,
     '  HeadlightsRequired = false',
-    `  Max Vehicles = ${l.maxVehicles ?? 20}`,
+    `  Max Vehicles = ${l.maxVehicles ?? MAX_VEHICLES}`,
     '  FormationAndStart = 0',
     '  PitlaneBoundary = 1',
     '  GarageDepth = 2.0',

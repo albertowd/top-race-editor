@@ -1,9 +1,10 @@
 # The engine in TypeScript
 
-The goal: the editor builds a track on its own, in TypeScript, with no Python and without kart-velopark's tools.
-Until then, kart-velopark's Python is the reference. The track the port builds is checked against the one the
-Python builds, and a fix found on either side is made on both. When the port builds a track that matches,
-kart-velopark's build is retired.
+The editor builds a track on its own, in TypeScript, with no Python and without kart-velopark's tools. That was the
+goal of the port this file records. While it ran, kart-velopark's Python was the reference; the port is done and
+kart-velopark's build is retired. The editor's own engine is the reference now: its tests check what it makes
+itself, and nothing is compared with the Python any more. The steps below, and what was taken in from the Python
+side, are kept as the record of how the engine was made.
 
 ## The pipeline
 
@@ -74,25 +75,24 @@ cases check; a part goes to the card only when it has been measured faster there
 tolerances. The card works in 32-bit floats: about 0.1 mm a kilometre from the origin, well inside the 1 cm the
 track is compared to, and as precise as the games' own models.
 
-## How the two are kept in sync
+## How the two were kept in sync (while the port ran)
 
-- **Parity cases** (`parity/`): each case is an input (a track's data) and what the Python makes from it.
-  `npm run parity` makes the references again from the Python on this computer, runs the TypeScript on the same
-  inputs and compares.
+The parity cases and `npm run parity` are gone with the Python build. What follows is how the port was checked.
+
+- **Parity cases** (`parity/`): each case was an input (a track's data) and what the Python made from it.
+  `npm run parity` made the references again from the Python, ran the TypeScript on the same inputs and compared.
 - **The same track, not the same steps**: the layers make the track differently from the Python's steps, so the
-  comparison is of what a driver gets.
+  comparison was of what a driver gets.
   - Heights sampled on a grid over the roads and the ground: within 1 cm.
   - Each road's outline: within 1 cm.
   - Where each line and rumble lies, and how high: within 5 mm.
   - Where each object stands, and its height: within 1 cm.
   - The models' names, materials and layouts: exactly.
-    A difference is a failure, named by case, place and value.
-- **Where the code is the same**, as reading models or a road's curve to its points, outputs are compared exactly
+    A difference was a failure, named by case, place and value.
+- **Where the code is the same**, as reading models or a road's curve to its points, outputs were compared exactly
   (positions within 1e-6 m).
-- **When it runs**: on every change to the TypeScript engine (the tests run the cases against the committed
-  references, also in CI), and again whenever the Python changes. Each reference records a hash of the Python
-  files that made it, and `npm run check` fails while they have changed and the references have not been made
-  again.
+- **When it ran**: on every change to the TypeScript engine (the tests ran the cases against the committed
+  references, also in CI), and again whenever the Python changed.
 - **The same libraries**: Shewchuk's Triangle (`triangle-wasm`, as Python's `triangle`) and GEOS (`geos-wasm`, as
   shapely) are the same C code built for WebAssembly. A grid index and union-find stand in for scipy's kd-tree and
   graphs; plain typed arrays for numpy.
@@ -118,18 +118,18 @@ judges' tower) stay models.
 
 ## The steps
 
-Each step is done when its parity cases pass; the next starts after.
+Each step was done when its parity cases passed; the next started after. Every step is done.
 
-| #   | Step                                                                                                                                                                                         | From the Python                                                        | State     |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------- |
-| 1   | Foundation: the parity harness, the vector helpers, reading and writing glTF and kn5 models, the tile grid, the worker pool, the engine window and its message channel                       | `gltf_source`, `kn5tree`, `build_paths` (its mesh helpers and surface) | done      |
-| 2   | The place: the heights raster, the picture, the height filter map and its zones, read by position                                                                                            | `terrain`, `elevation`, `terrain.py`                                   | done      |
-| 3   | The roads: a curve to its mesh, the ground cut and the roads merged inside each road's footprint                                                                                             | `roads`, `surface` (its full merge), `track_surface`, `read_road`      | done      |
-| 4   | The lines and the rumbles on their roads                                                                                                                                                     | `build_kerbs`, `paint_roads`                                           | under way |
-| 5   | The objects: grid, pits, timing, poles, tyre walls, marks and scenery, each at the height under it; the copies made from placements (Velopark's tyres and trees turned into placements once) | `place_objects`, `place_karts`, `place_trees`, `objects.py`            | done      |
-| 6   | Out to the games: the AC track and the BeamNG level, packed                                                                                                                                  | `build_tracks`, `export_beamng`, `kn5io`, `build.py`                   | done      |
-| 7   | The rest of the engine in TypeScript (the track's files, the wizard, the tracks opened); the page on the engine window only. The app ships no Python                                         | `server.py`, `geometry.py`, `wizard.py`, `providers.py`, the rest      | done      |
-| 8   | kart-velopark's build retired                                                                                                                                                                |                                                                        | to do     |
+| #   | Step                                                                                                                                                                                         | From the Python                                                        | State |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----- |
+| 1   | Foundation: the parity harness, the vector helpers, reading and writing glTF and kn5 models, the tile grid, the worker pool, the engine window and its message channel                       | `gltf_source`, `kn5tree`, `build_paths` (its mesh helpers and surface) | done  |
+| 2   | The place: the heights raster, the picture, the height filter map and its zones, read by position                                                                                            | `terrain`, `elevation`, `terrain.py`                                   | done  |
+| 3   | The roads: a curve to its mesh, the ground cut and the roads merged inside each road's footprint                                                                                             | `roads`, `surface` (its full merge), `track_surface`, `read_road`      | done  |
+| 4   | The lines and the rumbles on their roads                                                                                                                                                     | `build_kerbs`, `paint_roads`                                           | done  |
+| 5   | The objects: grid, pits, timing, poles, tyre walls, marks and scenery, each at the height under it; the copies made from placements (Velopark's tyres and trees turned into placements once) | `place_objects`, `place_karts`, `place_trees`, `objects.py`            | done  |
+| 6   | Out to the games: the AC track and the BeamNG level, packed                                                                                                                                  | `build_tracks`, `export_beamng`, `kn5io`, `build.py`                   | done  |
+| 7   | The rest of the engine in TypeScript (the track's files, the wizard, the tracks opened); the page on the engine window only. The app ships no Python                                         | `server.py`, `geometry.py`, `wizard.py`, `providers.py`, the rest      | done  |
+| 8   | kart-velopark's build retired                                                                                                                                                                |                                                                        | done  |
 
 ## Step 1
 
@@ -512,7 +512,8 @@ build itself now is, taken out once it has been tried.
 
 ## rFactor 2
 
-Begun (TRACK_FORMAT.md's `build_rf2`), in `src/engine/rf2`, from the track's data only, never another game's build:
+Built and tried in the game (TRACK_FORMAT.md's `build_rf2`), in `src/engine/rf2`, from the track's data only, never
+another game's build ([DEVELOPMENT.md](DEVELOPMENT.md#building-for-the-games) has the location as it is made now):
 
 - `gmt.ts`: GMT read and written, every one of ModDev's 762 samples again byte for byte (one encrypted, kept as its
   bytes); the format as found at its top. The 16 bytes at 0x1BC are the exporter's mark, the same in every file of
@@ -525,9 +526,12 @@ Begun (TRACK_FORMAT.md's `build_rf2`), in `src/engine/rf2`, from the track's dat
   axes (x, y, -z; faces wound as rFactor's), their textures as the AC build's DDS, drawn with L2DIFFUSET0; copied
   into rFactor 2's ModDev/Locations when asked (the Build dialog's rFactor 2), to try in its Mod Mode.
 
-Not yet tried in the game. Still to do: the lamps, the knockable cones (a GMT each, its pivot its place), the
-trackside cameras, the gantry's lights, a lighter ground, and packing (ModMgr's MAS, an rFCMP).
-rFactor 2 is installed on this computer (D:/SteamLibrary/steamapps/common/rFactor 2).
+- `objects.ts`: each layout's cones and boards, a GMT each about its place (its pivot), moveable in its SCN.
+- `pictures.ts` (drawn by the engine window's `rf2pictures.ts`): the layouts' icons, thumbnails, wheel maps and
+  loading screens, and the venue's icon, as ModDev's samples have them.
+
+Made since: the lamps lit at night, the knockable cones and boards, the pictures and loading screens. Still to do:
+the trackside cameras, the gantry's lights, a lighter ground, and packing (ModMgr's MAS, an rFCMP).
 
 What a track is (Studio 397's documentation, and what the game ships):
 
@@ -557,7 +561,7 @@ encoded; a vertex 96 or 128 bytes (its position at 0, normal at 12, tangent at 4
 then the materials: their count, each its name (SWHEEL_TRACKMAP), its shader (L2DIFFUSET0) and its textures
 (SWHEEL_TRACKMAP.DDS), with their settings.
 
-The plan, when it comes:
+The plan it followed (all done but the packing):
 
 1. A GMT reader and writer, proved as the kn5 port was: every one of the 667 samples read and written again byte for
    byte (this does not wait on the format: it can start any time).
@@ -567,16 +571,10 @@ The plan, when it comes:
    timing gates. Joesville's files as the pattern.
 3. The track tried in ModDev's viewer and the game; then packed with ModMgr, and its rFCMP.
 
-## Not a reference yet
+## Taken in from the Python side
 
-- **The merge by regions** (`merge_state.plan`: only the changed zone merged again, in `surface.build`) is wrong
-  today (BUGS 48). It has left open edges at the zone's edge and edges shared by 3 or 4 faces, and GEOS has failed
-  on its overlay. References are made from the full merge only, until kart-velopark says it is fixed.
-
-## Changes on the Python side to take in
-
-The port follows the Python as it is when each step is done. Changes made to tools on the list before their step
-starts:
+The port followed the Python as it was when each step was done. The changes made to its tools while the port ran,
+as they were noted then:
 
 - kart-velopark's TRACK_FORMAT.md (agreed with the editor): the track's data the same for every game, each game's
   files made only by its own build. For the port: what the build makes (the merged floor, rumbles, lines, objects'
@@ -667,7 +665,7 @@ starts:
   layout's `models_*.ini` (step 6).
 - `place_objects`: the checkered start line (`START_LINES`, hardcoded for vp_kids for now) (step 5).
 
-## Fixes on both sides
+## Fixes
 
-A bug found in either is fixed in both while both exist, with a parity case that shows it. Velopark's open bugs are
-in [BUGS.md](BUGS.md).
+While both builds existed, a bug found in either was fixed in both, with a parity case that showed it. Now a bug is
+fixed in the editor alone, with a test of the editor's own.

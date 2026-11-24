@@ -1,8 +1,8 @@
 import { CATEGORIES, othersAlpha } from '../domain/categories';
-import { CONTEXT_COLOURS, DEFAULT_MATERIAL, MATERIAL_COLOURS, SURFACE_COLOURS } from '../domain/constants';
+import { CONTEXT_COLOURS, DEFAULT_MATERIAL, MARK_PX, MATERIAL_COLOURS, SURFACE_COLOURS } from '../domain/constants';
 import type { Box, Road } from '../domain/types';
 import { endHandles, type NodeHandle, nodeHandles } from '../editing/handles';
-import { isLayoutKind, OBJECT_KINDS, OBJECT_LABELS } from '../editing/objects';
+import { isLayoutKind, isMarkKind, marksOf, OBJECT_KINDS, OBJECT_LABELS } from '../editing/objects';
 import { placingInto } from '../editing/strands';
 import { band, kerbPieces, lineOffsets, pieceOffsets } from '../geometry/paint';
 import { alongHandles, geo, type Lookup, lookup } from '../geometry/roads';
@@ -10,7 +10,9 @@ import { boxesMeet, pointAt, span } from '../geometry/samples';
 import { roadShapes } from '../geometry/shapes';
 import { meshDeps, sameDeps, wiredRoads } from '../store/meshes';
 import type { EditorState, MeshEntry, SurfaceCheck } from '../store/state';
+import { drawBumps } from './bumps';
 import { drawLining, drawObjectsScreen, drawObjectsWorld } from './objects';
+import { paintInView, paintOf, strokePaint } from './paint';
 import { type Cell, contextCells, pathOf, roadPaths, surfaceCells, wireCells } from './paths';
 import { drawStartLineLabels, drawStartLines, LABELS_PPM, startLinesOf } from './startlines';
 import { type TileCache, visibleTiles } from './tiles';
@@ -136,6 +138,8 @@ export function drawFrame(f: Frame): string {
   if (L.sel && shape && s.layers.wire) drawWires(L);
   if (L.sel) drawWrongFaces(L);
   drawPaint(L, cat.kerbs ? 1 : fade, cat.lines ? 1 : fade);
+  // (the roads' bumps made by hand: over the roads while they are worked on (Bumps), or in Roads)
+  if (s.mode === 'bumps' || s.focus === 'roads') drawBumps(g, s, L.b, L.ppm);
   // (the layouts' start lines, painted on the ground as the build paints them: every layout's, all seen in each)
   const startAlpha = cat.lines ? 1 : fade;
   if (s.objects && startAlpha) {
@@ -145,7 +149,16 @@ export function drawFrame(f: Frame): string {
   }
   if (L.sel) drawSelectedItem(g, s, L.sel, L.find);
   const objects = s.layers.objects &&
-    s.objects && { g, o: s.objects, layout: s.layout, picked: s.obj, b: L.b, ppm: L.ppm, catalogue: s.catalogue };
+    s.objects && {
+      g,
+      o: s.objects,
+      layout: s.layout,
+      picked: s.obj,
+      b: L.b,
+      ppm: L.ppm,
+      catalogue: s.catalogue,
+      paint: paintOf(s.roads, s.objects.marks, L.find),
+    };
   const mine = new Set(cat.kinds);
   const rest = new Set(OBJECT_KINDS.filter((k) => !mine.has(k)));
   const eachObjects = (draw: (kinds: ReadonlySet<(typeof OBJECT_KINDS)[number]>) => void) => {
@@ -259,27 +272,24 @@ function drawWrongFaces({ g, s, find, ppm }: Layer) {
   }
 }
 
-/** Every road's rumbles and lines in view, over all the roads. */
-function drawPaint({ g, s, find, b }: Layer, kerbsAlpha = 1, linesAlpha = 1) {
+/** Every road's rumbles in view, over all the roads; then the edge lines as painted, over them. */
+function drawPaint({ g, s, find, b, ppm }: Layer, kerbsAlpha = 1, linesAlpha = 1) {
   if (!kerbsAlpha && !linesAlpha) return;
-  for (const r of s.roads) {
-    const o = geo(r, find);
-    const sh = o && boxesMeet(o.box, b) ? roadShapes(r, find) : null;
-    if (!sh) continue;
-    const p = roadPaths(sh);
-    g.globalAlpha = kerbsAlpha;
-    if (s.layers.kerbs && kerbsAlpha)
-      for (const [col, path] of p.kerbs) {
+  g.globalAlpha = kerbsAlpha;
+  if (s.layers.kerbs && kerbsAlpha)
+    for (const r of s.roads) {
+      const o = geo(r, find);
+      const sh = o && boxesMeet(o.box, b) ? roadShapes(r, find) : null;
+      if (!sh) continue;
+      for (const [col, path] of roadPaths(sh).kerbs) {
         g.fillStyle = col;
         g.fill(path);
       }
-    g.globalAlpha = linesAlpha;
-    if (s.layers.lines && linesAlpha) {
-      g.fillStyle = '#ffffff';
-      g.fill(p.white);
-      g.fillStyle = '#ffd21f';
-      g.fill(p.yellow);
     }
+  g.globalAlpha = linesAlpha;
+  if (s.layers.lines && linesAlpha) {
+    for (const { chain: c } of paintInView(paintOf(s.roads, s.objects?.marks, find), b, true))
+      strokePaint(g, c, c.colour === 'yellow' ? '#ffd21f' : '#ffffff', 1 / ppm);
   }
   g.globalAlpha = 1;
 }
@@ -334,12 +344,21 @@ function modeMessages(s: EditorState, sel: Road | undefined): string[] {
     // (the one this placing made, its nodes added; else a new one)
     const into = placingInto(s);
     const on =
-      into === undefined ? undefined : s.place === 'areas' ? s.objects?.areas?.[into] : s.objects?.objects[into];
+      into === undefined
+        ? undefined
+        : s.place === 'areas'
+          ? s.objects?.areas?.[into]
+          : isMarkKind(s.place) && s.objects
+            ? marksOf(s.objects, s.place)[into]
+            : s.objects?.objects[into];
     const wall = on ? ` (on ${on.name})` : '';
-    const how = s.place === 'marks' ? 'drag from its start to its end (Shift: its way by 15°) to add' : 'click to add';
     if (s.place === 'marks' && s.markAcross)
       out.push('Place: click on a road to paint a line across it, edge to edge; Esc to stop');
-    else out.push(`Place: ${how} a ${what}${where}${wall}; Esc to stop`);
+    else if (isMarkKind(s.place))
+      out.push(
+        `Place: drag from its start to its end (Shift: its way by 15°) to add a ${what}${on ? `, or click to carry ${on.name} on to there` : ''}; Esc to stop`,
+      );
+    else out.push(`Place: click to add a ${what}${where}${wall}; Esc to stop`);
   }
   return out;
 }
@@ -441,17 +460,19 @@ function drawNames(g: CanvasRenderingContext2D, roads: readonly Road[], find: Lo
 }
 
 function diamond(g: CanvasRenderingContext2D, x: number, y: number) {
-  g.moveTo(x, y - 6);
-  g.lineTo(x + 6, y);
-  g.lineTo(x, y + 6);
-  g.lineTo(x - 6, y);
+  const r = MARK_PX.point;
+  g.moveTo(x, y - r);
+  g.lineTo(x + r, y);
+  g.lineTo(x, y + r);
+  g.lineTo(x - r, y);
   g.closePath();
 }
 
 function triangle(g: CanvasRenderingContext2D, x: number, y: number) {
-  g.moveTo(x, y - 7);
-  g.lineTo(x + 6, y + 5);
-  g.lineTo(x - 6, y + 5);
+  const r = MARK_PX.point;
+  g.moveTo(x, y - r * 1.15);
+  g.lineTo(x + r, y + r * 0.8);
+  g.lineTo(x - r, y + r * 0.8);
   g.closePath();
 }
 
@@ -484,8 +505,8 @@ const HANDLE_FILLS = { p: '#ffffff', wl: '#7dff9a', wr: '#ff8ad0', in: '#cfe6ff'
 function drawNodeMark(g: CanvasRenderingContext2D, h: NodeHandle, selected: boolean, scr: Scr) {
   const [x, y] = scr(h.x, h.z);
   g.beginPath();
-  if (h.kind === 'p') g.rect(x - 5, y - 5, 10, 10);
-  else if (h.kind === 'in' || h.kind === 'out') g.arc(x, y, 4.5, 0, Math.PI * 2);
+  if (h.kind === 'p') g.rect(x - MARK_PX.node / 2, y - MARK_PX.node / 2, MARK_PX.node, MARK_PX.node);
+  else if (h.kind === 'in' || h.kind === 'out') g.arc(x, y, MARK_PX.dot, 0, Math.PI * 2);
   else diamond(g, x, y);
   g.fillStyle = selected ? SELECTED : HANDLE_FILLS[h.kind];
   g.fill();
@@ -493,8 +514,12 @@ function drawNodeMark(g: CanvasRenderingContext2D, h: NodeHandle, selected: bool
   g.stroke();
   if (h.kind === 'wl' || h.kind === 'wr') {
     g.fillStyle = '#000';
-    g.font = '9px system-ui';
-    g.fillText(h.kind === 'wl' ? 'L' : 'R', x - 3, y + 3);
+    g.font = 'bold 10px system-ui';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(h.kind === 'wl' ? 'L' : 'R', x, y + 0.5);
+    g.textAlign = 'start';
+    g.textBaseline = 'alphabetic';
   }
 }
 

@@ -20,7 +20,7 @@ const STAGE_STATES: Record<BuildStage['state'], string> = {
 
 /** What a line of a build's log is, for its colour: an error, a warning, the build's end, or nothing to mark. */
 export function logKind(line: string): 'error' | 'warn' | 'done' | null {
-  if (/^(failed|stopped):|\b(error|exception|traceback)\b|\bfailed\b/i.test(line)) return 'error';
+  if (/(^stopped:)|\b(failed|error|exception|traceback)\b/i.test(line)) return 'error';
   if (/\bwarn(ing|s)?\b/i.test(line)) return 'warn';
   if (/^(built for |installed in )/.test(line)) return 'done';
   return null;

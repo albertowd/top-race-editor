@@ -11,7 +11,9 @@ import type { HostFiles } from '../engine/placehost';
 import { Pool, type Reply, type WorkerLike } from '../engine/pool';
 import type { WizardHost } from '../engine/providers';
 import { Triangle } from '../engine/triangle';
-import { mapPreview } from './mappreview';
+import { mapPreview, outline } from './mappreview';
+import { render } from './render';
+import { rf2Picture } from './rf2pictures';
 import { decodeRgb, encodeJpeg, satelliteTiles, scaledPictures } from './satellite';
 
 declare global {
@@ -72,8 +74,11 @@ const env: HostEnv = {
     triangle: triangleHere,
     // (the new-track wizard: the providers asked from Node, their pictures decoded and made JPEG by Chromium)
     wizard: { host: { fetch: given.fetch, decodeRgb, encodeJpeg }, keys: given.keysFile },
-    // (the BeamNG level: its pictures read and made, its starts' maps drawn, by Chromium)
-    beamng: { decodeRgb, encodeJpeg, mapPreview },
+    // (the BeamNG level: its pictures read and made by Chromium, its starts' places rendered by the GPU; the AC
+    // layouts' pictures too)
+    beamng: { decodeRgb, encodeJpeg, mapPreview, outline, render },
+    // (the rFactor 2 location's pictures: drawn by Chromium, the track rendered under some)
+    rf2: { picture: rf2Picture, render },
   },
 };
 onEnginePort((port) => answer(port, env));

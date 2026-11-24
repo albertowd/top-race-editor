@@ -371,6 +371,8 @@ export function writeLines(
   k: Kn5,
   lines: { name: string; colour: string; P: ArrayLike<number>; F: ArrayLike<number> }[],
   materials: Record<string, Kn5>,
+  /** each colour's material (by default the library's paint) */
+  paints: Record<string, string> = PAINT_MATERIALS,
 ): number {
   const made = new Set(lines.map((l) => l.name));
   k.root.children = k.root.children.filter((c) => !made.has(c.name));
@@ -381,7 +383,14 @@ export function writeLines(
       UV[i * 2] = l.P[i * 3] as number;
       UV[i * 2 + 1] = l.P[i * 3 + 2] as number;
     }
-    const m = meshNode(k, l.name, { P: l.P, UV, F: l.F }, PAINT_MATERIALS[l.colour] ?? 'LinePaint', null, materials);
+    const m = meshNode(
+      k,
+      l.name,
+      { P: l.P, UV, F: l.F },
+      paints[l.colour] ?? paints.white ?? 'LinePaint',
+      null,
+      materials,
+    );
     m.cast_shadows = 0;
     k.root.children.push(m);
   }

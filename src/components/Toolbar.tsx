@@ -18,6 +18,13 @@ const MODES: readonly { mode: Mode; label: string; key: string; title: string }[
   { mode: 'new', label: 'New Road', key: 'N', title: 'Draw a new road: click its nodes, Enter to finish' },
   { mode: 'measure', label: 'Measure', key: 'M', title: 'Measure between two points' },
   { mode: 'place', label: 'Place', key: 'O', title: 'Click on the map to add one' },
+  {
+    mode: 'bumps',
+    label: 'Bumps',
+    key: 'U',
+    title:
+      'Bump the roads’ surface by hand: a point of a road’s mesh up or down, or a brush that raises, lowers or smooths',
+  },
 ];
 
 export const LAYERS: readonly [LayerName, string][] = [

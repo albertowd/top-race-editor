@@ -1,4 +1,5 @@
 import type { LayoutModels, RacingLines, Road, TrackObjects } from '../domain/types';
+import type { BumpsJson } from '../editing/bumps';
 import type { TreePlacement } from '../editing/trees';
 import { engineChannel } from './engineport';
 import type {
@@ -172,6 +173,15 @@ export class EngineClient {
 
   saveObjects(objects: TrackObjects): Promise<ObjectsSaveResponse> {
     return this.call('/api/objects', { objects });
+  }
+
+  /** The roads' bumps made by hand (none: an empty set). */
+  bumps(): Promise<BumpsJson> {
+    return this.call('/api/bumps');
+  }
+
+  saveBumps(bumps: BumpsJson): Promise<{ ok: boolean; bumps: BumpsJson }> {
+    return this.call('/api/bumps', { bumps });
   }
 
   /** A layout's first racing lines, read from the AI files the track has for it (null where it has none). */
