@@ -1,2197 +1,2197 @@
 {
-  "about": "Every model the editor places and the build lays, each its .glb beside this file: at the origin on the ground, its front along +z, y up, metres. models/README.md says what each field is.",
-  "models": [
-    {
-      "id": "cone",
-      "file": "cone.glb",
-      "kind": "cones",
-      "label": "Cone",
-      "description": "A traffic cone, orange.",
-      "materials": "library",
-      "size": [0.4, 0.7, 0.4],
-      "top": 0.5,
-      "triangles": 460,
-      "fits": ["place"],
-      "collision": ["none", "static", "dynamic", "wall"],
-      "hull": "hull",
-      "lights": [],
-      "source": "tools/reference/templates/cone.npz"
-    },
-    {
-      "id": "board",
-      "file": "board.glb",
-      "kind": "boards",
-      "label": "Marker board",
-      "description": "A marker board on a stand: its face toward its heading.",
-      "materials": "library",
-      "size": [0.604, 0.647, 0.127],
-      "top": 0.7,
-      "triangles": 12,
-      "fits": ["place"],
-      "collision": ["none", "static", "dynamic", "wall"],
-      "hull": "hull",
-      "lights": [],
-      "source": "tools/reference/templates/board.npz"
-    },
-    {
-      "id": "light_pole",
-      "file": "light_pole.glb",
-      "kind": "poles",
-      "label": "Light pole",
-      "description": "A light pole, 17 m high, with 2 night lights at its top (Custom Shaders Patch): a flood beam facing forward along its heading and down onto the track, and a spill straight down round it. Its tyres are a tyre stack of its own.",
-      "materials": "library",
-      "size": [2.06, 17.443, 1.222],
-      "top": 2.2,
-      "triangles": 1416,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [
-        {
-          "series": "Pole flood beams",
-          "at": [0.033, 16.312, 0.398],
-          "facing": [-0.058, -0.815, 0.576]
-        },
-        {
-          "series": "Pole spill",
-          "at": [0.033, 16.312, 0.398],
-          "facing": [0, -1, 0]
-        }
-      ],
-      "source": "tools/reference/templates/light_pole.npz"
-    },
-    {
-      "id": "tyre_stack",
-      "file": "tyre_stack.glb",
-      "kind": "tyres",
-      "label": "Tyre stack",
-      "description": "Three tyres stacked, the tyre walls' stack: laid along a curve, a tyre wall.",
-      "materials": "library",
-      "size": [0.624, 0.623, 0.627],
-      "top": 0.7,
-      "triangles": 520,
-      "fits": ["place"],
-      "collision": ["none", "static", "wall"],
-      "lights": [],
-      "lods": {
-        "tyres": [0, 45],
-        "fill": [45, 2000]
-      },
-      "source": "tools/reference/templates/tyre_stack.npz"
-    },
-    {
-      "id": "gantry",
-      "file": "gantry.glb",
-      "kind": "gantries",
-      "label": "Start gantry",
-      "materials": "own",
-      "size": [19.14, 5.32, 2.65],
-      "top": 20,
-      "triangles": 4240,
-      "fits": ["place"],
-      "collision": ["none", "static"],
-      "lights": [],
-      "source": "velopark_gantry_1000.glb",
-      "wrong_faces": {
-        "against": 0,
-        "thin": 0
-      }
-    },
-    {
-      "id": "kart",
-      "file": "kart.glb",
-      "kind": "karts",
-      "label": "Rental kart",
-      "materials": "own",
-      "size": [1.44, 0.58, 1.91],
-      "top": 2.5,
-      "triangles": 34478,
-      "fits": ["place"],
-      "collision": ["none", "static", "dynamic"],
-      "lights": [],
-      "draw": [0, 60],
-      "source": "the kart project: techspeed_rental_11hp_LOD_C.kn5",
-      "wrong_faces": {
-        "against": 99,
-        "thin": 2274
-      }
-    },
-    {
-      "id": "fence_concrete",
-      "file": "fence_concrete.glb",
-      "kind": "fences",
-      "label": "Fence, concrete posts",
-      "materials": "own",
-      "size": [2.72, 2.3, 0.12],
-      "top": 2.9,
-      "triangles": 28,
-      "fits": ["bend", "place"],
-      "collision": ["none", "wall"],
-      "lights": [],
-      "source": "tools/build_outside.py: fence()",
-      "wrong_faces": {
-        "against": 0,
-        "thin": 0
-      }
-    },
-    {
-      "id": "fence_steel",
-      "file": "fence_steel.glb",
-      "kind": "fences",
-      "label": "Fence, steel posts",
-      "materials": "own",
-      "size": [2.66, 2.3, 0.05],
-      "top": 2.8,
-      "triangles": 60,
-      "fits": ["bend", "place"],
-      "collision": ["none", "wall"],
-      "lights": [],
-      "source": "tools/build_outside.py: fence(metal=True)",
-      "wrong_faces": {
-        "against": 0,
-        "thin": 0
-      }
-    },
-    {
-      "id": "marshal_post",
-      "file": "marshal_post.glb",
-      "kind": "statics",
-      "label": "Marshal shelter",
-      "description": "A flag marshal's shelter: a white canopy on four poles, braced from its back; its front to the track. Its chair and its cones are objects of their own.",
-      "materials": "library",
-      "size": [3.489, 2.92, 4.667],
-      "top": 6.5,
-      "triangles": 106,
-      "fits": ["place"],
-      "collision": ["none", "static"],
-      "lights": [],
-      "source": "tools/reference/templates/marshal_post.npz"
-    },
-    {
-      "id": "chair",
-      "file": "chair.glb",
-      "kind": "statics",
-      "label": "Chair",
-      "description": "A plain steel chair: its front the way one sits in it.",
-      "materials": "library",
-      "size": [0.44, 0.9, 0.5],
-      "top": 0.6,
-      "triangles": 72,
-      "fits": ["place"],
-      "collision": ["none", "static"],
-      "lights": [],
-      "source": "tools/reference/templates/chair.npz"
-    },
-    {
-      "id": "timing_table",
-      "file": "timing_table.glb",
-      "kind": "statics",
-      "label": "Timing table",
-      "description": "A table with two TVs, their screens forward: the session's times and the HotLap Velopark site's page (Custom Shaders Patch displays, as on the table by the hotlap's building).",
-      "materials": "library",
-      "size": [2.9, 1.59, 0.8],
-      "top": 3.1,
-      "triangles": 136,
-      "fits": ["place"],
-      "collision": ["none", "static"],
-      "lights": [],
-      "source": "tools/reference/templates/timing_table.npz"
-    },
-    {
-      "id": "open_passage",
-      "file": "open_passage.glb",
-      "kind": "sheds",
-      "label": "Open passage",
-      "description": "A walk-through passage: two side walls under a straight concrete slab, open at its front and its back (one walks through it front to back), 6.4 m across, 7.4 m long.",
-      "materials": "library",
-      "size": [6.8, 3.25, 7.8],
-      "top": 8.2,
-      "triangles": 48,
-      "fits": ["place"],
-      "collision": ["none", "static"],
-      "lights": [],
-      "source": "tools/reference/templates/open_passage.npz"
-    },
-    {
-      "id": "euca_0",
-      "file": "euca_0.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 0",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 31.2 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.378, 33.991, 5.391],
-      "top": 6.1,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_0.npz"
-    },
-    {
-      "id": "euca_1",
-      "file": "euca_1.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 1",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 32.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.622, 35.306, 4.487],
-      "top": 6.4,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_1.npz"
-    },
-    {
-      "id": "euca_2",
-      "file": "euca_2.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 2",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 36.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [5.154, 38.759, 4.628],
-      "top": 5.8,
-      "triangles": 116,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_2.npz"
-    },
-    {
-      "id": "euca_3",
-      "file": "euca_3.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 3",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 33.1 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [6.059, 35.778, 5.042],
-      "top": 6.7,
-      "triangles": 116,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_3.npz"
-    },
-    {
-      "id": "euca_4",
-      "file": "euca_4.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 4",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.2 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.571, 36.735, 5.601],
-      "top": 6,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_4.npz"
-    },
-    {
-      "id": "euca_5",
-      "file": "euca_5.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 5",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 29.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.945, 31.741, 5.052],
-      "top": 6.3,
-      "triangles": 116,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_5.npz"
-    },
-    {
-      "id": "euca_6",
-      "file": "euca_6.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 6",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 33.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.417, 35.727, 5.83],
-      "top": 6.6,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_6.npz"
-    },
-    {
-      "id": "euca_7",
-      "file": "euca_7.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 7",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [5.074, 36.55, 5.051],
-      "top": 6.1,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_7.npz"
-    },
-    {
-      "id": "euca_8",
-      "file": "euca_8.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 8",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.549, 37.14, 5.814],
-      "top": 6.1,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_8.npz"
-    },
-    {
-      "id": "euca_9",
-      "file": "euca_9.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 9",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 31.5 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.715, 33.924, 4.701],
-      "top": 5.7,
-      "triangles": 116,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_9.npz"
-    },
-    {
-      "id": "euca_10",
-      "file": "euca_10.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 10",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [5.01, 36.913, 4.733],
-      "top": 5.7,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_10.npz"
-    },
-    {
-      "id": "euca_11",
-      "file": "euca_11.glb",
-      "kind": "trees",
-      "label": "Eucalyptus 11",
-      "description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 27.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.46, 29.379, 4.385],
-      "top": 5,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_11.npz"
-    },
-    {
-      "id": "euca_young_0",
-      "file": "euca_young_0.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 0",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 12.1 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [3.991, 13.956, 3.865],
-      "top": 4.9,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_0.npz"
-    },
-    {
-      "id": "euca_young_1",
-      "file": "euca_young_1.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 1",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 7.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [3.103, 9.319, 3.758],
-      "top": 4.6,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_1.npz"
-    },
-    {
-      "id": "euca_young_2",
-      "file": "euca_young_2.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 2",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 7.3 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [3.606, 8.911, 3.807],
-      "top": 4.7,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_2.npz"
-    },
-    {
-      "id": "euca_young_3",
-      "file": "euca_young_3.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 3",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 13.0 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [3.496, 14.872, 4.622],
-      "top": 5.3,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_3.npz"
-    },
-    {
-      "id": "euca_young_4",
-      "file": "euca_young_4.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 4",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 11.5 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [2.756, 13.448, 3.817],
-      "top": 4.9,
-      "triangles": 130,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_4.npz"
-    },
-    {
-      "id": "euca_young_5",
-      "file": "euca_young_5.glb",
-      "kind": "trees",
-      "label": "Young eucalyptus 5",
-      "description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 6.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.33, 8.811, 3.59],
-      "top": 5.5,
-      "triangles": 102,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/euca_young_5.npz"
-    },
-    {
-      "id": "broad_0",
-      "file": "broad_0.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 0",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.3 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [8.057, 10.339, 8.428],
-      "top": 9.8,
-      "triangles": 468,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_0.npz"
-    },
-    {
-      "id": "broad_1",
-      "file": "broad_1.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 1",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [12.554, 13.945, 11.895],
-      "top": 13.5,
-      "triangles": 412,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_1.npz"
-    },
-    {
-      "id": "broad_2",
-      "file": "broad_2.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 2",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.2 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.717, 15.491, 11.165],
-      "top": 12,
-      "triangles": 500,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_2.npz"
-    },
-    {
-      "id": "broad_3",
-      "file": "broad_3.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 3",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [8.098, 10.63, 8.325],
-      "top": 9.2,
-      "triangles": 428,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_3.npz"
-    },
-    {
-      "id": "broad_4",
-      "file": "broad_4.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 4",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 13.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.97, 14.581, 10.289],
-      "top": 11.5,
-      "triangles": 436,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_4.npz"
-    },
-    {
-      "id": "broad_5",
-      "file": "broad_5.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 5",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.0 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [11.82, 16.335, 11.817],
-      "top": 13.3,
-      "triangles": 404,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_5.npz"
-    },
-    {
-      "id": "broad_6",
-      "file": "broad_6.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 6",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.9 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.036, 12.762, 9.962],
-      "top": 12,
-      "triangles": 412,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_6.npz"
-    },
-    {
-      "id": "broad_7",
-      "file": "broad_7.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree 7",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.0 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.666, 16.565, 11.758],
-      "top": 13,
-      "triangles": 436,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_7.npz"
-    },
-    {
-      "id": "broad_n0",
-      "file": "broad_n0.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n0",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [11.632, 16.082, 11.985],
-      "top": 14.3,
-      "triangles": 516,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n0.npz"
-    },
-    {
-      "id": "broad_n1",
-      "file": "broad_n1.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n1",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.072, 12.256, 10.257],
-      "top": 11.7,
-      "triangles": 460,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n1.npz"
-    },
-    {
-      "id": "broad_n2",
-      "file": "broad_n2.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n2",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [11.352, 13.84, 11.179],
-      "top": 12.7,
-      "triangles": 452,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n2.npz"
-    },
-    {
-      "id": "broad_n3",
-      "file": "broad_n3.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n3",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.9 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.603, 14.591, 10.776],
-      "top": 11.6,
-      "triangles": 404,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n3.npz"
-    },
-    {
-      "id": "broad_n4",
-      "file": "broad_n4.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n4",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.3 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [7.745, 10.538, 7.373],
-      "top": 9,
-      "triangles": 420,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n4.npz"
-    },
-    {
-      "id": "broad_n5",
-      "file": "broad_n5.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n5",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.9 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [8.557, 12.251, 9.839],
-      "top": 10.4,
-      "triangles": 404,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n5.npz"
-    },
-    {
-      "id": "broad_n6",
-      "file": "broad_n6.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n6",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 11.9 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [11.428, 13.055, 11.287],
-      "top": 12.8,
-      "triangles": 492,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n6.npz"
-    },
-    {
-      "id": "broad_n7",
-      "file": "broad_n7.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n7",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [10.907, 16.85, 9.95],
-      "top": 12.1,
-      "triangles": 428,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_n7.npz"
-    },
-    {
-      "id": "broad_big_n0",
-      "file": "broad_big_n0.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n0",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 19.1 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [17.613, 20.397, 15.779],
-      "top": 18.4,
-      "triangles": 468,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n0.npz"
-    },
-    {
-      "id": "broad_big_n1",
-      "file": "broad_big_n1.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n1",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [13.453, 19.617, 13.474],
-      "top": 15.3,
-      "triangles": 436,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n1.npz"
-    },
-    {
-      "id": "broad_big_n2",
-      "file": "broad_big_n2.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n2",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [11.836, 18.209, 12.411],
-      "top": 13.8,
-      "triangles": 500,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n2.npz"
-    },
-    {
-      "id": "broad_big_n3",
-      "file": "broad_big_n3.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n3",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [15.733, 19.299, 14.488],
-      "top": 16.8,
-      "triangles": 452,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n3.npz"
-    },
-    {
-      "id": "broad_big_n4",
-      "file": "broad_big_n4.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n4",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 18.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [15.628, 20.614, 15.791],
-      "top": 17.5,
-      "triangles": 508,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n4.npz"
-    },
-    {
-      "id": "broad_big_n5",
-      "file": "broad_big_n5.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n5",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [15.783, 19.913, 15.605],
-      "top": 17.1,
-      "triangles": 468,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_big_n5.npz"
-    },
-    {
-      "id": "broad_far_n0",
-      "file": "broad_far_n0.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n0",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 16.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [14.778, 17.372, 12.666],
-      "top": 16.5,
-      "triangles": 236,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n0.npz"
-    },
-    {
-      "id": "broad_far_n1",
-      "file": "broad_far_n1.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n1",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.3 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [8.043, 10.646, 7.514],
-      "top": 9.2,
-      "triangles": 220,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n1.npz"
-    },
-    {
-      "id": "broad_far_n2",
-      "file": "broad_far_n2.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n2",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.177, 14.234, 9.726],
-      "top": 10.8,
-      "triangles": 236,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n2.npz"
-    },
-    {
-      "id": "broad_far_n3",
-      "file": "broad_far_n3.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n3",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [13.806, 19.023, 14.396],
-      "top": 17.7,
-      "triangles": 228,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n3.npz"
-    },
-    {
-      "id": "broad_far_n4",
-      "file": "broad_far_n4.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n4",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.83, 13.435, 10.352],
-      "top": 11.9,
-      "triangles": 220,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n4.npz"
-    },
-    {
-      "id": "broad_far_n5",
-      "file": "broad_far_n5.glb",
-      "kind": "trees",
-      "label": "Broad leaf tree n5",
-      "description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 13.7 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.032, 15.303, 12.217],
-      "top": 13.8,
-      "triangles": 236,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/broad_far_n5.npz"
-    },
-    {
-      "id": "palm_n0",
-      "file": "palm_n0.glb",
-      "kind": "trees",
-      "label": "Palm n0",
-      "description": "A palm of the plantation (tools/build_trees.py: palm, 6.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [4.653, 7.136, 5.121],
-      "top": 6.4,
-      "triangles": 316,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/palm_n0.npz"
-    },
-    {
-      "id": "palm_n1",
-      "file": "palm_n1.glb",
-      "kind": "trees",
-      "label": "Palm n1",
-      "description": "A palm of the plantation (tools/build_trees.py: palm, 7.9 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [5.524, 8.25, 6.052],
-      "top": 7,
-      "triangles": 336,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/palm_n1.npz"
-    },
-    {
-      "id": "palm_n2",
-      "file": "palm_n2.glb",
-      "kind": "trees",
-      "label": "Palm n2",
-      "description": "A palm of the plantation (tools/build_trees.py: palm, 7.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [5.78, 7.678, 5.887],
-      "top": 7.2,
-      "triangles": 336,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/palm_n2.npz"
-    },
-    {
-      "id": "palm_n3",
-      "file": "palm_n3.glb",
-      "kind": "trees",
-      "label": "Palm n3",
-      "description": "A palm of the plantation (tools/build_trees.py: palm, 9.8 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [7.87, 10.152, 7.947],
-      "top": 10,
-      "triangles": 296,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/palm_n3.npz"
-    },
-    {
-      "id": "bamboo_n0",
-      "file": "bamboo_n0.glb",
-      "kind": "trees",
-      "label": "Bamboo n0",
-      "description": "A bamboo of the plantation (tools/build_trees.py: bamboo, 10.4 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.42, 11.725, 9.235],
-      "top": 10.6,
-      "triangles": 1920,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/bamboo_n0.npz"
-    },
-    {
-      "id": "bamboo_n1",
-      "file": "bamboo_n1.glb",
-      "kind": "trees",
-      "label": "Bamboo n1",
-      "description": "A bamboo of the plantation (tools/build_trees.py: bamboo, 10.6 m), at the origin, unturned; its hull its trunk's wall.",
-      "materials": "library",
-      "size": [9.605, 11.994, 9.924],
-      "top": 10.9,
-      "triangles": 2496,
-      "fits": ["place"],
-      "collision": ["static", "none"],
-      "hull": "hull",
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/bamboo_n1.npz"
-    },
-    {
-      "id": "understory_0",
-      "file": "understory_0.glb",
-      "kind": "trees",
-      "label": "Understory 0",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [4.282, 4.97, 7.962],
-      "top": 8.9,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_0.npz"
-    },
-    {
-      "id": "understory_1",
-      "file": "understory_1.glb",
-      "kind": "trees",
-      "label": "Understory 1",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [5.599, 6.137, 8.244],
-      "top": 11.2,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_1.npz"
-    },
-    {
-      "id": "understory_2",
-      "file": "understory_2.glb",
-      "kind": "trees",
-      "label": "Understory 2",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [2.835, 6.665, 8.343],
-      "top": 9.7,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_2.npz"
-    },
-    {
-      "id": "understory_3",
-      "file": "understory_3.glb",
-      "kind": "trees",
-      "label": "Understory 3",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [4.796, 9.148, 5.303],
-      "top": 7.5,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_3.npz"
-    },
-    {
-      "id": "understory_4",
-      "file": "understory_4.glb",
-      "kind": "trees",
-      "label": "Understory 4",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [5.171, 8.272, 6.387],
-      "top": 7.8,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_4.npz"
-    },
-    {
-      "id": "understory_5",
-      "file": "understory_5.glb",
-      "kind": "trees",
-      "label": "Understory 5",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [7.844, 3.811, 4.301],
-      "top": 8.8,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_5.npz"
-    },
-    {
-      "id": "understory_6",
-      "file": "understory_6.glb",
-      "kind": "trees",
-      "label": "Understory 6",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [7.359, 4.835, 4.628],
-      "top": 8.8,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_6.npz"
-    },
-    {
-      "id": "understory_7",
-      "file": "understory_7.glb",
-      "kind": "trees",
-      "label": "Understory 7",
-      "description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
-      "materials": "library",
-      "size": [6.293, 6.122, 3.986],
-      "top": 9,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["none"],
-      "lights": [],
-      "draw": [0, null],
-      "source": "tools/reference/templates/understory_7.npz"
-    },
-    {
-      "id": "pit_building",
-      "file": "pit_building.glb",
-      "kind": "sheds",
-      "label": "Pit building",
-      "description": "Pit building of the Velopark's paddock: its workshop, its columns and its arched roof over both pit lanes, six blocks of solar panels on the roof as the satellite picture shows them. At its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [35.251, 6.656, 34.62],
-      "top": 36.7,
-      "triangles": 12380,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-8.823, 4.314, -11.468]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-8.407, 4.314, -7.087]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-7.992, 4.314, -2.707]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-7.576, 4.314, 1.673]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-7.16, 4.314, 6.054]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-6.744, 4.314, 10.434]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-12.805, 4.314, -11.089]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-12.389, 4.314, -6.709]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-11.974, 4.314, -2.329]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-11.558, 4.314, 2.051]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-11.142, 4.314, 6.432]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-10.726, 4.314, 10.812]
-        },
-        {
-          "series": "Building lamps",
-          "at": [8.997, 4.314, -13.159]
-        },
-        {
-          "series": "Building lamps",
-          "at": [9.413, 4.314, -8.779]
-        },
-        {
-          "series": "Building lamps",
-          "at": [9.828, 4.314, -4.398]
-        },
-        {
-          "series": "Building lamps",
-          "at": [10.244, 4.314, -0.018]
-        },
-        {
-          "series": "Building lamps",
-          "at": [10.66, 4.314, 4.362]
-        },
-        {
-          "series": "Building lamps",
-          "at": [11.076, 4.314, 8.742]
-        },
-        {
-          "series": "Building lamps",
-          "at": [12.979, 4.314, -13.537]
-        },
-        {
-          "series": "Building lamps",
-          "at": [13.395, 4.314, -9.157]
-        },
-        {
-          "series": "Building lamps",
-          "at": [13.81, 4.314, -4.776]
-        },
-        {
-          "series": "Building lamps",
-          "at": [14.226, 4.314, -0.396]
-        },
-        {
-          "series": "Building lamps",
-          "at": [14.642, 4.314, 3.984]
-        },
-        {
-          "series": "Building lamps",
-          "at": [15.058, 4.314, 8.364]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-3.301, 4.561, -10.435]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-3.017, 4.561, -7.448]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-2.734, 4.561, -4.462]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-2.45, 4.561, -1.475]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-2.167, 4.561, 1.512]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-1.883, 4.561, 4.498]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-1.6, 4.561, 7.485]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-1.316, 4.561, 10.471]
-        },
-        {
-          "series": "Building lamps",
-          "at": [1.279, 4.561, -10.869]
-        },
-        {
-          "series": "Building lamps",
-          "at": [1.562, 4.561, -7.883]
-        },
-        {
-          "series": "Building lamps",
-          "at": [1.846, 4.561, -4.896]
-        },
-        {
-          "series": "Building lamps",
-          "at": [2.129, 4.561, -1.91]
-        },
-        {
-          "series": "Building lamps",
-          "at": [2.413, 4.561, 1.077]
-        },
-        {
-          "series": "Building lamps",
-          "at": [2.696, 4.561, 4.063]
-        },
-        {
-          "series": "Building lamps",
-          "at": [2.98, 4.561, 7.05]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.263, 4.561, 10.037]
-        }
-      ],
-      "source": "tools/reference/templates/pit_building.glb"
-    },
-    {
-      "id": "garage",
-      "file": "garage.glb",
-      "kind": "sheds",
-      "label": "Garage",
-      "description": "Garage of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [11.388, 4.919, 29.512],
-      "top": 30.7,
-      "triangles": 838,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-0.986, 3.241, -10.39]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-0.33, 3.241, -3.514]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.327, 3.241, 3.363]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.983, 3.241, 10.239]
-        }
-      ],
-      "source": "tools/reference/templates/garage.glb"
-    },
-    {
-      "id": "pit_tent",
-      "file": "pit_tent.glb",
-      "kind": "sheds",
-      "label": "Pit tent",
-      "description": "Pit tent of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [13.387, 6, 11.102],
-      "top": 14,
-      "triangles": 3724,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/pit_tent.glb"
-    },
-    {
-      "id": "paddock_building_m",
-      "file": "paddock_building_m.glb",
-      "kind": "sheds",
-      "label": "Paddock building (middle)",
-      "description": "Paddock building (middle) of the Velopark's paddock, whole: its rooms, its roof and the bar at its west end, a terrace under the roof with its posts, tables, chairs and lamps. At its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [32.972, 8.589, 26.952],
-      "top": 33.7,
-      "triangles": 8254,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-12.05, 3.327, -6.858]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-11.271, 3.327, 0.919]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-10.492, 3.327, 8.696]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-5.902, 3.327, -7.351]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-5.165, 3.327, 0.427]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-4.427, 3.327, 8.204]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.245, 3.327, -7.843]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.941, 3.327, -0.065]
-        },
-        {
-          "series": "Building lamps",
-          "at": [1.637, 3.327, 7.713]
-        },
-        {
-          "series": "Building lamps",
-          "at": [6.393, 3.327, -8.336]
-        },
-        {
-          "series": "Building lamps",
-          "at": [7.047, 3.327, -0.557]
-        },
-        {
-          "series": "Building lamps",
-          "at": [7.702, 3.327, 7.221]
-        },
-        {
-          "series": "Building lamps",
-          "at": [11.556, 4.545, -10.656]
-        },
-        {
-          "series": "Building lamps",
-          "at": [11.88, 4.545, -6.669]
-        },
-        {
-          "series": "Building lamps",
-          "at": [12.205, 4.545, -2.682]
-        },
-        {
-          "series": "Building lamps",
-          "at": [12.53, 4.545, 1.305]
-        },
-        {
-          "series": "Building lamps",
-          "at": [12.854, 4.545, 5.291]
-        },
-        {
-          "series": "Building lamps",
-          "at": [13.179, 4.545, 9.278]
-        }
-      ],
-      "source": "tools/reference/templates/paddock_building_m.glb"
-    },
-    {
-      "id": "paddock_building_n",
-      "file": "paddock_building_n.glb",
-      "kind": "sheds",
-      "label": "Paddock building (north)",
-      "description": "Paddock building (north) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [20.421, 7.251, 22.076],
-      "top": 23,
-      "triangles": 1508,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-6.058, 3.332, -2.661]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-5.408, 3.332, 5.917]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-0.116, 3.332, -3.044]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.482, 3.332, 5.531]
-        },
-        {
-          "series": "Building lamps",
-          "at": [5.826, 3.332, -3.428]
-        },
-        {
-          "series": "Building lamps",
-          "at": [6.372, 3.332, 5.146]
-        }
-      ],
-      "source": "tools/reference/templates/paddock_building_n.glb"
-    },
-    {
-      "id": "paddock_building_s",
-      "file": "paddock_building_s.glb",
-      "kind": "sheds",
-      "label": "Paddock building (south)",
-      "description": "Paddock building (south) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [19.944, 6.308, 16.911],
-      "top": 20.8,
-      "triangles": 1460,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-6.178, 2.911, -2.834]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-5.682, 2.911, 4.156]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-0.337, 2.911, -3.371]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.2, 2.911, 3.719]
-        },
-        {
-          "series": "Building lamps",
-          "at": [5.504, 2.911, -3.908]
-        },
-        {
-          "series": "Building lamps",
-          "at": [6.083, 2.911, 3.282]
-        }
-      ],
-      "source": "tools/reference/templates/paddock_building_s.glb"
-    },
-    {
-      "id": "race_control",
-      "file": "race_control.glb",
-      "kind": "sheds",
-      "label": "Race control",
-      "description": "Race control of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [7.4, 9.372, 7.4],
-      "top": 7.7,
-      "triangles": 2154,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [0, 3.44, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 7.94, 0]
-        }
-      ],
-      "source": "tools/reference/templates/race_control.glb"
-    },
-    {
-      "id": "judges_tower_west",
-      "file": "judges_tower_west.glb",
-      "kind": "sheds",
-      "label": "Judges' tower (west)",
-      "description": "Judges' tower (west) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [8.366, 7.52, 3.4],
-      "top": 8.8,
-      "triangles": 996,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [2.483, 6.95, 0]
-        }
-      ],
-      "source": "tools/reference/templates/judges_tower_west.glb"
-    },
-    {
-      "id": "fuel_station",
-      "file": "fuel_station.glb",
-      "kind": "sheds",
-      "label": "Fuel station",
-      "description": "Fuel station of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [34.15, 8.748, 20.15],
-      "top": 35.6,
-      "triangles": 1496,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/fuel_station.glb"
-    },
-    {
-      "id": "timing_desk",
-      "file": "timing_desk.glb",
-      "kind": "statics",
-      "label": "Timing desk and screens",
-      "description": "Timing desk and screens of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [2.616, 1.59, 2.616],
-      "top": 2.8,
-      "triangles": 136,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/timing_desk.glb"
-    },
-    {
-      "id": "stand_1",
-      "file": "stand_1.glb",
-      "kind": "sheds",
-      "label": "Stand",
-      "description": "Stand of the Velopark's paddock, whole: its tiers, its posts and the banner on it. At its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [15.125, 3.56, 20.946],
-      "top": 21.8,
-      "triangles": 1276,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/stand_1.glb"
-    },
-    {
-      "id": "stand_2",
-      "file": "stand_2.glb",
-      "kind": "sheds",
-      "label": "Stand (small)",
-      "description": "Stand (small) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [5.798, 2.954, 10.032],
-      "top": 10.5,
-      "triangles": 612,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/stand_2.glb"
-    },
-    {
-      "id": "banner_fence",
-      "file": "banner_fence.glb",
-      "kind": "statics",
-      "label": "Banner on the fence",
-      "description": "Banner on the fence of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [16.002, 2.093, 3.88],
-      "top": 16.7,
-      "triangles": 4,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/banner_fence.glb"
-    },
-    {
-      "id": "flagpoles",
-      "file": "flagpoles.glb",
-      "kind": "statics",
-      "label": "Flagpoles",
-      "description": "Flagpoles of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [1.18, 10.492, 8.14],
-      "top": 8.5,
-      "triangles": 350,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/flagpoles.glb"
-    },
-    {
-      "id": "pit_entry_fence",
-      "file": "pit_entry_fence.glb",
-      "kind": "statics",
-      "label": "Pit entry fence",
-      "description": "Pit entry fence of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [38.455, 3.988, 119.052],
-      "top": 123.9,
-      "triangles": 2464,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/pit_entry_fence.glb"
-    },
-    {
-      "id": "east_building_m",
-      "file": "east_building_m.glb",
-      "kind": "sheds",
-      "label": "East building (north)",
-      "description": "East building (north) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
-      "materials": "track",
-      "size": [34.788, 7.182, 25.513],
-      "top": 36.2,
-      "triangles": 64,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/east_building_m.glb"
-    },
-    {
-      "id": "east_building_s",
-      "file": "east_building_s.glb",
-      "kind": "sheds",
-      "label": "East building (south)",
-      "description": "East building (south) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
-      "materials": "track",
-      "size": [22.114, 7.899, 37.257],
-      "top": 38.8,
-      "triangles": 64,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/east_building_s.glb"
-    },
-    {
-      "id": "east_building_b",
-      "file": "east_building_b.glb",
-      "kind": "sheds",
-      "label": "East building (small)",
-      "description": "East building (small) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
-      "materials": "track",
-      "size": [7.377, 3.848, 7.111],
-      "top": 7.7,
-      "triangles": 32,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/east_building_b.glb"
-    },
-    {
-      "id": "hotlap_building",
-      "file": "hotlap_building.glb",
-      "kind": "sheds",
-      "label": "Hotlap building",
-      "description": "Hotlap building of the Velopark's paddock, whole: its garages, its columns and walls, its open west end with the mesh fence over its back's low wall and its end wall, and its rounded roof with its gables and the solar panels on its north half. At its own origin.",
-      "materials": "track",
-      "size": [103.796, 7.692, 35.766],
-      "top": 108.7,
-      "triangles": 2472,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "tools/reference/templates/hotlap_building.glb"
-    },
-    {
-      "id": "south_warehouse",
-      "file": "south_warehouse.glb",
-      "kind": "sheds",
-      "label": "South warehouse",
-      "description": "The big warehouse south of the Velopark, beyond the road, as the satellite photo and the onboard videos show it: 121 by 133 m; ribbed light cladding over a precast concrete base, a dark flashing round its parapet, downpipes; green graphics at the east end of its north wall; loading docks with black shelters along its west wall and on its south wall; a ribbed metal roof, a low gable (its ridge east to west) with a vent along it and lighter sheets at its north corners. Its own materials, their pictures made in code. At its own origin, its front (+z) its north side.",
-      "materials": "own",
-      "size": [121.1, 13.5, 132.6],
-      "top": 139.2,
-      "triangles": 1380,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "scripts/south-warehouse.ts"
-    },
-    {
-      "id": "east_shed_n",
-      "file": "east_shed_n.glb",
-      "kind": "sheds",
-      "label": "East shed (north)",
-      "description": "The northern of the three white sheds along the east road, beyond it: 9 by 30 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [9.8, 5.9, 30.8],
-      "top": 32.1,
-      "triangles": 576,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, -11.25]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, -3.75]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, 3.75]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, 11.25]
-        }
-      ],
-      "source": "velopark_outside.glb: EAST_SHED_0_FLOOR, EAST_SHED_0_FRAMES, EAST_SHED_0_GLASS, EAST_SHED_0_INSIDE, EAST_SHED_0_LAMPS, EAST_SHED_0_OPENINGS, EAST_SHED_0_ROOF, EAST_SHED_0_WALLS"
-    },
-    {
-      "id": "east_shed_m",
-      "file": "east_shed_m.glb",
-      "kind": "sheds",
-      "label": "East shed (middle)",
-      "description": "The middle of the three white sheds along the east road, beyond it: 9 by 24 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [9.8, 5.9, 24.8],
-      "top": 25.8,
-      "triangles": 470,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, -8]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, 8]
-        }
-      ],
-      "source": "velopark_outside.glb: EAST_SHED_1_FLOOR, EAST_SHED_1_FRAMES, EAST_SHED_1_GLASS, EAST_SHED_1_INSIDE, EAST_SHED_1_LAMPS, EAST_SHED_1_OPENINGS, EAST_SHED_1_ROOF, EAST_SHED_1_WALLS"
-    },
-    {
-      "id": "east_shed_s",
-      "file": "east_shed_s.glb",
-      "kind": "sheds",
-      "label": "East shed (south)",
-      "description": "The southern of the three white sheds along the east road, beyond it: 9 by 14 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [9.8, 5.9, 14.8],
-      "top": 15.4,
-      "triangles": 268,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, -3.5]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.07, 3.5]
-        }
-      ],
-      "source": "velopark_outside.glb: EAST_SHED_2_FLOOR, EAST_SHED_2_FRAMES, EAST_SHED_2_GLASS, EAST_SHED_2_INSIDE, EAST_SHED_2_LAMPS, EAST_SHED_2_OPENINGS, EAST_SHED_2_ROOF, EAST_SHED_2_WALLS"
-    },
-    {
-      "id": "farm_house",
-      "file": "farm_house.glb",
-      "kind": "sheds",
-      "label": "Farm house",
-      "description": "The house of the yard north of the pond, its plastered lean-to on its west side; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [15.45, 6.1, 11.6],
-      "top": 21.3,
-      "triangles": 578,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [0, 2.87, -2.65]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 2.87, 2.65]
-        }
-      ],
-      "source": "velopark_outside.glb: FARM_HOUSE_FLOOR, FARM_HOUSE_FRAMES, FARM_HOUSE_GLASS, FARM_HOUSE_INSIDE, FARM_HOUSE_LAMPS, FARM_HOUSE_OPENINGS, FARM_HOUSE_ROOF, FARM_HOUSE_WALLS, FARM_LEANTO_OPENINGS, FARM_LEANTO_ROOF, FARM_LEANTO_WALLS"
-    },
-    {
-      "id": "farm_barn",
-      "file": "farm_barn.glb",
-      "kind": "sheds",
-      "label": "Farm barn",
-      "description": "The white barn of the yard north of the pond, its doors on its south and west sides; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [15, 7.9, 19.5],
-      "top": 20.3,
-      "triangles": 406,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-3.5, 4.07, -6.167]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-3.5, 4.07, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-3.5, 4.07, 6.167]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.5, 4.07, -6.167]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.5, 4.07, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.5, 4.07, 6.167]
-        }
-      ],
-      "source": "velopark_outside.glb: FARM_BARN_FLOOR, FARM_BARN_FRAMES, FARM_BARN_GLASS, FARM_BARN_INSIDE, FARM_BARN_LAMPS, FARM_BARN_OPENINGS, FARM_BARN_ROOF, FARM_BARN_WALLS"
-    },
-    {
-      "id": "farm_low",
-      "file": "farm_low.glb",
-      "kind": "sheds",
-      "label": "Farm building (low)",
-      "description": "The low white building of the yard north of the pond, its windows along its south side; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [18, 5.3, 11.5],
-      "top": 18.8,
-      "triangles": 480,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-4.25, 2.67, -2.625]
-        },
-        {
-          "series": "Building lamps",
-          "at": [-4.25, 2.67, 2.625]
-        },
-        {
-          "series": "Building lamps",
-          "at": [4.25, 2.67, -2.625]
-        },
-        {
-          "series": "Building lamps",
-          "at": [4.25, 2.67, 2.625]
-        }
-      ],
-      "source": "velopark_outside.glb: FARM_LOW_FLOOR, FARM_LOW_FRAMES, FARM_LOW_GLASS, FARM_LOW_INSIDE, FARM_LOW_LAMPS, FARM_LOW_OPENINGS, FARM_LOW_ROOF, FARM_LOW_WALLS"
-    },
-    {
-      "id": "farm_tent",
-      "file": "farm_tent.glb",
-      "kind": "statics",
-      "label": "Farm tent",
-      "description": "The white tent of the yard north of the pond: a fabric hip roof on four steel poles (their feet half a metre into the ground), as tools/build_outside.py made it, at its own origin.",
-      "materials": "track",
-      "size": [9.9, 5.5, 9.9],
-      "top": 10.3,
-      "triangles": 60,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "velopark_outside.glb: TENT_POLES, TENT_TOP"
-    },
-    {
-      "id": "bins",
-      "file": "bins.glb",
-      "kind": "statics",
-      "label": "Round bins",
-      "description": "Sixteen round steel bins, four by four, on their concrete slab, north of the pond; as tools/build_outside.py made them, at their own origin.",
-      "materials": "track",
-      "size": [15.1, 5.6, 14],
-      "top": 15.8,
-      "triangles": 1258,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "velopark_outside.glb: BINS, BINS_SLAB"
-    },
-    {
-      "id": "blue_shed",
-      "file": "blue_shed.glb",
-      "kind": "sheds",
-      "label": "Blue shed",
-      "description": "The open shed beyond K1_T5: a wall of light blue sheets along its track side and its south end, and over it a sheet roof on timber posts and trusses (the posts and the wall 0.6 m into the ground, for its slope); as tools/build_outside.py made it, at its own origin.",
-      "materials": "track",
-      "size": [8.2, 5.6, 21.7],
-      "top": 22.6,
-      "triangles": 704,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "velopark_outside.glb: SHED_BLUE_WALL, SHED_TIMBER, SHED_ROOF"
-    },
-    {
-      "id": "house_1",
-      "file": "house_1.glb",
-      "kind": "sheds",
-      "label": "House in the wood (west)",
-      "description": "The western of the two houses in the south east's wood, under a tiled hip roof; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [15, 6.4, 10],
-      "top": 15.7,
-      "triangles": 652,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-3.5, 2.77, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.5, 2.77, 0]
-        }
-      ],
-      "source": "velopark_outside.glb: HOUSE_1_FLOOR, HOUSE_1_FRAMES, HOUSE_1_GLASS, HOUSE_1_INSIDE, HOUSE_1_LAMPS, HOUSE_1_OPENINGS, HOUSE_1_ROOF, HOUSE_1_WALLS"
-    },
-    {
-      "id": "house_2",
-      "file": "house_2.glb",
-      "kind": "sheds",
-      "label": "House in the wood (east)",
-      "description": "The eastern of the two houses in the south east's wood, under a tiled gable roof; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [14, 6.4, 10],
-      "top": 14.6,
-      "triangles": 424,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-3.25, 2.77, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [3.25, 2.77, 0]
-        }
-      ],
-      "source": "velopark_outside.glb: HOUSE_2_FLOOR, HOUSE_2_FRAMES, HOUSE_2_GLASS, HOUSE_2_INSIDE, HOUSE_2_LAMPS, HOUSE_2_OPENINGS, HOUSE_2_ROOF, HOUSE_2_WALLS"
-    },
-    {
-      "id": "velogrill",
-      "file": "velogrill.glb",
-      "kind": "sheds",
-      "label": "Velogrill",
-      "description": "The Velogrill in the south east's wood: an L of two plastered wings under dark tiled hip roofs; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
-      "materials": "track",
-      "size": [23, 7.2, 25.877],
-      "top": 42.4,
-      "triangles": 1304,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [
-        {
-          "series": "Building lamps",
-          "at": [-7.333, 3.17, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0, 3.17, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [7.333, 3.17, 0]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.665, 3.198, -16.877]
-        },
-        {
-          "series": "Building lamps",
-          "at": [0.665, 3.198, -10.877]
-        }
-      ],
-      "source": "velopark_outside.glb: VELOGRILL_A_FLOOR, VELOGRILL_A_FRAMES, VELOGRILL_A_GLASS, VELOGRILL_A_INSIDE, VELOGRILL_A_LAMPS, VELOGRILL_A_OPENINGS, VELOGRILL_A_ROOF, VELOGRILL_A_WALLS, VELOGRILL_B_FLOOR, VELOGRILL_B_FRAMES, VELOGRILL_B_GLASS, VELOGRILL_B_INSIDE, VELOGRILL_B_LAMPS, VELOGRILL_B_ROOF, VELOGRILL_B_WALLS"
-    },
-    {
-      "id": "sports_court",
-      "file": "sports_court.glb",
-      "kind": "statics",
-      "label": "Sports court fence",
-      "description": "The tall wire fence round the sports court between the houses in the south east's wood, on steel posts (their feet half a metre into the ground, the mesh 0.2 m, for its slope); its turf a paved area of its own. As tools/build_outside.py made it, at its own origin.",
-      "materials": "track",
-      "size": [24.073, 4.55, 14.08],
-      "top": 25.1,
-      "triangles": 432,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "velopark_outside.glb: COURT_POSTS, COURT_MESH"
-    },
-    {
-      "id": "sliding_gate",
-      "file": "sliding_gate.glb",
-      "kind": "statics",
-      "label": "Sliding gate",
-      "description": "The south fence's gate at the pit exit (R27): a mesh panel in a steel frame on wheels, slid open beside the opening along the fence, and its rail across the opening; as tools/build_outside.py made it, at its own origin (its panel's middle), along x.",
-      "materials": "track",
-      "size": [19.33, 2.072, 0.231],
-      "top": 29.6,
-      "triangles": 168,
-      "fits": ["place"],
-      "collision": ["model"],
-      "lights": [],
-      "source": "velopark_outside.glb: GATE_SOUTH, GATE_SOUTH_MESH"
-    },
-    {
-      "id": "globe_lamp",
-      "file": "globe_lamp.glb",
-      "kind": "statics",
-      "label": "Globe lamp",
-      "description": "A globe lamp on its thin pole, 2.85 m high, as on the vp_1000's fence by the south east's wood; laid along a curve, a row of them.",
-      "materials": "track",
-      "size": [0.34, 2.95, 0.323],
-      "top": 0.4,
-      "triangles": 122,
-      "fits": ["place"],
-      "collision": ["none"],
-      "draw": [0, 450],
-      "lights": [],
-      "source": "velopark_outside.glb: LAMPS_TRACK"
-    }
-  ]
+	"about": "Every model the editor places and the build lays, each its .glb beside this file: at the origin on the ground, its front along +z, y up, metres. models/README.md says what each field is.",
+	"models": [
+		{
+			"id": "cone",
+			"file": "cone.glb",
+			"kind": "cones",
+			"label": "Cone",
+			"description": "A traffic cone, orange.",
+			"materials": "library",
+			"size": [0.4, 0.7, 0.4],
+			"top": 0.5,
+			"triangles": 460,
+			"fits": ["place"],
+			"collision": ["none", "static", "dynamic", "wall"],
+			"hull": "hull",
+			"lights": [],
+			"source": "tools/reference/templates/cone.npz"
+		},
+		{
+			"id": "board",
+			"file": "board.glb",
+			"kind": "boards",
+			"label": "Marker board",
+			"description": "A marker board on a stand: its face toward its heading.",
+			"materials": "library",
+			"size": [0.604, 0.647, 0.127],
+			"top": 0.7,
+			"triangles": 12,
+			"fits": ["place"],
+			"collision": ["none", "static", "dynamic", "wall"],
+			"hull": "hull",
+			"lights": [],
+			"source": "tools/reference/templates/board.npz"
+		},
+		{
+			"id": "light_pole",
+			"file": "light_pole.glb",
+			"kind": "poles",
+			"label": "Light pole",
+			"description": "A light pole, 17 m high, with 2 night lights at its top (Custom Shaders Patch): a flood beam facing forward along its heading and down onto the track, and a spill straight down round it. Its tyres are a tyre stack of its own.",
+			"materials": "library",
+			"size": [2.06, 17.443, 1.222],
+			"top": 2.2,
+			"triangles": 1416,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [
+				{
+					"series": "Pole flood beams",
+					"at": [0.033, 16.312, 0.398],
+					"facing": [-0.058, -0.815, 0.576]
+				},
+				{
+					"series": "Pole spill",
+					"at": [0.033, 16.312, 0.398],
+					"facing": [0, -1, 0]
+				}
+			],
+			"source": "tools/reference/templates/light_pole.npz"
+		},
+		{
+			"id": "tyre_stack",
+			"file": "tyre_stack.glb",
+			"kind": "tyres",
+			"label": "Tyre stack",
+			"description": "Three tyres stacked, the tyre walls' stack: laid along a curve, a tyre wall.",
+			"materials": "library",
+			"size": [0.624, 0.623, 0.627],
+			"top": 0.7,
+			"triangles": 520,
+			"fits": ["place"],
+			"collision": ["none", "static", "wall"],
+			"lights": [],
+			"lods": {
+				"tyres": [0, 45],
+				"fill": [45, 2000]
+			},
+			"source": "tools/reference/templates/tyre_stack.npz"
+		},
+		{
+			"id": "gantry",
+			"file": "gantry.glb",
+			"kind": "gantries",
+			"label": "Start gantry",
+			"materials": "own",
+			"size": [19.14, 5.32, 2.65],
+			"top": 20,
+			"triangles": 4240,
+			"fits": ["place"],
+			"collision": ["none", "static"],
+			"lights": [],
+			"source": "velopark_gantry_1000.glb",
+			"wrong_faces": {
+				"against": 0,
+				"thin": 0
+			}
+		},
+		{
+			"id": "kart",
+			"file": "kart.glb",
+			"kind": "karts",
+			"label": "Rental kart",
+			"materials": "own",
+			"size": [1.44, 0.58, 1.91],
+			"top": 2.5,
+			"triangles": 34478,
+			"fits": ["place"],
+			"collision": ["none", "static", "dynamic"],
+			"lights": [],
+			"draw": [0, 60],
+			"source": "the kart project: techspeed_rental_11hp_LOD_C.kn5",
+			"wrong_faces": {
+				"against": 99,
+				"thin": 2274
+			}
+		},
+		{
+			"id": "fence_concrete",
+			"file": "fence_concrete.glb",
+			"kind": "fences",
+			"label": "Fence, concrete posts",
+			"materials": "own",
+			"size": [2.72, 2.3, 0.12],
+			"top": 2.9,
+			"triangles": 28,
+			"fits": ["bend", "place"],
+			"collision": ["none", "wall"],
+			"lights": [],
+			"source": "tools/build_outside.py: fence()",
+			"wrong_faces": {
+				"against": 0,
+				"thin": 0
+			}
+		},
+		{
+			"id": "fence_steel",
+			"file": "fence_steel.glb",
+			"kind": "fences",
+			"label": "Fence, steel posts",
+			"materials": "own",
+			"size": [2.66, 2.3, 0.05],
+			"top": 2.8,
+			"triangles": 60,
+			"fits": ["bend", "place"],
+			"collision": ["none", "wall"],
+			"lights": [],
+			"source": "tools/build_outside.py: fence(metal=True)",
+			"wrong_faces": {
+				"against": 0,
+				"thin": 0
+			}
+		},
+		{
+			"id": "marshal_post",
+			"file": "marshal_post.glb",
+			"kind": "statics",
+			"label": "Marshal shelter",
+			"description": "A flag marshal's shelter: a white canopy on four poles, braced from its back; its front to the track. Its chair and its cones are objects of their own.",
+			"materials": "library",
+			"size": [3.489, 2.92, 4.667],
+			"top": 6.5,
+			"triangles": 106,
+			"fits": ["place"],
+			"collision": ["none", "static"],
+			"lights": [],
+			"source": "tools/reference/templates/marshal_post.npz"
+		},
+		{
+			"id": "chair",
+			"file": "chair.glb",
+			"kind": "statics",
+			"label": "Chair",
+			"description": "A plain steel chair: its front the way one sits in it.",
+			"materials": "library",
+			"size": [0.44, 0.9, 0.5],
+			"top": 0.6,
+			"triangles": 72,
+			"fits": ["place"],
+			"collision": ["none", "static"],
+			"lights": [],
+			"source": "tools/reference/templates/chair.npz"
+		},
+		{
+			"id": "timing_table",
+			"file": "timing_table.glb",
+			"kind": "statics",
+			"label": "Timing table",
+			"description": "A table with two TVs, their screens forward: the session's times and the HotLap Velopark site's page (Custom Shaders Patch displays, as on the table by the hotlap's building).",
+			"materials": "library",
+			"size": [2.9, 1.59, 0.8],
+			"top": 3.1,
+			"triangles": 136,
+			"fits": ["place"],
+			"collision": ["none", "static"],
+			"lights": [],
+			"source": "tools/reference/templates/timing_table.npz"
+		},
+		{
+			"id": "open_passage",
+			"file": "open_passage.glb",
+			"kind": "sheds",
+			"label": "Open passage",
+			"description": "A walk-through passage: two side walls under a straight concrete slab, open at its front and its back (one walks through it front to back), 6.4 m across, 7.4 m long.",
+			"materials": "library",
+			"size": [6.8, 3.25, 7.8],
+			"top": 8.2,
+			"triangles": 48,
+			"fits": ["place"],
+			"collision": ["none", "static"],
+			"lights": [],
+			"source": "tools/reference/templates/open_passage.npz"
+		},
+		{
+			"id": "euca_0",
+			"file": "euca_0.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 0",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 31.2 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.378, 33.991, 5.391],
+			"top": 6.1,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_0.npz"
+		},
+		{
+			"id": "euca_1",
+			"file": "euca_1.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 1",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 32.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.622, 35.306, 4.487],
+			"top": 6.4,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_1.npz"
+		},
+		{
+			"id": "euca_2",
+			"file": "euca_2.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 2",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 36.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [5.154, 38.759, 4.628],
+			"top": 5.8,
+			"triangles": 116,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_2.npz"
+		},
+		{
+			"id": "euca_3",
+			"file": "euca_3.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 3",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 33.1 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [6.059, 35.778, 5.042],
+			"top": 6.7,
+			"triangles": 116,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_3.npz"
+		},
+		{
+			"id": "euca_4",
+			"file": "euca_4.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 4",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.2 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.571, 36.735, 5.601],
+			"top": 6,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_4.npz"
+		},
+		{
+			"id": "euca_5",
+			"file": "euca_5.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 5",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 29.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.945, 31.741, 5.052],
+			"top": 6.3,
+			"triangles": 116,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_5.npz"
+		},
+		{
+			"id": "euca_6",
+			"file": "euca_6.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 6",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 33.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.417, 35.727, 5.83],
+			"top": 6.6,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_6.npz"
+		},
+		{
+			"id": "euca_7",
+			"file": "euca_7.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 7",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [5.074, 36.55, 5.051],
+			"top": 6.1,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_7.npz"
+		},
+		{
+			"id": "euca_8",
+			"file": "euca_8.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 8",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.549, 37.14, 5.814],
+			"top": 6.1,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_8.npz"
+		},
+		{
+			"id": "euca_9",
+			"file": "euca_9.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 9",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 31.5 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.715, 33.924, 4.701],
+			"top": 5.7,
+			"triangles": 116,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_9.npz"
+		},
+		{
+			"id": "euca_10",
+			"file": "euca_10.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 10",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 34.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [5.01, 36.913, 4.733],
+			"top": 5.7,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_10.npz"
+		},
+		{
+			"id": "euca_11",
+			"file": "euca_11.glb",
+			"kind": "trees",
+			"label": "Eucalyptus 11",
+			"description": "A eucalyptus of the plantation (tools/build_trees.py: euca, 27.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.46, 29.379, 4.385],
+			"top": 5,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_11.npz"
+		},
+		{
+			"id": "euca_young_0",
+			"file": "euca_young_0.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 0",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 12.1 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [3.991, 13.956, 3.865],
+			"top": 4.9,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_0.npz"
+		},
+		{
+			"id": "euca_young_1",
+			"file": "euca_young_1.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 1",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 7.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [3.103, 9.319, 3.758],
+			"top": 4.6,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_1.npz"
+		},
+		{
+			"id": "euca_young_2",
+			"file": "euca_young_2.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 2",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 7.3 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [3.606, 8.911, 3.807],
+			"top": 4.7,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_2.npz"
+		},
+		{
+			"id": "euca_young_3",
+			"file": "euca_young_3.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 3",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 13.0 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [3.496, 14.872, 4.622],
+			"top": 5.3,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_3.npz"
+		},
+		{
+			"id": "euca_young_4",
+			"file": "euca_young_4.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 4",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 11.5 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [2.756, 13.448, 3.817],
+			"top": 4.9,
+			"triangles": 130,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_4.npz"
+		},
+		{
+			"id": "euca_young_5",
+			"file": "euca_young_5.glb",
+			"kind": "trees",
+			"label": "Young eucalyptus 5",
+			"description": "A young eucalyptus of the plantation (tools/build_trees.py: young, 6.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.33, 8.811, 3.59],
+			"top": 5.5,
+			"triangles": 102,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/euca_young_5.npz"
+		},
+		{
+			"id": "broad_0",
+			"file": "broad_0.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 0",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.3 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [8.057, 10.339, 8.428],
+			"top": 9.8,
+			"triangles": 468,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_0.npz"
+		},
+		{
+			"id": "broad_1",
+			"file": "broad_1.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 1",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [12.554, 13.945, 11.895],
+			"top": 13.5,
+			"triangles": 412,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_1.npz"
+		},
+		{
+			"id": "broad_2",
+			"file": "broad_2.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 2",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.2 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.717, 15.491, 11.165],
+			"top": 12,
+			"triangles": 500,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_2.npz"
+		},
+		{
+			"id": "broad_3",
+			"file": "broad_3.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 3",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [8.098, 10.63, 8.325],
+			"top": 9.2,
+			"triangles": 428,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_3.npz"
+		},
+		{
+			"id": "broad_4",
+			"file": "broad_4.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 4",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 13.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.97, 14.581, 10.289],
+			"top": 11.5,
+			"triangles": 436,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_4.npz"
+		},
+		{
+			"id": "broad_5",
+			"file": "broad_5.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 5",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.0 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [11.82, 16.335, 11.817],
+			"top": 13.3,
+			"triangles": 404,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_5.npz"
+		},
+		{
+			"id": "broad_6",
+			"file": "broad_6.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 6",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.9 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.036, 12.762, 9.962],
+			"top": 12,
+			"triangles": 412,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_6.npz"
+		},
+		{
+			"id": "broad_7",
+			"file": "broad_7.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree 7",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.0 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.666, 16.565, 11.758],
+			"top": 13,
+			"triangles": 436,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_7.npz"
+		},
+		{
+			"id": "broad_n0",
+			"file": "broad_n0.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n0",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [11.632, 16.082, 11.985],
+			"top": 14.3,
+			"triangles": 516,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n0.npz"
+		},
+		{
+			"id": "broad_n1",
+			"file": "broad_n1.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n1",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.072, 12.256, 10.257],
+			"top": 11.7,
+			"triangles": 460,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n1.npz"
+		},
+		{
+			"id": "broad_n2",
+			"file": "broad_n2.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n2",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [11.352, 13.84, 11.179],
+			"top": 12.7,
+			"triangles": 452,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n2.npz"
+		},
+		{
+			"id": "broad_n3",
+			"file": "broad_n3.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n3",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.9 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.603, 14.591, 10.776],
+			"top": 11.6,
+			"triangles": 404,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n3.npz"
+		},
+		{
+			"id": "broad_n4",
+			"file": "broad_n4.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n4",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 9.3 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [7.745, 10.538, 7.373],
+			"top": 9,
+			"triangles": 420,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n4.npz"
+		},
+		{
+			"id": "broad_n5",
+			"file": "broad_n5.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n5",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.9 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [8.557, 12.251, 9.839],
+			"top": 10.4,
+			"triangles": 404,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n5.npz"
+		},
+		{
+			"id": "broad_n6",
+			"file": "broad_n6.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n6",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 11.9 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [11.428, 13.055, 11.287],
+			"top": 12.8,
+			"triangles": 492,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n6.npz"
+		},
+		{
+			"id": "broad_n7",
+			"file": "broad_n7.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n7",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 14.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [10.907, 16.85, 9.95],
+			"top": 12.1,
+			"triangles": 428,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_n7.npz"
+		},
+		{
+			"id": "broad_big_n0",
+			"file": "broad_big_n0.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n0",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 19.1 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [17.613, 20.397, 15.779],
+			"top": 18.4,
+			"triangles": 468,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n0.npz"
+		},
+		{
+			"id": "broad_big_n1",
+			"file": "broad_big_n1.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n1",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [13.453, 19.617, 13.474],
+			"top": 15.3,
+			"triangles": 436,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n1.npz"
+		},
+		{
+			"id": "broad_big_n2",
+			"file": "broad_big_n2.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n2",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 15.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [11.836, 18.209, 12.411],
+			"top": 13.8,
+			"triangles": 500,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n2.npz"
+		},
+		{
+			"id": "broad_big_n3",
+			"file": "broad_big_n3.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n3",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [15.733, 19.299, 14.488],
+			"top": 16.8,
+			"triangles": 452,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n3.npz"
+		},
+		{
+			"id": "broad_big_n4",
+			"file": "broad_big_n4.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n4",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 18.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [15.628, 20.614, 15.791],
+			"top": 17.5,
+			"triangles": 508,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n4.npz"
+		},
+		{
+			"id": "broad_big_n5",
+			"file": "broad_big_n5.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n5",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [15.783, 19.913, 15.605],
+			"top": 17.1,
+			"triangles": 468,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_big_n5.npz"
+		},
+		{
+			"id": "broad_far_n0",
+			"file": "broad_far_n0.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n0",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 16.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [14.778, 17.372, 12.666],
+			"top": 16.5,
+			"triangles": 236,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n0.npz"
+		},
+		{
+			"id": "broad_far_n1",
+			"file": "broad_far_n1.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n1",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 10.3 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [8.043, 10.646, 7.514],
+			"top": 9.2,
+			"triangles": 220,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n1.npz"
+		},
+		{
+			"id": "broad_far_n2",
+			"file": "broad_far_n2.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n2",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.177, 14.234, 9.726],
+			"top": 10.8,
+			"triangles": 236,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n2.npz"
+		},
+		{
+			"id": "broad_far_n3",
+			"file": "broad_far_n3.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n3",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 17.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [13.806, 19.023, 14.396],
+			"top": 17.7,
+			"triangles": 228,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n3.npz"
+		},
+		{
+			"id": "broad_far_n4",
+			"file": "broad_far_n4.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n4",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 12.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.83, 13.435, 10.352],
+			"top": 11.9,
+			"triangles": 220,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n4.npz"
+		},
+		{
+			"id": "broad_far_n5",
+			"file": "broad_far_n5.glb",
+			"kind": "trees",
+			"label": "Broad leaf tree n5",
+			"description": "A broad leaf tree of the plantation (tools/build_trees.py: broad, 13.7 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.032, 15.303, 12.217],
+			"top": 13.8,
+			"triangles": 236,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/broad_far_n5.npz"
+		},
+		{
+			"id": "palm_n0",
+			"file": "palm_n0.glb",
+			"kind": "trees",
+			"label": "Palm n0",
+			"description": "A palm of the plantation (tools/build_trees.py: palm, 6.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [4.653, 7.136, 5.121],
+			"top": 6.4,
+			"triangles": 316,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/palm_n0.npz"
+		},
+		{
+			"id": "palm_n1",
+			"file": "palm_n1.glb",
+			"kind": "trees",
+			"label": "Palm n1",
+			"description": "A palm of the plantation (tools/build_trees.py: palm, 7.9 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [5.524, 8.25, 6.052],
+			"top": 7,
+			"triangles": 336,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/palm_n1.npz"
+		},
+		{
+			"id": "palm_n2",
+			"file": "palm_n2.glb",
+			"kind": "trees",
+			"label": "Palm n2",
+			"description": "A palm of the plantation (tools/build_trees.py: palm, 7.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [5.78, 7.678, 5.887],
+			"top": 7.2,
+			"triangles": 336,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/palm_n2.npz"
+		},
+		{
+			"id": "palm_n3",
+			"file": "palm_n3.glb",
+			"kind": "trees",
+			"label": "Palm n3",
+			"description": "A palm of the plantation (tools/build_trees.py: palm, 9.8 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [7.87, 10.152, 7.947],
+			"top": 10,
+			"triangles": 296,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/palm_n3.npz"
+		},
+		{
+			"id": "bamboo_n0",
+			"file": "bamboo_n0.glb",
+			"kind": "trees",
+			"label": "Bamboo n0",
+			"description": "A bamboo of the plantation (tools/build_trees.py: bamboo, 10.4 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.42, 11.725, 9.235],
+			"top": 10.6,
+			"triangles": 1920,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/bamboo_n0.npz"
+		},
+		{
+			"id": "bamboo_n1",
+			"file": "bamboo_n1.glb",
+			"kind": "trees",
+			"label": "Bamboo n1",
+			"description": "A bamboo of the plantation (tools/build_trees.py: bamboo, 10.6 m), at the origin, unturned; its hull its trunk's wall.",
+			"materials": "library",
+			"size": [9.605, 11.994, 9.924],
+			"top": 10.9,
+			"triangles": 2496,
+			"fits": ["place"],
+			"collision": ["static", "none"],
+			"hull": "hull",
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/bamboo_n1.npz"
+		},
+		{
+			"id": "understory_0",
+			"file": "understory_0.glb",
+			"kind": "trees",
+			"label": "Understory 0",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [4.282, 4.97, 7.962],
+			"top": 8.9,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_0.npz"
+		},
+		{
+			"id": "understory_1",
+			"file": "understory_1.glb",
+			"kind": "trees",
+			"label": "Understory 1",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [5.599, 6.137, 8.244],
+			"top": 11.2,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_1.npz"
+		},
+		{
+			"id": "understory_2",
+			"file": "understory_2.glb",
+			"kind": "trees",
+			"label": "Understory 2",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [2.835, 6.665, 8.343],
+			"top": 9.7,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_2.npz"
+		},
+		{
+			"id": "understory_3",
+			"file": "understory_3.glb",
+			"kind": "trees",
+			"label": "Understory 3",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [4.796, 9.148, 5.303],
+			"top": 7.5,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_3.npz"
+		},
+		{
+			"id": "understory_4",
+			"file": "understory_4.glb",
+			"kind": "trees",
+			"label": "Understory 4",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [5.171, 8.272, 6.387],
+			"top": 7.8,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_4.npz"
+		},
+		{
+			"id": "understory_5",
+			"file": "understory_5.glb",
+			"kind": "trees",
+			"label": "Understory 5",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [7.844, 3.811, 4.301],
+			"top": 8.8,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_5.npz"
+		},
+		{
+			"id": "understory_6",
+			"file": "understory_6.glb",
+			"kind": "trees",
+			"label": "Understory 6",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [7.359, 4.835, 4.628],
+			"top": 8.8,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_6.npz"
+		},
+		{
+			"id": "understory_7",
+			"file": "understory_7.glb",
+			"kind": "trees",
+			"label": "Understory 7",
+			"description": "A mass of leaf clumps under the plantation's trees, round a tree's foot.",
+			"materials": "library",
+			"size": [6.293, 6.122, 3.986],
+			"top": 9,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["none"],
+			"lights": [],
+			"draw": [0, null],
+			"source": "tools/reference/templates/understory_7.npz"
+		},
+		{
+			"id": "pit_building",
+			"file": "pit_building.glb",
+			"kind": "sheds",
+			"label": "Pit building",
+			"description": "Pit building of the Velopark's paddock: its workshop, its columns and its arched roof over both pit lanes, six blocks of solar panels on the roof as the satellite picture shows them. At its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [35.251, 6.656, 34.62],
+			"top": 36.7,
+			"triangles": 12380,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-8.823, 4.314, -11.468]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-8.407, 4.314, -7.087]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-7.992, 4.314, -2.707]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-7.576, 4.314, 1.673]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-7.16, 4.314, 6.054]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-6.744, 4.314, 10.434]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-12.805, 4.314, -11.089]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-12.389, 4.314, -6.709]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-11.974, 4.314, -2.329]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-11.558, 4.314, 2.051]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-11.142, 4.314, 6.432]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-10.726, 4.314, 10.812]
+				},
+				{
+					"series": "Building lamps",
+					"at": [8.997, 4.314, -13.159]
+				},
+				{
+					"series": "Building lamps",
+					"at": [9.413, 4.314, -8.779]
+				},
+				{
+					"series": "Building lamps",
+					"at": [9.828, 4.314, -4.398]
+				},
+				{
+					"series": "Building lamps",
+					"at": [10.244, 4.314, -0.018]
+				},
+				{
+					"series": "Building lamps",
+					"at": [10.66, 4.314, 4.362]
+				},
+				{
+					"series": "Building lamps",
+					"at": [11.076, 4.314, 8.742]
+				},
+				{
+					"series": "Building lamps",
+					"at": [12.979, 4.314, -13.537]
+				},
+				{
+					"series": "Building lamps",
+					"at": [13.395, 4.314, -9.157]
+				},
+				{
+					"series": "Building lamps",
+					"at": [13.81, 4.314, -4.776]
+				},
+				{
+					"series": "Building lamps",
+					"at": [14.226, 4.314, -0.396]
+				},
+				{
+					"series": "Building lamps",
+					"at": [14.642, 4.314, 3.984]
+				},
+				{
+					"series": "Building lamps",
+					"at": [15.058, 4.314, 8.364]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-3.301, 4.561, -10.435]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-3.017, 4.561, -7.448]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-2.734, 4.561, -4.462]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-2.45, 4.561, -1.475]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-2.167, 4.561, 1.512]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-1.883, 4.561, 4.498]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-1.6, 4.561, 7.485]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-1.316, 4.561, 10.471]
+				},
+				{
+					"series": "Building lamps",
+					"at": [1.279, 4.561, -10.869]
+				},
+				{
+					"series": "Building lamps",
+					"at": [1.562, 4.561, -7.883]
+				},
+				{
+					"series": "Building lamps",
+					"at": [1.846, 4.561, -4.896]
+				},
+				{
+					"series": "Building lamps",
+					"at": [2.129, 4.561, -1.91]
+				},
+				{
+					"series": "Building lamps",
+					"at": [2.413, 4.561, 1.077]
+				},
+				{
+					"series": "Building lamps",
+					"at": [2.696, 4.561, 4.063]
+				},
+				{
+					"series": "Building lamps",
+					"at": [2.98, 4.561, 7.05]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.263, 4.561, 10.037]
+				}
+			],
+			"source": "tools/reference/templates/pit_building.glb"
+		},
+		{
+			"id": "garage",
+			"file": "garage.glb",
+			"kind": "sheds",
+			"label": "Garage",
+			"description": "Garage of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [11.388, 4.919, 29.512],
+			"top": 30.7,
+			"triangles": 838,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-0.986, 3.241, -10.39]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-0.33, 3.241, -3.514]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.327, 3.241, 3.363]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.983, 3.241, 10.239]
+				}
+			],
+			"source": "tools/reference/templates/garage.glb"
+		},
+		{
+			"id": "pit_tent",
+			"file": "pit_tent.glb",
+			"kind": "sheds",
+			"label": "Pit tent",
+			"description": "Pit tent of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [13.387, 6, 11.102],
+			"top": 14,
+			"triangles": 3724,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/pit_tent.glb"
+		},
+		{
+			"id": "paddock_building_m",
+			"file": "paddock_building_m.glb",
+			"kind": "sheds",
+			"label": "Paddock building (middle)",
+			"description": "Paddock building (middle) of the Velopark's paddock, whole: its rooms, its roof and the bar at its west end, a terrace under the roof with its posts, tables, chairs and lamps. At its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [32.972, 8.589, 26.952],
+			"top": 33.7,
+			"triangles": 8254,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-12.05, 3.327, -6.858]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-11.271, 3.327, 0.919]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-10.492, 3.327, 8.696]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-5.902, 3.327, -7.351]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-5.165, 3.327, 0.427]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-4.427, 3.327, 8.204]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.245, 3.327, -7.843]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.941, 3.327, -0.065]
+				},
+				{
+					"series": "Building lamps",
+					"at": [1.637, 3.327, 7.713]
+				},
+				{
+					"series": "Building lamps",
+					"at": [6.393, 3.327, -8.336]
+				},
+				{
+					"series": "Building lamps",
+					"at": [7.047, 3.327, -0.557]
+				},
+				{
+					"series": "Building lamps",
+					"at": [7.702, 3.327, 7.221]
+				},
+				{
+					"series": "Building lamps",
+					"at": [11.556, 4.545, -10.656]
+				},
+				{
+					"series": "Building lamps",
+					"at": [11.88, 4.545, -6.669]
+				},
+				{
+					"series": "Building lamps",
+					"at": [12.205, 4.545, -2.682]
+				},
+				{
+					"series": "Building lamps",
+					"at": [12.53, 4.545, 1.305]
+				},
+				{
+					"series": "Building lamps",
+					"at": [12.854, 4.545, 5.291]
+				},
+				{
+					"series": "Building lamps",
+					"at": [13.179, 4.545, 9.278]
+				}
+			],
+			"source": "tools/reference/templates/paddock_building_m.glb"
+		},
+		{
+			"id": "paddock_building_n",
+			"file": "paddock_building_n.glb",
+			"kind": "sheds",
+			"label": "Paddock building (north)",
+			"description": "Paddock building (north) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [20.421, 7.251, 22.076],
+			"top": 23,
+			"triangles": 1508,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-6.058, 3.332, -2.661]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-5.408, 3.332, 5.917]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-0.116, 3.332, -3.044]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.482, 3.332, 5.531]
+				},
+				{
+					"series": "Building lamps",
+					"at": [5.826, 3.332, -3.428]
+				},
+				{
+					"series": "Building lamps",
+					"at": [6.372, 3.332, 5.146]
+				}
+			],
+			"source": "tools/reference/templates/paddock_building_n.glb"
+		},
+		{
+			"id": "paddock_building_s",
+			"file": "paddock_building_s.glb",
+			"kind": "sheds",
+			"label": "Paddock building (south)",
+			"description": "Paddock building (south) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [19.944, 6.308, 16.911],
+			"top": 20.8,
+			"triangles": 1460,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-6.178, 2.911, -2.834]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-5.682, 2.911, 4.156]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-0.337, 2.911, -3.371]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.2, 2.911, 3.719]
+				},
+				{
+					"series": "Building lamps",
+					"at": [5.504, 2.911, -3.908]
+				},
+				{
+					"series": "Building lamps",
+					"at": [6.083, 2.911, 3.282]
+				}
+			],
+			"source": "tools/reference/templates/paddock_building_s.glb"
+		},
+		{
+			"id": "race_control",
+			"file": "race_control.glb",
+			"kind": "sheds",
+			"label": "Race control",
+			"description": "Race control of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [7.4, 9.372, 7.4],
+			"top": 7.7,
+			"triangles": 2154,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [0, 3.44, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 7.94, 0]
+				}
+			],
+			"source": "tools/reference/templates/race_control.glb"
+		},
+		{
+			"id": "judges_tower_west",
+			"file": "judges_tower_west.glb",
+			"kind": "sheds",
+			"label": "Judges' tower (west)",
+			"description": "Judges' tower (west) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [8.366, 7.52, 3.4],
+			"top": 8.8,
+			"triangles": 996,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [2.483, 6.95, 0]
+				}
+			],
+			"source": "tools/reference/templates/judges_tower_west.glb"
+		},
+		{
+			"id": "fuel_station",
+			"file": "fuel_station.glb",
+			"kind": "sheds",
+			"label": "Fuel station",
+			"description": "Fuel station of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [34.15, 8.748, 20.15],
+			"top": 35.6,
+			"triangles": 1496,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/fuel_station.glb"
+		},
+		{
+			"id": "timing_desk",
+			"file": "timing_desk.glb",
+			"kind": "statics",
+			"label": "Timing desk and screens",
+			"description": "Timing desk and screens of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [2.616, 1.59, 2.616],
+			"top": 2.8,
+			"triangles": 136,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/timing_desk.glb"
+		},
+		{
+			"id": "stand_1",
+			"file": "stand_1.glb",
+			"kind": "sheds",
+			"label": "Stand",
+			"description": "Stand of the Velopark's paddock, whole: its tiers, its posts and the banner on it. At its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [15.125, 3.56, 20.946],
+			"top": 21.8,
+			"triangles": 1276,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/stand_1.glb"
+		},
+		{
+			"id": "stand_2",
+			"file": "stand_2.glb",
+			"kind": "sheds",
+			"label": "Stand (small)",
+			"description": "Stand (small) of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [5.798, 2.954, 10.032],
+			"top": 10.5,
+			"triangles": 612,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/stand_2.glb"
+		},
+		{
+			"id": "banner_fence",
+			"file": "banner_fence.glb",
+			"kind": "statics",
+			"label": "Banner on the fence",
+			"description": "Banner on the fence of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [16.002, 2.093, 3.88],
+			"top": 16.7,
+			"triangles": 4,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/banner_fence.glb"
+		},
+		{
+			"id": "flagpoles",
+			"file": "flagpoles.glb",
+			"kind": "statics",
+			"label": "Flagpoles",
+			"description": "Flagpoles of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [1.18, 10.492, 8.14],
+			"top": 8.5,
+			"triangles": 350,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/flagpoles.glb"
+		},
+		{
+			"id": "pit_entry_fence",
+			"file": "pit_entry_fence.glb",
+			"kind": "statics",
+			"label": "Pit entry fence",
+			"description": "Pit entry fence of the Velopark's paddock, as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [38.455, 3.988, 119.052],
+			"top": 123.9,
+			"triangles": 2464,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/pit_entry_fence.glb"
+		},
+		{
+			"id": "east_building_m",
+			"file": "east_building_m.glb",
+			"kind": "sheds",
+			"label": "East building (north)",
+			"description": "East building (north) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
+			"materials": "track",
+			"size": [34.788, 7.182, 25.513],
+			"top": 36.2,
+			"triangles": 64,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/east_building_m.glb"
+		},
+		{
+			"id": "east_building_s",
+			"file": "east_building_s.glb",
+			"kind": "sheds",
+			"label": "East building (south)",
+			"description": "East building (south) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
+			"materials": "track",
+			"size": [22.114, 7.899, 37.257],
+			"top": 38.8,
+			"triangles": 64,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/east_building_s.glb"
+		},
+		{
+			"id": "east_building_b",
+			"file": "east_building_b.glb",
+			"kind": "sheds",
+			"label": "East building (small)",
+			"description": "East building (small) of the Velopark's paddock, as tools/restyle_paddock.py made it: at its own origin, its walls its own.",
+			"materials": "track",
+			"size": [7.377, 3.848, 7.111],
+			"top": 7.7,
+			"triangles": 32,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/east_building_b.glb"
+		},
+		{
+			"id": "hotlap_building",
+			"file": "hotlap_building.glb",
+			"kind": "sheds",
+			"label": "Hotlap building",
+			"description": "Hotlap building of the Velopark's paddock, whole: its garages, its columns and walls, its open west end with the mesh fence over its back's low wall and its end wall, and its rounded roof with its gables and the solar panels on its north half. At its own origin.",
+			"materials": "track",
+			"size": [103.796, 7.692, 35.766],
+			"top": 108.7,
+			"triangles": 2472,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "tools/reference/templates/hotlap_building.glb"
+		},
+		{
+			"id": "south_warehouse",
+			"file": "south_warehouse.glb",
+			"kind": "sheds",
+			"label": "South warehouse",
+			"description": "The big warehouse south of the Velopark, beyond the road, as the satellite photo and the onboard videos show it: 121 by 133 m; ribbed light cladding over a precast concrete base, a dark flashing round its parapet, downpipes; green graphics at the east end of its north wall; loading docks with black shelters along its west wall and on its south wall; a ribbed metal roof, a low gable (its ridge east to west) with a vent along it and lighter sheets at its north corners. Its own materials, their pictures made in code. At its own origin, its front (+z) its north side.",
+			"materials": "own",
+			"size": [121.1, 13.5, 132.6],
+			"top": 139.2,
+			"triangles": 1380,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "scripts/south-warehouse.ts"
+		},
+		{
+			"id": "east_shed_n",
+			"file": "east_shed_n.glb",
+			"kind": "sheds",
+			"label": "East shed (north)",
+			"description": "The northern of the three white sheds along the east road, beyond it: 9 by 30 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [9.8, 5.9, 30.8],
+			"top": 32.1,
+			"triangles": 576,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, -11.25]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, -3.75]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, 3.75]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, 11.25]
+				}
+			],
+			"source": "velopark_outside.glb: EAST_SHED_0_FLOOR, EAST_SHED_0_FRAMES, EAST_SHED_0_GLASS, EAST_SHED_0_INSIDE, EAST_SHED_0_LAMPS, EAST_SHED_0_OPENINGS, EAST_SHED_0_ROOF, EAST_SHED_0_WALLS"
+		},
+		{
+			"id": "east_shed_m",
+			"file": "east_shed_m.glb",
+			"kind": "sheds",
+			"label": "East shed (middle)",
+			"description": "The middle of the three white sheds along the east road, beyond it: 9 by 24 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [9.8, 5.9, 24.8],
+			"top": 25.8,
+			"triangles": 470,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, -8]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, 8]
+				}
+			],
+			"source": "velopark_outside.glb: EAST_SHED_1_FLOOR, EAST_SHED_1_FRAMES, EAST_SHED_1_GLASS, EAST_SHED_1_INSIDE, EAST_SHED_1_LAMPS, EAST_SHED_1_OPENINGS, EAST_SHED_1_ROOF, EAST_SHED_1_WALLS"
+		},
+		{
+			"id": "east_shed_s",
+			"file": "east_shed_s.glb",
+			"kind": "sheds",
+			"label": "East shed (south)",
+			"description": "The southern of the three white sheds along the east road, beyond it: 9 by 14 m under a gable roof, windows along its track side, its door on its south end; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [9.8, 5.9, 14.8],
+			"top": 15.4,
+			"triangles": 268,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, -3.5]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.07, 3.5]
+				}
+			],
+			"source": "velopark_outside.glb: EAST_SHED_2_FLOOR, EAST_SHED_2_FRAMES, EAST_SHED_2_GLASS, EAST_SHED_2_INSIDE, EAST_SHED_2_LAMPS, EAST_SHED_2_OPENINGS, EAST_SHED_2_ROOF, EAST_SHED_2_WALLS"
+		},
+		{
+			"id": "farm_house",
+			"file": "farm_house.glb",
+			"kind": "sheds",
+			"label": "Farm house",
+			"description": "The house of the yard north of the pond, its plastered lean-to on its west side; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [15.45, 6.1, 11.6],
+			"top": 21.3,
+			"triangles": 578,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [0, 2.87, -2.65]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 2.87, 2.65]
+				}
+			],
+			"source": "velopark_outside.glb: FARM_HOUSE_FLOOR, FARM_HOUSE_FRAMES, FARM_HOUSE_GLASS, FARM_HOUSE_INSIDE, FARM_HOUSE_LAMPS, FARM_HOUSE_OPENINGS, FARM_HOUSE_ROOF, FARM_HOUSE_WALLS, FARM_LEANTO_OPENINGS, FARM_LEANTO_ROOF, FARM_LEANTO_WALLS"
+		},
+		{
+			"id": "farm_barn",
+			"file": "farm_barn.glb",
+			"kind": "sheds",
+			"label": "Farm barn",
+			"description": "The white barn of the yard north of the pond, its doors on its south and west sides; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [15, 7.9, 19.5],
+			"top": 20.3,
+			"triangles": 406,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-3.5, 4.07, -6.167]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-3.5, 4.07, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-3.5, 4.07, 6.167]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.5, 4.07, -6.167]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.5, 4.07, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.5, 4.07, 6.167]
+				}
+			],
+			"source": "velopark_outside.glb: FARM_BARN_FLOOR, FARM_BARN_FRAMES, FARM_BARN_GLASS, FARM_BARN_INSIDE, FARM_BARN_LAMPS, FARM_BARN_OPENINGS, FARM_BARN_ROOF, FARM_BARN_WALLS"
+		},
+		{
+			"id": "farm_low",
+			"file": "farm_low.glb",
+			"kind": "sheds",
+			"label": "Farm building (low)",
+			"description": "The low white building of the yard north of the pond, its windows along its south side; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [18, 5.3, 11.5],
+			"top": 18.8,
+			"triangles": 480,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-4.25, 2.67, -2.625]
+				},
+				{
+					"series": "Building lamps",
+					"at": [-4.25, 2.67, 2.625]
+				},
+				{
+					"series": "Building lamps",
+					"at": [4.25, 2.67, -2.625]
+				},
+				{
+					"series": "Building lamps",
+					"at": [4.25, 2.67, 2.625]
+				}
+			],
+			"source": "velopark_outside.glb: FARM_LOW_FLOOR, FARM_LOW_FRAMES, FARM_LOW_GLASS, FARM_LOW_INSIDE, FARM_LOW_LAMPS, FARM_LOW_OPENINGS, FARM_LOW_ROOF, FARM_LOW_WALLS"
+		},
+		{
+			"id": "farm_tent",
+			"file": "farm_tent.glb",
+			"kind": "statics",
+			"label": "Farm tent",
+			"description": "The white tent of the yard north of the pond: a fabric hip roof on four steel poles (their feet half a metre into the ground), as tools/build_outside.py made it, at its own origin.",
+			"materials": "track",
+			"size": [9.9, 5.5, 9.9],
+			"top": 10.3,
+			"triangles": 60,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "velopark_outside.glb: TENT_POLES, TENT_TOP"
+		},
+		{
+			"id": "bins",
+			"file": "bins.glb",
+			"kind": "statics",
+			"label": "Round bins",
+			"description": "Sixteen round steel bins, four by four, on their concrete slab, north of the pond; as tools/build_outside.py made them, at their own origin.",
+			"materials": "track",
+			"size": [15.1, 5.6, 14],
+			"top": 15.8,
+			"triangles": 1258,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "velopark_outside.glb: BINS, BINS_SLAB"
+		},
+		{
+			"id": "blue_shed",
+			"file": "blue_shed.glb",
+			"kind": "sheds",
+			"label": "Blue shed",
+			"description": "The open shed beyond K1_T5: a wall of light blue sheets along its track side and its south end, and over it a sheet roof on timber posts and trusses (the posts and the wall 0.6 m into the ground, for its slope); as tools/build_outside.py made it, at its own origin.",
+			"materials": "track",
+			"size": [8.2, 5.6, 21.7],
+			"top": 22.6,
+			"triangles": 704,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "velopark_outside.glb: SHED_BLUE_WALL, SHED_TIMBER, SHED_ROOF"
+		},
+		{
+			"id": "house_1",
+			"file": "house_1.glb",
+			"kind": "sheds",
+			"label": "House in the wood (west)",
+			"description": "The western of the two houses in the south east's wood, under a tiled hip roof; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [15, 6.4, 10],
+			"top": 15.7,
+			"triangles": 652,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-3.5, 2.77, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.5, 2.77, 0]
+				}
+			],
+			"source": "velopark_outside.glb: HOUSE_1_FLOOR, HOUSE_1_FRAMES, HOUSE_1_GLASS, HOUSE_1_INSIDE, HOUSE_1_LAMPS, HOUSE_1_OPENINGS, HOUSE_1_ROOF, HOUSE_1_WALLS"
+		},
+		{
+			"id": "house_2",
+			"file": "house_2.glb",
+			"kind": "sheds",
+			"label": "House in the wood (east)",
+			"description": "The eastern of the two houses in the south east's wood, under a tiled gable roof; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [14, 6.4, 10],
+			"top": 14.6,
+			"triangles": 424,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-3.25, 2.77, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [3.25, 2.77, 0]
+				}
+			],
+			"source": "velopark_outside.glb: HOUSE_2_FLOOR, HOUSE_2_FRAMES, HOUSE_2_GLASS, HOUSE_2_INSIDE, HOUSE_2_LAMPS, HOUSE_2_OPENINGS, HOUSE_2_ROOF, HOUSE_2_WALLS"
+		},
+		{
+			"id": "velogrill",
+			"file": "velogrill.glb",
+			"kind": "sheds",
+			"label": "Velogrill",
+			"description": "The Velogrill in the south east's wood: an L of two plastered wings under dark tiled hip roofs; as tools/build_outside.py made it: at its own origin, its walls and floors its own.",
+			"materials": "track",
+			"size": [23, 7.2, 25.877],
+			"top": 42.4,
+			"triangles": 1304,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [
+				{
+					"series": "Building lamps",
+					"at": [-7.333, 3.17, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0, 3.17, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [7.333, 3.17, 0]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.665, 3.198, -16.877]
+				},
+				{
+					"series": "Building lamps",
+					"at": [0.665, 3.198, -10.877]
+				}
+			],
+			"source": "velopark_outside.glb: VELOGRILL_A_FLOOR, VELOGRILL_A_FRAMES, VELOGRILL_A_GLASS, VELOGRILL_A_INSIDE, VELOGRILL_A_LAMPS, VELOGRILL_A_OPENINGS, VELOGRILL_A_ROOF, VELOGRILL_A_WALLS, VELOGRILL_B_FLOOR, VELOGRILL_B_FRAMES, VELOGRILL_B_GLASS, VELOGRILL_B_INSIDE, VELOGRILL_B_LAMPS, VELOGRILL_B_ROOF, VELOGRILL_B_WALLS"
+		},
+		{
+			"id": "sports_court",
+			"file": "sports_court.glb",
+			"kind": "statics",
+			"label": "Sports court fence",
+			"description": "The tall wire fence round the sports court between the houses in the south east's wood, on steel posts (their feet half a metre into the ground, the mesh 0.2 m, for its slope); its turf a paved area of its own. As tools/build_outside.py made it, at its own origin.",
+			"materials": "track",
+			"size": [24.073, 4.55, 14.08],
+			"top": 25.1,
+			"triangles": 432,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "velopark_outside.glb: COURT_POSTS, COURT_MESH"
+		},
+		{
+			"id": "sliding_gate",
+			"file": "sliding_gate.glb",
+			"kind": "statics",
+			"label": "Sliding gate",
+			"description": "The south fence's gate at the pit exit (R27): a mesh panel in a steel frame on wheels, slid open beside the opening along the fence, and its rail across the opening; as tools/build_outside.py made it, at its own origin (its panel's middle), along x.",
+			"materials": "track",
+			"size": [19.33, 2.072, 0.231],
+			"top": 29.6,
+			"triangles": 168,
+			"fits": ["place"],
+			"collision": ["model"],
+			"lights": [],
+			"source": "velopark_outside.glb: GATE_SOUTH, GATE_SOUTH_MESH"
+		},
+		{
+			"id": "globe_lamp",
+			"file": "globe_lamp.glb",
+			"kind": "statics",
+			"label": "Globe lamp",
+			"description": "A globe lamp on its thin pole, 2.85 m high, as on the vp_1000's fence by the south east's wood; laid along a curve, a row of them.",
+			"materials": "track",
+			"size": [0.34, 2.95, 0.323],
+			"top": 0.4,
+			"triangles": 122,
+			"fits": ["place"],
+			"collision": ["none"],
+			"draw": [0, 450],
+			"lights": [],
+			"source": "velopark_outside.glb: LAMPS_TRACK"
+		}
+	]
 }

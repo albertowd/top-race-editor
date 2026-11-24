@@ -313,7 +313,7 @@ build makes, and keeps its previews in its own cache, never the build's.
   blocks, leaving out dark pixels. It paints each cover in its block colour, blended between blocks, with value noise
   at 0.3, 1.2 and 5 m, and soft borders. The result goes to `source/textures/GroundGenerated.jpg` (PNG where there is
   no JPEG encoder) with a `BackgroundGenerated` material copied from the photo's. `GroundGenerated.json` records the
-  photo's SHA-1 and the generator's version, so it is made again only when either changes. The editor always draws
+  photo's SHA-256 and the generator's version, so it is made again only when either changes. The editor always draws
   the photo. In AC the material is `ksMultilayer`: the picture times the detail its mask (`GroundGeneratedMask.png`:
   red grass, green earth, blue paving, from the covers' blended shares) picks, times 2 (`magicMult`). The details
   (`GroundDetailGrass/Sand/Gravel.png`, made in code, grey round 128 with blades, grains and pebbles, or stones) tile

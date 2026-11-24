@@ -1,1435 +1,1349 @@
-import { useState } from 'react';
-import { OBJECT_COLOURS } from '../canvas/objects';
-import { DASH, GAP } from '../domain/constants';
-import type { TrackModel } from '../domain/models';
-import { kindIcon, type ModelInfo, modelIcon, modelInfo, modelsOf } from '../domain/models';
+import { useState } from "react";
+import { OBJECT_COLOURS } from "../canvas/objects";
+import { DASH, GAP } from "../domain/constants";
+import type { TrackModel } from "../domain/models";
+import { kindIcon, type ModelInfo, modelIcon, modelInfo, modelsOf } from "../domain/models";
 import type {
-  LayoutKind,
-  LineColour,
-  LineKind,
-  LineStyle,
-  ModelKind,
-  ObjectCollision,
-  ObjectFit,
-  ObjectKind,
-  ObjectPick,
-  PaintMark,
-  PlacedObject,
-  Point,
-  RubberMark,
-  RubberWear,
-  Spot,
-  StartLineStyle,
-  TrackObjects,
-} from '../domain/types';
-import { areaOf, BAY } from '../editing/areas';
-import { isLineKind, keepPitOn, lineOf } from '../editing/lines';
-import { markLength, moveMarkNode } from '../editing/marks';
+	LayoutKind,
+	LineColour,
+	LineKind,
+	LineStyle,
+	ModelKind,
+	ObjectCollision,
+	ObjectFit,
+	ObjectKind,
+	ObjectPick,
+	PaintMark,
+	PlacedObject,
+	Point,
+	RubberMark,
+	RubberWear,
+	Spot,
+	StartLineStyle,
+	TrackObjects,
+} from "../domain/types";
+import { areaOf, BAY } from "../editing/areas";
+import { isLineKind, keepPitOn, lineOf } from "../editing/lines";
+import { markLength, moveMarkNode } from "../editing/marks";
 import {
-  countOf,
-  isCurve,
-  isLayoutKind,
-  isModelKind,
-  OBJECT_KINDS,
-  OBJECT_LABELS,
-  objectsOf,
-  positionOf,
-  setLayouts,
-  sharing,
-  spacingOf,
-  spotOf,
-  wallStacks,
-} from '../editing/objects';
-import { wallPath } from '../editing/walls';
-import { boardText } from '../engine/boardfaces';
-import { lightValues, withLightOption } from '../engine/lightoptions';
-import { START_GATE } from '../engine/paint';
-import { useEditor, useEditorShallow, useEditorState } from '../store/EditorContext';
-import { ExportName, Group, NumberField, type Options, Row, SelectField, TextField } from './fields';
-import { type IconOption, IconSelect } from './IconSelect';
-import { Icon } from './icons';
+	countOf,
+	isCurve,
+	isLayoutKind,
+	isModelKind,
+	OBJECT_KINDS,
+	OBJECT_LABELS,
+	objectsOf,
+	positionOf,
+	setLayouts,
+	sharing,
+	spacingOf,
+	spotOf,
+	wallStacks,
+} from "../editing/objects";
+import { wallPath } from "../editing/walls";
+import { boardText } from "../engine/boardfaces";
+import { lightValues, withLightOption } from "../engine/lightoptions";
+import { START_GATE } from "../engine/paint";
+import { useEditor, useEditorShallow, useEditorState } from "../store/EditorContext";
+import { ExportName, Group, NumberField, type Options, Row, SelectField, TextField } from "./fields";
+import { type IconOption, IconSelect } from "./IconSelect";
+import { Icon } from "./icons";
 
 const DEG = 180 / Math.PI;
 /** objects listed at most (a forest's thousands are picked on the map) */
 const LISTED = 300;
 const kindOptions = <K extends ObjectKind>(kinds: readonly K[]): IconOption<K>[] =>
-  kinds.map((k) => ({ value: k, label: OBJECT_LABELS[k].many, icon: kindIcon(k) }));
+	kinds.map((k) => ({ value: k, label: OBJECT_LABELS[k].many, icon: kindIcon(k) }));
 
 const metres = (v: number) => `${Math.round(v * 10) / 10} m`;
 const modelOptions = (models: readonly ModelInfo[]): IconOption<string>[] =>
-  models.map((m) => ({ value: m.id, label: m.label, icon: modelIcon(m.id), hint: `${metres(m.size[1])} high` }));
+	models.map((m) => ({ value: m.id, label: m.label, icon: modelIcon(m.id), hint: `${metres(m.size[1])} high` }));
 
 /** A kind's picture, beside its name (decoration: the name says what it is). */
 function KindIcon({ kind, size = 28 }: Readonly<{ kind: ObjectKind; size?: number }>) {
-  // (a racing line: a stroke of its colour on the map)
-  if (isLineKind(kind))
-    return (
-      <span
-        className="kind-icon"
-        aria-hidden="true"
-        style={{
-          display: 'inline-block',
-          width: size,
-          height: size,
-          background: `linear-gradient(135deg, transparent 44%, ${OBJECT_COLOURS[kind]} 44%, ${OBJECT_COLOURS[kind]} 56%, transparent 56%)`,
-        }}
-      />
-    );
-  return <img className="kind-icon" src={kindIcon(kind)} alt="" width={size} height={size} />;
+	// (a racing line: a stroke of its colour on the map)
+	if (isLineKind(kind))
+		return (
+			<span
+				className="kind-icon"
+				aria-hidden="true"
+				style={{
+					display: "inline-block",
+					width: size,
+					height: size,
+					background: `linear-gradient(135deg, transparent 44%, ${OBJECT_COLOURS[kind]} 44%, ${OBJECT_COLOURS[kind]} 56%, transparent 56%)`,
+				}}
+			/>
+		);
+	return <img className="kind-icon" src={kindIcon(kind)} alt="" width={size} height={size} />;
 }
 
-/** The objects of some kinds (default: all): the layout shown, each kind's count and placing it, their list, a
- * layout's set copied from another's. */
+/** The objects of some kinds (default: all): the layout shown, each kind's count and placing it, their list, a layout's set copied from another's. */
 export function ObjectsPanel({ kinds = OBJECT_KINDS }: Readonly<{ kinds?: readonly ObjectKind[] }>) {
-  const ed = useEditor();
-  const { objects, layout, mode, place, models, together, seeded, shown } = useEditorShallow((s) => ({
-    objects: s.objects,
-    layout: s.layout,
-    mode: s.mode,
-    place: s.place,
-    models: s.models,
-    together: s.together,
-    seeded: s.objectsSeeded,
-    shown: s.layers.objects,
-  }));
-  if (!objects) return <p className="empty-state">The track has no objects to edit.</p>;
-  const layouts: Options<string> = Object.keys(objects.layouts).map((l) => [l, l] as const);
-  const perLayout = kinds.filter(isLayoutKind);
-  return (
-    <section id="objects" className="group-box" aria-label="Objects">
-      {seeded ? <p className="note">Read from the track's models: no objects file yet, saving writes one.</p> : null}
-      {perLayout.length ? (
-        <Row label="Layout">
-          <SelectField label="Layout" value={layout} options={layouts} onChange={ed.setLayout} />
-          <LayoutButtons />
-          <label title="Also change every other layout whose set of that kind is the same as this one's">
-            <input type="checkbox" checked={together} onChange={(e) => ed.setTogether(e.target.checked)} /> with the
-            same
-          </label>
-        </Row>
-      ) : null}
-      <RoutingBox />
-      <table className="items kinds" aria-label="Object kinds">
-        <tbody>
-          {kinds.map((k) => {
-            const on = mode === 'place' && place === k;
-            const same = together ? sharing(objects, layout, k) : [];
-            const choices = isModelKind(k) ? modelsOf(k) : [];
-            return (
-              <tr key={k} className={on ? 'sel' : undefined}>
-                <td className="icon-cell">
-                  <KindIcon kind={k} />
-                </td>
-                <td className="count">{countOf(objects, layout, k)}</td>
-                <td title={OBJECT_LABELS[k].what}>
-                  {OBJECT_LABELS[k].many}
-                  {isModelKind(k) && kinds.length > 1 ? (
-                    <span className="dim">
-                      {k === 'cones' || k === 'boards' ? ' · this layout' : ' · every layout'}
-                    </span>
-                  ) : (
-                    ''
-                  )}
-                </td>
-                {isLineKind(k) ? (
-                  <td>
-                    {k === 'fast' ? (
-                      <button
-                        type="button"
-                        className="small"
-                        title="The fast line a car takes: out wide into each bend, its apex, out wide again, within the road (and its rumbles' low ramps) less half the cars' width. None yet: click the lap's roads in order first"
-                        onClick={() => ed.optimiseFast()}
-                      >
-                        Optimise
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="small"
-                        title={`Make the ${OBJECT_LABELS[k].one.toLowerCase()} along roads: click them in order`}
-                        onClick={() => ed.startRouting(k)}
-                      >
-                        From roads
-                      </button>
-                    )}
-                  </td>
-                ) : choices.length > 1 && isModelKind(k) ? (
-                  <td>
-                    <IconSelect
-                      label={`${OBJECT_LABELS[k].one} to place`}
-                      value={models[k]}
-                      options={modelOptions(choices)}
-                      onChange={(id) => ed.placeModel(k, id)}
-                    />
-                  </td>
-                ) : (
-                  <td className="dim" title={same.join(', ')}>
-                    {same.length ? `same in ${same.length}` : ''}
-                  </td>
-                )}
-                <td>
-                  <button
-                    type="button"
-                    className={on ? 'small on' : 'small'}
-                    aria-pressed={on}
-                    title={`Click on the map to add ${OBJECT_LABELS[k].one.toLowerCase()}s (O)`}
-                    onClick={() => (on ? ed.setMode('select') : ed.setPlace(k))}
-                  >
-                    {on ? 'Placing' : 'Place'}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {kinds.includes('grid') && kinds.includes('pits') ? (
-        <RaceKarts grid={countOf(objects, layout, 'grid')} pits={countOf(objects, layout, 'pits')} />
-      ) : null}
-      {/* (the start lines with the paint, as the grid's and pits' paint: every layout's at once) */}
-      {kinds.includes('marks') ? <StartLines objects={objects} /> : null}
-      {shown ? null : <p className="note">The Objects layer is off (View menu).</p>}
-      {perLayout.length ? <CopyRow objects={objects} layout={layout} kinds={perLayout} /> : null}
-    </section>
-  );
+	const ed = useEditor();
+	const { objects, layout, mode, place, models, together, seeded, shown } = useEditorShallow((s) => ({
+		objects: s.objects,
+		layout: s.layout,
+		mode: s.mode,
+		place: s.place,
+		models: s.models,
+		together: s.together,
+		seeded: s.objectsSeeded,
+		shown: s.layers.objects,
+	}));
+	if (!objects) return <p className="empty-state">The track has no objects to edit.</p>;
+	const layouts: Options<string> = Object.keys(objects.layouts).map((l) => [l, l] as const);
+	const perLayout = kinds.filter(isLayoutKind);
+	return (
+		<section id="objects" className="group-box" aria-label="Objects">
+			{seeded ? <p className="note">Read from the track's models: no objects file yet, saving writes one.</p> : null}
+			{perLayout.length ? (
+				<Row label="Layout">
+					<SelectField label="Layout" value={layout} options={layouts} onChange={ed.setLayout} />
+					<LayoutButtons />
+					<label title="Also change every other layout whose set of that kind is the same as this one's">
+						<input type="checkbox" checked={together} onChange={(e) => ed.setTogether(e.target.checked)} /> with the same
+					</label>
+				</Row>
+			) : null}
+			<RoutingBox />
+			<table className="items kinds" aria-label="Object kinds">
+				<tbody>
+					{kinds.map((k) => {
+						const on = mode === "place" && place === k;
+						const same = together ? sharing(objects, layout, k) : [];
+						const choices = isModelKind(k) ? modelsOf(k) : [];
+						return (
+							<tr key={k} className={on ? "sel" : undefined}>
+								<td className="icon-cell">
+									<KindIcon kind={k} />
+								</td>
+								<td className="count">{countOf(objects, layout, k)}</td>
+								<td title={OBJECT_LABELS[k].what}>
+									{OBJECT_LABELS[k].many}
+									{isModelKind(k) && kinds.length > 1 ? (
+										<span className="dim">{k === "cones" || k === "boards" ? " · this layout" : " · every layout"}</span>
+									) : (
+										""
+									)}
+								</td>
+								{isLineKind(k) ? (
+									<td>
+										{k === "fast" ? (
+											<button
+												type="button"
+												className="small"
+												title="The fast line a car takes: out wide into each bend, its apex, out wide again, within the road (and its rumbles' low ramps) less half the cars' width. None yet: click the lap's roads in order first"
+												onClick={() => ed.optimiseFast()}
+											>
+												Optimise
+											</button>
+										) : (
+											<button
+												type="button"
+												className="small"
+												title={`Make the ${OBJECT_LABELS[k].one.toLowerCase()} along roads: click them in order`}
+												onClick={() => ed.startRouting(k)}
+											>
+												From roads
+											</button>
+										)}
+									</td>
+								) : choices.length > 1 && isModelKind(k) ? (
+									<td>
+										<IconSelect
+											label={`${OBJECT_LABELS[k].one} to place`}
+											value={models[k]}
+											options={modelOptions(choices)}
+											onChange={(id) => ed.placeModel(k, id)}
+										/>
+									</td>
+								) : (
+									<td className="dim" title={same.join(", ")}>
+										{same.length ? `same in ${same.length}` : ""}
+									</td>
+								)}
+								<td>
+									<button
+										type="button"
+										className={on ? "small on" : "small"}
+										aria-pressed={on}
+										title={`Click on the map to add ${OBJECT_LABELS[k].one.toLowerCase()}s (O)`}
+										onClick={() => (on ? ed.setMode("select") : ed.setPlace(k))}
+									>
+										{on ? "Placing" : "Place"}
+									</button>
+								</td>
+							</tr>
+						);
+					})}
+				</tbody>
+			</table>
+			{kinds.includes("grid") && kinds.includes("pits") ? <RaceKarts grid={countOf(objects, layout, "grid")} pits={countOf(objects, layout, "pits")} /> : null}
+			{/* (the start lines with the paint, as the grid's and pits' paint: every layout's at once) */}
+			{kinds.includes("marks") ? <StartLines objects={objects} /> : null}
+			{shown ? null : <p className="note">The Objects layer is off (View menu).</p>}
+			{perLayout.length ? <CopyRow objects={objects} layout={layout} kinds={perLayout} /> : null}
+		</section>
+	);
 }
 
-/** Every layout's start line, set here with the paint (each is painted on the track, seen in every layout): its
- * style, and where it is painted (along its start and finish gate; without one, ahead of its grid's first slot). */
+/** Every layout's start line, set here with the paint (each is painted on the track, seen in every layout): its style, and where it is painted (along its start
+ * and finish gate; without one, ahead of its grid's first slot). */
 function StartLines({ objects }: Readonly<{ objects: TrackObjects }>) {
-  const ed = useEditor();
-  return (
-    <table className="items" aria-label="Start lines">
-      <caption>Start lines (every layout's, all painted on the track)</caption>
-      <tbody>
-        {Object.entries(objects.layouts).map(([name, lay]) => {
-          const gate = lay.timing?.some((t) => t.name === START_GATE);
-          return (
-            <tr key={name}>
-              <td>{name}</td>
-              <td>
-                <SelectField
-                  label={`Start line of ${name}`}
-                  value={lay.start_line ?? 'none'}
-                  options={START_LINES}
-                  onChange={(v) => ed.setStartLine(v === 'none' ? null : v, name)}
-                />
-              </td>
-              <td className="dim">
-                {gate
-                  ? `along its gate ${START_GATE}`
-                  : lay.grid?.length
-                    ? 'ahead of its first grid slot'
-                    : 'no gate, no grid'}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+	const ed = useEditor();
+	return (
+		<table className="items" aria-label="Start lines">
+			<caption>Start lines (every layout's, all painted on the track)</caption>
+			<tbody>
+				{Object.entries(objects.layouts).map(([name, lay]) => {
+					const gate = lay.timing?.some((t) => t.name === START_GATE);
+					return (
+						<tr key={name}>
+							<td>{name}</td>
+							<td>
+								<SelectField
+									label={`Start line of ${name}`}
+									value={lay.start_line ?? "none"}
+									options={START_LINES}
+									onChange={(v) => ed.setStartLine(v === "none" ? null : v, name)}
+								/>
+							</td>
+							<td className="dim">{gate ? `along its gate ${START_GATE}` : lay.grid?.length ? "ahead of its first grid slot" : "no gate, no grid"}</td>
+						</tr>
+					);
+				})}
+			</tbody>
+		</table>
+	);
 }
 
 /** a layout's start line, as painted along its start and finish gate */
-const START_LINES: Options<StartLineStyle | 'none'> = [
-  ['none', 'none'],
-  ['checker', 'chequered'],
-  ['line', 'a solid white line'],
+const START_LINES: Options<StartLineStyle | "none"> = [
+	["none", "none"],
+	["checker", "chequered"],
+	["line", "a solid white line"],
 ];
 
-/** How many karts a race of the layout takes in the game: one for each grid slot with a pit box too (the export sets
- * it so). */
+/** How many karts a race of the layout takes in the game: one for each grid slot with a pit box too (the export sets it so). */
 function RaceKarts({ grid, pits }: Readonly<{ grid: number; pits: number }>) {
-  const karts = Math.min(grid, pits);
-  const why =
-    grid === pits
-      ? ''
-      : grid > pits
-        ? ` (${grid - pits} grid slots without a pit box)`
-        : ` (${pits - grid} pit boxes spare)`;
-  return (
-    <p className="note">
-      A race here takes {karts} karts{why}.
-    </p>
-  );
+	const karts = Math.min(grid, pits);
+	const why = grid === pits ? "" : grid > pits ? ` (${grid - pits} grid slots without a pit box)` : ` (${pits - grid} pit boxes spare)`;
+	return (
+		<p className="note">
+			A race here takes {karts} karts{why}.
+		</p>
+	);
 }
 
 /** The object picked, if it is one. */
-const placedOf = (o: TrackObjects, kind: ObjectKind, i: number): PlacedObject | undefined =>
-  isModelKind(kind) ? o.objects[i] : undefined;
+const placedOf = (o: TrackObjects, kind: ObjectKind, i: number): PlacedObject | undefined => (isModelKind(kind) ? o.objects[i] : undefined);
 
 /** Its number among its kind in the layout (an object: i is its place in the whole list). */
-const numberOf = (o: TrackObjects, layout: string, kind: ObjectKind, i: number) =>
-  isModelKind(kind) ? objectsOf(o, layout, kind).indexOf(i) + 1 : i + 1;
+const numberOf = (o: TrackObjects, layout: string, kind: ObjectKind, i: number) => (isModelKind(kind) ? objectsOf(o, layout, kind).indexOf(i) + 1 : i + 1);
 
-/** What an object is called in the list: its kind and number (a board: what it says, as its name tells; the rest:
- * the model it is, where its kind has more than one). */
+/** What an object is called in the list: its kind and number (a board: what it says, as its name tells; the rest: the model it is, where its kind has more than
+ * one). */
 function itemLabel(o: TrackObjects, layout: string, kind: ObjectKind, i: number): string {
-  const one = OBJECT_LABELS[kind].one;
-  if (kind === 'hotlap') return one;
-  if (isLineKind(kind)) {
-    const line = lineOf(o.layouts[layout], kind);
-    return line ? `${one} · ${line.curve.length} nodes` : one;
-  }
-  const n = numberOf(o, layout, kind, i);
-  const placed = placedOf(o, kind, i);
-  if (placed && kind === 'boards') return `${one} ${n} · ${boardText(placed.name, placed.text) || 'blank'}`;
-  if (placed && isModelKind(kind) && modelsOf(kind).length > 1)
-    return `${one} ${n} · ${(modelInfo(placed.model)?.label ?? placed.model).toLowerCase()}`;
-  if (placed && isCurve(placed)) return `${one} ${n} · ${placed.curve.length} nodes`;
-  return `${one} ${n}`;
+	const one = OBJECT_LABELS[kind].one;
+	if (kind === "hotlap") return one;
+	if (isLineKind(kind)) {
+		const line = lineOf(o.layouts[layout], kind);
+		return line ? `${one} · ${line.curve.length} nodes` : one;
+	}
+	const n = numberOf(o, layout, kind, i);
+	const placed = placedOf(o, kind, i);
+	if (placed && kind === "boards") return `${one} ${n} · ${boardText(placed.name, placed.text) || "blank"}`;
+	if (placed && isModelKind(kind) && modelsOf(kind).length > 1) return `${one} ${n} · ${(modelInfo(placed.model)?.label ?? placed.model).toLowerCase()}`;
+	if (placed && isCurve(placed)) return `${one} ${n} · ${placed.curve.length} nodes`;
+	return `${one} ${n}`;
 }
 
 /** Every object of the kinds (in the layout shown, for a layout's own). */
 function placedItems(objects: TrackObjects, layout: string, kinds: readonly ObjectKind[]) {
-  return kinds.flatMap((kind): { kind: ObjectKind; i: number }[] =>
-    isModelKind(kind)
-      ? objectsOf(objects, layout, kind).map((i) => ({ kind, i }))
-      : Array.from({ length: countOf(objects, layout, kind) }, (_, i) => ({ kind, i })),
-  );
+	return kinds.flatMap((kind): { kind: ObjectKind; i: number }[] =>
+		isModelKind(kind)
+			? objectsOf(objects, layout, kind).map((i) => ({ kind, i }))
+			: Array.from({ length: countOf(objects, layout, kind) }, (_, i) => ({ kind, i })),
+	);
 }
 
-/** The list of everything placed, to find one in: shut by default (what is picked has the room then), opened with
- * its disclosure; searched by what each is called. */
+/** The list of everything placed, to find one in: shut by default (what is picked has the room then), opened with its disclosure; searched by what each is
+ * called. */
 export function ObjectFinder({ kinds }: Readonly<{ kinds: readonly ObjectKind[] }>) {
-  const ed = useEditor();
-  const { objects, layout, open } = useEditorShallow((s) => ({
-    objects: s.objects,
-    layout: s.layout,
-    open: s.objectList,
-  }));
-  const [filter, setFilter] = useState('');
-  if (!objects) return null;
-  const all = placedItems(objects, layout, kinds);
-  if (!all.length) return <p className="empty-state">None yet: choose Place, then click on the map.</p>;
-  const words = filter.trim().toLowerCase();
-  const items = words
-    ? all.filter(({ kind, i }) => itemLabel(objects, layout, kind, i).toLowerCase().includes(words))
-    : all;
-  return (
-    <section className="finder" aria-label="Find one">
-      <button
-        type="button"
-        className="disclosure"
-        aria-expanded={open}
-        aria-controls="placed-list"
-        onClick={() => ed.toggleObjectList()}
-      >
-        <Icon name="down" size={14} />
-        <span>{open ? 'Hide the list' : 'Find one in the list'}</span>
-        <span className="badge">{all.length}</span>
-      </button>
-      {open ? (
-        <div id="placed-list">
-          <div className="search">
-            <Icon name="search" size={14} />
-            <input
-              type="search"
-              aria-label="Search what is placed"
-              placeholder={`Search ${all.length} placed`}
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-          </div>
-          {items.length ? <ObjectList items={items} /> : <p className="empty-state">Nothing here is called that.</p>}
-        </div>
-      ) : null}
-    </section>
-  );
+	const ed = useEditor();
+	const { objects, layout, open } = useEditorShallow((s) => ({
+		objects: s.objects,
+		layout: s.layout,
+		open: s.objectList,
+	}));
+	const [filter, setFilter] = useState("");
+	if (!objects) return null;
+	const all = placedItems(objects, layout, kinds);
+	if (!all.length) return <p className="empty-state">None yet: choose Place, then click on the map.</p>;
+	const words = filter.trim().toLowerCase();
+	const items = words ? all.filter(({ kind, i }) => itemLabel(objects, layout, kind, i).toLowerCase().includes(words)) : all;
+	return (
+		<section className="finder" aria-label="Find one">
+			<button type="button" className="disclosure" aria-expanded={open} aria-controls="placed-list" onClick={() => ed.toggleObjectList()}>
+				<Icon name="down" size={14} />
+				<span>{open ? "Hide the list" : "Find one in the list"}</span>
+				<span className="badge">{all.length}</span>
+			</button>
+			{open ? (
+				<div id="placed-list">
+					<div className="search">
+						<Icon name="search" size={14} />
+						<input
+							type="search"
+							aria-label="Search what is placed"
+							placeholder={`Search ${all.length} placed`}
+							value={filter}
+							onChange={(e) => setFilter(e.target.value)}
+						/>
+					</div>
+					{items.length ? <ObjectList items={items} /> : <p className="empty-state">Nothing here is called that.</p>}
+				</div>
+			) : null}
+		</section>
+	);
 }
 
 /** Objects listed, to pick one: the map going to it. */
 export function ObjectList({ items }: Readonly<{ items: { kind: ObjectKind; i: number }[] }>) {
-  const ed = useEditor();
-  const { objects, layout, picked } = useEditorShallow((s) => ({
-    objects: s.objects,
-    layout: s.layout,
-    picked: s.obj,
-  }));
-  if (!objects) return null;
-  // (a forest's thousands not listed: the first LISTED, the rest picked on the map or found by searching)
-  const shown = items.slice(0, LISTED);
-  const pick = (kind: ObjectKind, i: number) => {
-    const p: ObjectPick = { kind, i, j: -1 };
-    ed.selectObject(p);
-    const at = positionOf(objects, layout, p);
-    if (at) ed.set({ view: { ...ed.get().view, cx: at.x, cz: at.z } });
-  };
-  return (
-    <>
-      <ul className="list objects-list" aria-label="Placed">
-        {shown.map(({ kind, i }) => {
-          const on = picked?.kind === kind && picked.i === i;
-          return (
-            <li key={`${kind}:${i}`} className={on ? 'sel' : undefined}>
-              <button type="button" className="row-button" aria-current={on} onClick={() => pick(kind, i)}>
-                <img
-                  className="kind-icon"
-                  src={modelIconOf(objects, kind, i) ?? kindIcon(kind)}
-                  alt=""
-                  width={24}
-                  height={24}
-                  loading="lazy"
-                />
-                <span className="row-title">{itemLabel(objects, layout, kind, i)}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {items.length > shown.length ? (
-        <p className="note">{items.length - shown.length} more not listed: search for them, or pick them on the map.</p>
-      ) : null}
-    </>
-  );
+	const ed = useEditor();
+	const { objects, layout, picked } = useEditorShallow((s) => ({
+		objects: s.objects,
+		layout: s.layout,
+		picked: s.obj,
+	}));
+	if (!objects) return null;
+	// (a forest's thousands not listed: the first LISTED, the rest picked on the map or found by searching)
+	const shown = items.slice(0, LISTED);
+	const pick = (kind: ObjectKind, i: number) => {
+		const p: ObjectPick = { kind, i, j: -1 };
+		ed.selectObject(p);
+		const at = positionOf(objects, layout, p);
+		if (at) ed.set({ view: { ...ed.get().view, cx: at.x, cz: at.z } });
+	};
+	return (
+		<>
+			<ul className="list objects-list" aria-label="Placed">
+				{shown.map(({ kind, i }) => {
+					const on = picked?.kind === kind && picked.i === i;
+					return (
+						<li key={`${kind}:${i}`} className={on ? "sel" : undefined}>
+							<button type="button" className="row-button" aria-current={on} onClick={() => pick(kind, i)}>
+								<img className="kind-icon" src={modelIconOf(objects, kind, i) ?? kindIcon(kind)} alt="" width={24} height={24} loading="lazy" />
+								<span className="row-title">{itemLabel(objects, layout, kind, i)}</span>
+							</button>
+						</li>
+					);
+				})}
+			</ul>
+			{items.length > shown.length ? <p className="note">{items.length - shown.length} more not listed: search for them, or pick them on the map.</p> : null}
+		</>
+	);
 }
 
 const modelIconOf = (o: TrackObjects, kind: ObjectKind, i: number): string | undefined => {
-  const placed = placedOf(o, kind, i);
-  return placed && modelIcon(placed.model);
+	const placed = placedOf(o, kind, i);
+	return placed && modelIcon(placed.model);
 };
 
-function CopyRow({
-  objects,
-  layout,
-  kinds,
-}: Readonly<{ objects: TrackObjects; layout: string; kinds: readonly LayoutKind[] }>) {
-  const ed = useEditor();
-  const [chosenKind, setKind] = useState<LayoutKind>(kinds[0]);
-  const [chosen, setFrom] = useState('');
-  const others: Options<string> = Object.keys(objects.layouts)
-    .filter((l) => l !== layout)
-    .map((l) => [l, l] as const);
-  if (!others.length) return null;
-  const kind = kinds.includes(chosenKind) ? chosenKind : kinds[0];
-  const from = others.some(([l]) => l === chosen) ? chosen : others[0][0];
-  return (
-    <details className="copy">
-      <summary>Copy from another layout</summary>
-      <Row label="Kind">
-        <IconSelect label="Kind to copy" value={kind} options={kindOptions(kinds)} onChange={setKind} />
-      </Row>
-      <Row label="From">
-        <SelectField label="Layout to copy from" value={from} options={others} onChange={setFrom} />
-        <button
-          type="button"
-          className="small"
-          title={`Make ${layout}'s set the same as the other layout's`}
-          onClick={() => ed.copyFrom(from, kind)}
-        >
-          Copy
-        </button>
-      </Row>
-    </details>
-  );
+function CopyRow({ objects, layout, kinds }: Readonly<{ objects: TrackObjects; layout: string; kinds: readonly LayoutKind[] }>) {
+	const ed = useEditor();
+	const [chosenKind, setKind] = useState<LayoutKind>(kinds[0]);
+	const [chosen, setFrom] = useState("");
+	const others: Options<string> = Object.keys(objects.layouts)
+		.filter((l) => l !== layout)
+		.map((l) => [l, l] as const);
+	if (!others.length) return null;
+	const kind = kinds.includes(chosenKind) ? chosenKind : kinds[0];
+	const from = others.some(([l]) => l === chosen) ? chosen : others[0][0];
+	return (
+		<details className="copy">
+			<summary>Copy from another layout</summary>
+			<Row label="Kind">
+				<IconSelect label="Kind to copy" value={kind} options={kindOptions(kinds)} onChange={setKind} />
+			</Row>
+			<Row label="From">
+				<SelectField label="Layout to copy from" value={from} options={others} onChange={setFrom} />
+				<button type="button" className="small" title={`Make ${layout}'s set the same as the other layout's`} onClick={() => ed.copyFrom(from, kind)}>
+					Copy
+				</button>
+			</Row>
+		</details>
+	);
 }
 
-const ORDERED: readonly ObjectKind[] = ['grid', 'pits', 'timing', 'boards', 'poles', 'tyres', 'marks', 'rubber'];
+const ORDERED: readonly ObjectKind[] = ["grid", "pits", "timing", "boards", "poles", "tyres", "marks", "rubber"];
 
-const SINGLE: readonly ObjectCollision[] = ['none', 'static', 'dynamic', 'model'];
-const ALONG: readonly ObjectCollision[] = ['none', 'wall'];
+const SINGLE: readonly ObjectCollision[] = ["none", "static", "dynamic", "model"];
+const ALONG: readonly ObjectCollision[] = ["none", "wall"];
 const COLLISION_LABELS: Record<ObjectCollision, string> = {
-  none: 'none',
-  static: 'a box round it',
-  dynamic: 'knocked about (physics)',
-  wall: 'a wall along it',
-  model: 'its own walls and floors',
+	none: "none",
+	static: "a box round it",
+	dynamic: "knocked about (physics)",
+	wall: "a wall along it",
+	model: "its own walls and floors",
 };
-const FIT_LABELS: Record<ObjectFit, string> = { place: 'upright copies along it', bend: 'bent along it' };
+const FIT_LABELS: Record<ObjectFit, string> = { place: "upright copies along it", bend: "bent along it" };
 
 /** The object picked: where it is, the way it looks, its name, its place in its list. */
 export function ObjectForm() {
-  const ed = useEditor();
-  const { objects, layout, obj } = useEditorShallow((s) => ({ objects: s.objects, layout: s.layout, obj: s.obj }));
-  if (!objects || !obj) return null;
-  const label = OBJECT_LABELS[obj.kind];
-  const count = countOf(objects, layout, obj.kind);
-  const spot = spotOf(objects, layout, obj);
-  const change = (fn: (o: TrackObjects) => void) => ed.changeObjects(fn, obj.kind);
-  const same = isLayoutKind(obj.kind) && ed.get().together ? sharing(objects, layout, obj.kind) : [];
-  return (
-    <Group
-      id="objectprops"
-      label={label.one}
-      title={`${label.one}${obj.kind === 'hotlap' || isLineKind(obj.kind) ? '' : ` ${numberOf(objects, layout, obj.kind, obj.i)} of ${count}`}${isLayoutKind(obj.kind) || isLineKind(obj.kind) ? ` — ${layout}` : ''}`}
-      actions={
-        <button
-          type="button"
-          className="icon-button"
-          title="Delete it (Delete)"
-          aria-label="Delete"
-          onClick={() => ed.deleteObject()}
-        >
-          <Icon name="trash" />
-        </button>
-      }
-    >
-      <ObjectHero objects={objects} layout={layout} pick={obj} />
-      {spot ? <SpotRows spot={spot} pick={obj} change={change} /> : null}
-      {isModelKind(obj.kind) ? <ObjectRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
-      {obj.kind === 'timing' ? <GateRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
-      {obj.kind === 'marks' ? <MarkRows objects={objects} pick={obj} change={change} /> : null}
-      {obj.kind === 'rubber' ? <RubberRows objects={objects} pick={obj} change={change} /> : null}
-      {isLineKind(obj.kind) ? <LineRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
-      {obj.kind === 'areas' ? <AreaRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
-      {ORDERED.includes(obj.kind) ? (
-        <Row label="Order">
-          <button type="button" className="small" title="Earlier in its list" onClick={() => ed.reorder(-1)}>
-            Earlier
-          </button>
-          <button type="button" className="small" title="Later in its list" onClick={() => ed.reorder(1)}>
-            Later
-          </button>
-        </Row>
-      ) : null}
-      {same.length ? <p className="note">Changes go to {same.join(', ')} too (the same set).</p> : null}
-      {spot || (placedOf(objects, obj.kind, obj.i) && !isCurve(placedOf(objects, obj.kind, obj.i) as PlacedObject)) ? (
-        <p className="note">Drag to move it, Shift+drag to move all of them; drag the white handle to turn it.</p>
-      ) : null}
-    </Group>
-  );
+	const ed = useEditor();
+	const { objects, layout, obj } = useEditorShallow((s) => ({ objects: s.objects, layout: s.layout, obj: s.obj }));
+	if (!objects || !obj) return null;
+	const label = OBJECT_LABELS[obj.kind];
+	const count = countOf(objects, layout, obj.kind);
+	const spot = spotOf(objects, layout, obj);
+	const change = (fn: (o: TrackObjects) => void) => ed.changeObjects(fn, obj.kind);
+	const same = isLayoutKind(obj.kind) && ed.get().together ? sharing(objects, layout, obj.kind) : [];
+	return (
+		<Group
+			id="objectprops"
+			label={label.one}
+			title={`${label.one}${obj.kind === "hotlap" || isLineKind(obj.kind) ? "" : ` ${numberOf(objects, layout, obj.kind, obj.i)} of ${count}`}${isLayoutKind(obj.kind) || isLineKind(obj.kind) ? ` — ${layout}` : ""}`}
+			actions={
+				<button type="button" className="icon-button" title="Delete it (Delete)" aria-label="Delete" onClick={() => ed.deleteObject()}>
+					<Icon name="trash" />
+				</button>
+			}
+		>
+			<ObjectHero objects={objects} layout={layout} pick={obj} />
+			{spot ? <SpotRows spot={spot} pick={obj} change={change} /> : null}
+			{isModelKind(obj.kind) ? <ObjectRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
+			{obj.kind === "timing" ? <GateRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
+			{obj.kind === "marks" ? <MarkRows objects={objects} pick={obj} change={change} /> : null}
+			{obj.kind === "rubber" ? <RubberRows objects={objects} pick={obj} change={change} /> : null}
+			{isLineKind(obj.kind) ? <LineRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
+			{obj.kind === "areas" ? <AreaRows objects={objects} layout={layout} pick={obj} change={change} /> : null}
+			{ORDERED.includes(obj.kind) ? (
+				<Row label="Order">
+					<button type="button" className="small" title="Earlier in its list" onClick={() => ed.reorder(-1)}>
+						Earlier
+					</button>
+					<button type="button" className="small" title="Later in its list" onClick={() => ed.reorder(1)}>
+						Later
+					</button>
+				</Row>
+			) : null}
+			{same.length ? <p className="note">Changes go to {same.join(", ")} too (the same set).</p> : null}
+			{spot || (placedOf(objects, obj.kind, obj.i) && !isCurve(placedOf(objects, obj.kind, obj.i) as PlacedObject)) ? (
+				<p className="note">Drag to move it, Shift+drag to move all of them; drag the white handle to turn it.</p>
+			) : null}
+		</Group>
+	);
 }
 
 type Change = (fn: (o: TrackObjects) => void) => void;
 
-/** What is picked at a glance: its picture (a board: its card as it will read), what it is, and the few facts about it
- * that matter (its size, what is hit of it, its layouts, its lights). */
+/** What is picked at a glance: its picture (a board: its card as it will read), what it is, and the few facts about it that matter (its size, what is hit of
+ * it, its layouts, its lights). */
 function ObjectHero({ objects, layout, pick }: Readonly<{ objects: TrackObjects; layout: string; pick: ObjectPick }>) {
-  const catalogue = useEditorState((s) => s.catalogue);
-  const it = placedOf(objects, pick.kind, pick.i);
-  const label = OBJECT_LABELS[pick.kind];
-  const info = it ? modelInfo(it.model) : undefined;
-  const track = it ? catalogue?.[it.model] : undefined;
-  const facts: string[] = [];
-  if (it) {
-    if (info) facts.push(`${metres(info.size[0])} × ${metres(info.size[2])} × ${metres(info.size[1])} high`);
-    if (isCurve(it)) facts.push(`${it.curve.length} nodes along a curve`);
-    facts.push(COLLISION_LABELS[it.collision as keyof typeof COLLISION_LABELS] ?? it.collision);
-    const all = Object.keys(objects.layouts).length;
-    facts.push(it.layouts ? `in ${it.layouts.length} of ${all} layouts` : 'in every layout');
-    const lights = track?.lights?.length ?? 0;
-    if (lights) facts.push(`${lights} light${lights === 1 ? '' : 's'}`);
-  } else if (isLayoutKind(pick.kind) || isLineKind(pick.kind)) facts.push(`in ${layout}`);
-  const text = it && pick.kind === 'boards' ? boardText(it.name, it.text) : null;
-  return (
-    <div className="object-hero">
-      {text !== null ? (
-        <div className="card-preview" aria-hidden="true">
-          <span style={{ fontSize: `${Math.max(11, Math.min(34, 120 / Math.max(text.length, 1)))}px` }}>{text}</span>
-        </div>
-      ) : (
-        <img
-          className="hero-picture"
-          src={it ? modelIcon(it.model) : kindIcon(pick.kind)}
-          alt=""
-          width={72}
-          height={72}
-        />
-      )}
-      <div className="hero-text">
-        <strong>{info?.label ?? (it ? it.model : label.one)}</strong>
-        <p className="hero-what">{track?.description ?? info?.description ?? label.what}</p>
-        {facts.length ? (
-          <ul className="facts" aria-label="About it">
-            {facts.map((f) => (
-              <li key={f} className="fact">
-                {f}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    </div>
-  );
+	const catalogue = useEditorState((s) => s.catalogue);
+	const it = placedOf(objects, pick.kind, pick.i);
+	const label = OBJECT_LABELS[pick.kind];
+	const info = it ? modelInfo(it.model) : undefined;
+	const track = it ? catalogue?.[it.model] : undefined;
+	const facts: string[] = [];
+	if (it) {
+		if (info) facts.push(`${metres(info.size[0])} × ${metres(info.size[2])} × ${metres(info.size[1])} high`);
+		if (isCurve(it)) facts.push(`${it.curve.length} nodes along a curve`);
+		facts.push(COLLISION_LABELS[it.collision as keyof typeof COLLISION_LABELS] ?? it.collision);
+		const all = Object.keys(objects.layouts).length;
+		facts.push(it.layouts ? `in ${it.layouts.length} of ${all} layouts` : "in every layout");
+		const lights = track?.lights?.length ?? 0;
+		if (lights) facts.push(`${lights} light${lights === 1 ? "" : "s"}`);
+	} else if (isLayoutKind(pick.kind) || isLineKind(pick.kind)) facts.push(`in ${layout}`);
+	const text = it && pick.kind === "boards" ? boardText(it.name, it.text) : null;
+	return (
+		<div className="object-hero">
+			{text !== null ? (
+				<div className="card-preview" aria-hidden="true">
+					<span style={{ fontSize: `${Math.max(11, Math.min(34, 120 / Math.max(text.length, 1)))}px` }}>{text}</span>
+				</div>
+			) : (
+				<img className="hero-picture" src={it ? modelIcon(it.model) : kindIcon(pick.kind)} alt="" width={72} height={72} />
+			)}
+			<div className="hero-text">
+				<strong>{info?.label ?? (it ? it.model : label.one)}</strong>
+				<p className="hero-what">{track?.description ?? info?.description ?? label.what}</p>
+				{facts.length ? (
+					<ul className="facts" aria-label="About it">
+						{facts.map((f) => (
+							<li key={f} className="fact">
+								{f}
+							</li>
+						))}
+					</ul>
+				) : null}
+			</div>
+		</div>
+	);
 }
 
 /** The model a placed thing is: another of its kind chosen (and placing goes on with it). */
 /** Its model, to change it, where its kind has more than one (what it is, its size: the hero's). */
 function ModelRow({ kind, model }: Readonly<{ kind: ModelKind; model: string | undefined }>) {
-  const ed = useEditor();
-  const choices = modelsOf(kind);
-  if (choices.length <= 1) return null;
-  return (
-    <Row label="Model">
-      <IconSelect label="Model" value={model ?? ''} options={modelOptions(choices)} onChange={ed.setModel} />
-    </Row>
-  );
+	const ed = useEditor();
+	const choices = modelsOf(kind);
+	if (choices.length <= 1) return null;
+	return (
+		<Row label="Model">
+			<IconSelect label="Model" value={model ?? ""} options={modelOptions(choices)} onChange={ed.setModel} />
+		</Row>
+	);
 }
 
-function PointRows({ label, at, set }: Readonly<{ label: string; at: Point; set: (k: 'x' | 'z', v: number) => void }>) {
-  return (
-    <Row label={label}>
-      <NumberField label={`${label} x`} value={at.x} onCommit={(v) => v != null && set('x', v)} />
-      <NumberField label={`${label} z`} value={at.z} onCommit={(v) => v != null && set('z', v)} />
-    </Row>
-  );
+function PointRows({ label, at, set }: Readonly<{ label: string; at: Point; set: (k: "x" | "z", v: number) => void }>) {
+	return (
+		<Row label={label}>
+			<NumberField label={`${label} x`} value={at.x} onCommit={(v) => v != null && set("x", v)} />
+			<NumberField label={`${label} z`} value={at.z} onCommit={(v) => v != null && set("z", v)} />
+		</Row>
+	);
 }
 
 function SpotRows({ spot, pick, change }: Readonly<{ spot: Spot; pick: ObjectPick; change: Change }>) {
-  const ed = useEditor();
-  const layout = ed.get().layout;
-  const edit = (fn: (s: Spot) => void) =>
-    change((o) => {
-      const s = spotOf(o, layout, pick);
-      if (s) fn(s);
-    });
-  const name =
-    spot.name === undefined ? null : (
-      <ExportName
-        value={spot.name}
-        onCommit={(v) =>
-          v &&
-          edit((s) => {
-            s.name = v;
-          })
-        }
-      />
-    );
-  return (
-    <>
-      <PointRows
-        label="x, z"
-        at={spot}
-        set={(k, v) =>
-          edit((s) => {
-            s[k] = v;
-          })
-        }
-      />
-      <Row label="Heading">
-        <NumberField
-          label="Heading (degrees)"
-          step={1}
-          value={Math.round(spot.heading * DEG * 10) / 10}
-          onCommit={(v) =>
-            v != null &&
-            edit((s) => {
-              s.heading = Math.atan2(Math.sin(v / DEG), Math.cos(v / DEG));
-            })
-          }
-        />
-        <span>° from north (+z), towards +x</span>
-      </Row>
-      {name}
-    </>
-  );
+	const ed = useEditor();
+	const layout = ed.get().layout;
+	const edit = (fn: (s: Spot) => void) =>
+		change((o) => {
+			const s = spotOf(o, layout, pick);
+			if (s) fn(s);
+		});
+	const name =
+		spot.name === undefined ? null : (
+			<ExportName
+				value={spot.name}
+				onCommit={(v) =>
+					v &&
+					edit((s) => {
+						s.name = v;
+					})
+				}
+			/>
+		);
+	return (
+		<>
+			<PointRows
+				label="x, z"
+				at={spot}
+				set={(k, v) =>
+					edit((s) => {
+						s[k] = v;
+					})
+				}
+			/>
+			<Row label="Heading">
+				<NumberField
+					label="Heading (degrees)"
+					step={1}
+					value={Math.round(spot.heading * DEG * 10) / 10}
+					onCommit={(v) =>
+						v != null &&
+						edit((s) => {
+							s.heading = Math.atan2(Math.sin(v / DEG), Math.cos(v / DEG));
+						})
+					}
+				/>
+				<span>° from north (+z), towards +x</span>
+			</Row>
+			{name}
+		</>
+	);
 }
 
 interface PartProps {
-  objects: TrackObjects;
-  layout: string;
-  pick: ObjectPick;
-  change: Change;
+	objects: TrackObjects;
+	layout: string;
+	pick: ObjectPick;
+	change: Change;
 }
 
 /** The layout shown: another made from it, it renamed, or it taken away (a name typed in its own field). */
 function LayoutButtons() {
-  const ed = useEditor();
-  const [naming, setNaming] = useState<'new' | 'rename' | null>(null);
-  const [error, setError] = useState('');
-  const layout = useEditorState((s) => s.layout);
-  const done = (name: string) => {
-    const bad = naming === 'new' ? ed.newLayout(name.trim()) : ed.renameShownLayout(name.trim());
-    if (bad) setError(bad);
-    else {
-      setNaming(null);
-      setError('');
-    }
-  };
-  return (
-    <>
-      <button type="button" className="small" title="A new layout made as this one is" onClick={() => setNaming('new')}>
-        New
-      </button>
-      <button type="button" className="small" title="Rename this layout" onClick={() => setNaming('rename')}>
-        Rename
-      </button>
-      <button type="button" className="small" title="Take this layout away" onClick={ed.removeShownLayout}>
-        Remove
-      </button>
-      {naming ? (
-        <span className="layout-name">
-          <TextField
-            label={naming === 'new' ? `New layout's name (made as ${layout})` : `${layout}'s new name`}
-            value={naming === 'new' ? '' : layout}
-            placeholder={naming === 'new' ? `${layout}_2` : undefined}
-            onCommit={done}
-          />
-          <button type="button" className="small" onClick={() => setNaming(null)}>
-            Cancel
-          </button>
-          {error ? <span className="error">{error}</span> : null}
-        </span>
-      ) : null}
-    </>
-  );
+	const ed = useEditor();
+	const [naming, setNaming] = useState<"new" | "rename" | null>(null);
+	const [error, setError] = useState("");
+	const layout = useEditorState((s) => s.layout);
+	const done = (name: string) => {
+		const bad = naming === "new" ? ed.newLayout(name.trim()) : ed.renameShownLayout(name.trim());
+		if (bad) setError(bad);
+		else {
+			setNaming(null);
+			setError("");
+		}
+	};
+	return (
+		<>
+			<button type="button" className="small" title="A new layout made as this one is" onClick={() => setNaming("new")}>
+				New
+			</button>
+			<button type="button" className="small" title="Rename this layout" onClick={() => setNaming("rename")}>
+				Rename
+			</button>
+			<button type="button" className="small" title="Take this layout away" onClick={ed.removeShownLayout}>
+				Remove
+			</button>
+			{naming ? (
+				<span className="layout-name">
+					<TextField
+						label={naming === "new" ? `New layout's name (made as ${layout})` : `${layout}'s new name`}
+						value={naming === "new" ? "" : layout}
+						placeholder={naming === "new" ? `${layout}_2` : undefined}
+						onCommit={done}
+					/>
+					<button type="button" className="small" onClick={() => setNaming(null)}>
+						Cancel
+					</button>
+					{error ? <span className="error">{error}</span> : null}
+				</span>
+			) : null}
+		</>
+	);
 }
 
 /** A paved area: its material, its corners and size; how it is shaped. */
 function AreaRows({ objects, pick, change }: Readonly<PartProps>) {
-  const ed = useEditor();
-  const materials = useEditorState((s) => s.track?.materials ?? []);
-  const [bay, setBay] = useState(BAY[0]);
-  const [depth, setDepth] = useState(BAY[1]);
-  const a = objects.areas?.[pick.i];
-  if (!a) return null;
-  const options: Options<string> = [...new Set([a.material, ...materials])].map((m) => [m, m] as const);
-  return (
-    <>
-      <Row label="Material">
-        <SelectField
-          label="Material"
-          value={a.material}
-          options={options}
-          onChange={(m) =>
-            change((o) => {
-              const x = o.areas?.[pick.i];
-              if (x) x.material = m;
-            })
-          }
-        />
-      </Row>
-      <Row label="Corners">{a.points.length}</Row>
-      <Row label="Size">{Math.round(areaOf(a.points))} m²</Row>
-      <Row label="Parking bays">
-        <NumberField label="Bay width (m)" value={bay} onCommit={(v) => v && v > 0 && setBay(v)} />
-        <NumberField label="Bay depth (m)" value={depth} onCommit={(v) => v && v > 0 && setDepth(v)} />
-        <button
-          type="button"
-          className="small"
-          title="Paint a row of parking bays along its longest edge (again: made anew)"
-          onClick={() => ed.parkArea(bay, depth)}
-        >
-          Paint bays
-        </button>
-      </Row>
-      <p className="note">
-        Drag a corner, or the whole; with it picked, Add Node (A) or a double click on an edge adds a corner; Delete
-        takes the picked corner away. It is laid as a road's asphalt; paint marks (Paint) go on it.
-      </p>
-    </>
-  );
+	const ed = useEditor();
+	const materials = useEditorState((s) => s.track?.materials ?? []);
+	const [bay, setBay] = useState(BAY[0]);
+	const [depth, setDepth] = useState(BAY[1]);
+	const a = objects.areas?.[pick.i];
+	if (!a) return null;
+	const options: Options<string> = [...new Set([a.material, ...materials])].map((m) => [m, m] as const);
+	return (
+		<>
+			<Row label="Material">
+				<SelectField
+					label="Material"
+					value={a.material}
+					options={options}
+					onChange={(m) =>
+						change((o) => {
+							const x = o.areas?.[pick.i];
+							if (x) x.material = m;
+						})
+					}
+				/>
+			</Row>
+			<Row label="Corners">{a.points.length}</Row>
+			<Row label="Size">{Math.round(areaOf(a.points))} m²</Row>
+			<Row label="Parking bays">
+				<NumberField label="Bay width (m)" value={bay} onCommit={(v) => v && v > 0 && setBay(v)} />
+				<NumberField label="Bay depth (m)" value={depth} onCommit={(v) => v && v > 0 && setDepth(v)} />
+				<button
+					type="button"
+					className="small"
+					title="Paint a row of parking bays along its longest edge (again: made anew)"
+					onClick={() => ed.parkArea(bay, depth)}
+				>
+					Paint bays
+				</button>
+			</Row>
+			<p className="note">
+				Drag a corner, or the whole; with it picked, Add Node (A) or a double click on an edge adds a corner; Delete takes the picked corner away. It is laid as
+				a road's asphalt; paint marks (Paint) go on it.
+			</p>
+		</>
+	);
 }
 
 /** A racing line being made from roads: the roads clicked, in order; made, or not. */
 function RoutingBox() {
-  const ed = useEditor();
-  const routing = useEditorState((s) => s.routing);
-  if (!routing) return null;
-  const what = routing.kind === 'fast' ? 'lap' : 'pit lane';
-  return (
-    <section className="routing" aria-label="Line from roads">
-      <p className="note">
-        Click the roads the {what} runs on, in order; click the last again to take it off.
-        {routing.kind === 'pit' ? ' Its ends fork off and merge into the fast line where they meet it.' : ''}
-      </p>
-      <p>{routing.roads.length ? routing.roads.join(' → ') : 'No roads yet.'}</p>
-      <Row label="">
-        <button type="button" className="small primary" disabled={!routing.roads.length} onClick={ed.makeRouted}>
-          Make the line
-        </button>
-        <button type="button" className="small" onClick={ed.cancelRouting}>
-          Cancel
-        </button>
-      </Row>
-    </section>
-  );
+	const ed = useEditor();
+	const routing = useEditorState((s) => s.routing);
+	if (!routing) return null;
+	const what = routing.kind === "fast" ? "lap" : "pit lane";
+	return (
+		<section className="routing" aria-label="Line from roads">
+			<p className="note">
+				Click the roads the {what} runs on, in order; click the last again to take it off.
+				{routing.kind === "pit" ? " Its ends fork off and merge into the fast line where they meet it." : ""}
+			</p>
+			<p>{routing.roads.length ? routing.roads.join(" → ") : "No roads yet."}</p>
+			<Row label="">
+				<button type="button" className="small primary" disabled={!routing.roads.length} onClick={ed.makeRouted}>
+					Make the line
+				</button>
+				<button type="button" className="small" onClick={ed.cancelRouting}>
+					Cancel
+				</button>
+			</Row>
+		</section>
+	);
 }
 
-/** A racing line: how long, its nodes; the pit line's fork and merge (metres along the fast line), typed or dragged
- * along it. */
+/** A racing line: how long, its nodes; the pit line's fork and merge (metres along the fast line), typed or dragged along it. */
 function LineRows({ objects, layout, pick, change }: Readonly<PartProps>) {
-  const lay = objects.layouts[layout];
-  const kind = pick.kind as LineKind;
-  const line = lineOf(lay, kind);
-  if (!line) return null;
-  const length = wallPath(line, 0.5).length;
-  const fast = lay?.lines?.fast;
-  const lap = fast ? wallPath(fast, 0.5).length : 0;
-  const set = (k: 'leaves' | 'joins') => (v: number | null) =>
-    change((o) => {
-      const lines = o.layouts[layout]?.lines;
-      const pit = lines?.pit;
-      if (!pit || !lap || v === null) return;
-      pit[k] = Math.round((((v % lap) + lap) % lap) * 1000) / 1000;
-      keepPitOn(lines);
-    });
-  return (
-    <>
-      <Row label="Length">{metres(length)}</Row>
-      <Row label="Nodes">{line.curve.length}</Row>
-      {kind === 'pit' ? (
-        <>
-          <Row label="Leaves at">
-            <NumberField label="Leaves at (m along the fast line)" value={line.leaves ?? 0} onCommit={set('leaves')} />
-          </Row>
-          <Row label="Joins at">
-            <NumberField label="Joins at (m along the fast line)" value={line.joins ?? 0} onCommit={set('joins')} />
-          </Row>
-        </>
-      ) : null}
-      <p className="note">
-        {kind === 'fast'
-          ? 'Drag a node or its handles; Place adds a node where you click (on the line: there, keeping its shape). Its first node is on the start line.'
-          : 'Drag the diamonds along the fast line to move where it leaves and joins it; its nodes between as the fast line’s. Place adds a node.'}
-      </p>
-    </>
-  );
+	const lay = objects.layouts[layout];
+	const kind = pick.kind as LineKind;
+	const line = lineOf(lay, kind);
+	if (!line) return null;
+	const length = wallPath(line, 0.5).length;
+	const fast = lay?.lines?.fast;
+	const lap = fast ? wallPath(fast, 0.5).length : 0;
+	const set = (k: "leaves" | "joins") => (v: number | null) =>
+		change((o) => {
+			const lines = o.layouts[layout]?.lines;
+			const pit = lines?.pit;
+			if (!pit || !lap || v === null) return;
+			pit[k] = Math.round((((v % lap) + lap) % lap) * 1000) / 1000;
+			keepPitOn(lines);
+		});
+	return (
+		<>
+			<Row label="Length">{metres(length)}</Row>
+			<Row label="Nodes">{line.curve.length}</Row>
+			{kind === "pit" ? (
+				<>
+					<Row label="Leaves at">
+						<NumberField label="Leaves at (m along the fast line)" value={line.leaves ?? 0} onCommit={set("leaves")} />
+					</Row>
+					<Row label="Joins at">
+						<NumberField label="Joins at (m along the fast line)" value={line.joins ?? 0} onCommit={set("joins")} />
+					</Row>
+				</>
+			) : null}
+			<p className="note">
+				{kind === "fast"
+					? "Drag a node or its handles; Place adds a node where you click (on the line: there, keeping its shape). Its first node is on the start line."
+					: "Drag the diamonds along the fast line to move where it leaves and joins it; its nodes between as the fast line’s. Place adds a node."}
+			</p>
+		</>
+	);
 }
 
 function GateRows({ objects, layout, pick, change }: Readonly<PartProps>) {
-  const g = objects.layouts[layout]?.timing[pick.i];
-  if (!g) return null;
-  const set = (side: 'left' | 'right') => (k: 'x' | 'z', v: number) =>
-    change((o) => {
-      const q = o.layouts[layout]?.timing[pick.i]?.[side];
-      if (q) q[k] = v;
-    });
-  return (
-    <>
-      <PointRows label="Left" at={g.left} set={set('left')} />
-      <PointRows label="Right" at={g.right} set={set('right')} />
-      <Row label="Width">{Math.hypot(g.right.x - g.left.x, g.right.z - g.left.z).toFixed(2)} m</Row>
-      <details className="export">
-        <summary>Export name</summary>
-        <p className="hint">AC_TIME_{pick.i}: named by its place (Earlier, Later).</p>
-      </details>
-    </>
-  );
+	const g = objects.layouts[layout]?.timing[pick.i];
+	if (!g) return null;
+	const set = (side: "left" | "right") => (k: "x" | "z", v: number) =>
+		change((o) => {
+			const q = o.layouts[layout]?.timing[pick.i]?.[side];
+			if (q) q[k] = v;
+		});
+	return (
+		<>
+			<PointRows label="Left" at={g.left} set={set("left")} />
+			<PointRows label="Right" at={g.right} set={set("right")} />
+			<Row label="Width">{Math.hypot(g.right.x - g.left.x, g.right.z - g.left.z).toFixed(2)} m</Row>
+			<details className="export">
+				<summary>Export name</summary>
+				<p className="hint">AC_TIME_{pick.i}: named by its place (Earlier, Later).</p>
+			</details>
+		</>
+	);
 }
 
 /** A light of a model as people read it: which, how far down it looks, and which way (none: all round, a lamp). */
-function lightText(l: NonNullable<TrackModel['lights']>[number]): string {
-  if (!l.facing) return `${l.series}: all round`;
-  const [r, y, f] = l.facing;
-  const down = Math.round((Math.asin(Math.max(-1, Math.min(1, -y))) * 180) / Math.PI);
-  if (Math.hypot(r, f) < 0.2) return `${l.series}: straight down`;
-  const side = Math.round((Math.atan2(r, f) * 180) / Math.PI);
-  const way = Math.abs(side) < 5 ? 'along its heading' : `${Math.abs(side)}° to its ${side > 0 ? 'right' : 'left'}`;
-  return `${l.series}: ${down}° down, ${way}`;
+function lightText(l: NonNullable<TrackModel["lights"]>[number]): string {
+	if (!l.facing) return `${l.series}: all round`;
+	const [r, y, f] = l.facing;
+	const down = Math.round((Math.asin(Math.max(-1, Math.min(1, -y))) * 180) / Math.PI);
+	if (Math.hypot(r, f) < 0.2) return `${l.series}: straight down`;
+	const side = Math.round((Math.atan2(r, f) * 180) / Math.PI);
+	const way = Math.abs(side) < 5 ? "along its heading" : `${Math.abs(side)}° to its ${side > 0 ? "right" : "left"}`;
+	return `${l.series}: ${down}° down, ${way}`;
 }
 
-/** An object picked (one of a model, or copies of it along a curve): its model and what the track says of it (its
- * lights), where it is and the way it looks (one) or its curve, what is hit of it, its layouts, its name. */
+/** An object picked (one of a model, or copies of it along a curve): its model and what the track says of it (its lights), where it is and the way it looks
+ * (one) or its curve, what is hit of it, its layouts, its name. */
 function ObjectRows({ objects, layout, pick, change }: Readonly<PartProps>) {
-  const catalogue = useEditorState((s) => s.catalogue);
-  const it = objects.objects[pick.i];
-  if (!it || !isModelKind(pick.kind)) return null;
-  const kind = pick.kind;
-  const edit = (fn: (t: PlacedObject) => void) =>
-    change((o) => {
-      const t = o.objects[pick.i];
-      if (t) fn(t);
-    });
-  const curve = isCurve(it);
-  const track = catalogue?.[it.model];
-  // (its own walls and floors only where its catalogue's model has them: a building's)
-  const allowed = (curve ? ALONG : SINGLE).filter(
-    (c) =>
-      c === it.collision ||
-      (c === 'model' ? !!track?.collision?.includes('model') : !track?.collision || track.collision.includes(c)),
-  );
-  const fits = (track?.fits ?? (kind === 'fences' ? ['place', 'bend'] : ['place'])) as ObjectFit[];
-  const n = it.curve[0];
-  return (
-    <>
-      <ModelRow kind={kind} model={it.model} />
-      {kind === 'boards' ? (
-        <Row label="Text">
-          <TextField
-            label="What its card says"
-            value={it.text ?? ''}
-            placeholder={boardText(it.name) || 'nothing: a blank card'}
-            onCommit={(v) =>
-              edit((t) => {
-                if (v) t.text = v.slice(0, 40);
-                else delete t.text;
-              })
-            }
-          />
-          <span>drawn as large as fits the card; | breaks a line (none: its name's)</span>
-        </Row>
-      ) : null}
-      {track?.lights?.length ? <LightRows lights={track.lights} it={it} edit={edit} /> : null}
-      {!curve && n ? (
-        <>
-          <PointRows
-            label="x, z"
-            at={{ x: n.p[0], z: n.p[1] }}
-            set={(k, v) =>
-              edit((t) => {
-                const m = t.curve[0];
-                if (m) m.p[k === 'x' ? 0 : 1] = v;
-              })
-            }
-          />
-          <Row label="Heading">
-            <NumberField
-              label="Heading (degrees)"
-              step={1}
-              value={Math.round((it.heading ?? 0) * DEG * 10) / 10}
-              onCommit={(v) =>
-                v != null &&
-                edit((t) => {
-                  t.heading = Math.atan2(Math.sin(v / DEG), Math.cos(v / DEG));
-                })
-              }
-            />
-            <span>° from north (+z), towards +x</span>
-          </Row>
-        </>
-      ) : null}
-      {curve ? <CurveRows it={it} pick={pick} edit={edit} /> : null}
-      <Row label="Hit">
-        <SelectField
-          label="Collision"
-          value={it.collision}
-          options={allowed.map((c) => [c, COLLISION_LABELS[c]] as const)}
-          onChange={(v) =>
-            edit((t) => {
-              t.collision = v;
-            })
-          }
-        />
-      </Row>
-      {curve && fits.length > 1 ? (
-        <Row label="Fit">
-          <SelectField
-            label="Fit"
-            value={it.fit ?? 'place'}
-            options={fits.map((f) => [f, FIT_LABELS[f]] as const)}
-            onChange={(v) =>
-              edit((t) => {
-                t.fit = v;
-              })
-            }
-          />
-        </Row>
-      ) : null}
-      <Row label="Scale">
-        {(['across', 'up', 'deep'] as const).map((axis, k) => (
-          <NumberField
-            key={axis}
-            label={`Scale ${axis}`}
-            step={0.05}
-            value={it.scale?.[k] ?? 1}
-            onCommit={(v) =>
-              v != null &&
-              v > 0 &&
-              edit((t) => {
-                const s: [number, number, number] = [...(t.scale ?? [1, 1, 1])];
-                s[k] = v;
-                if (s.every((x) => x === 1)) delete t.scale;
-                else t.scale = s;
-              })
-            }
-          />
-        ))}
-        <span>across, up, deep (1: as the model is)</span>
-      </Row>
-      <LayoutRows objects={objects} layout={layout} it={it} edit={edit} />
-      <ExportName
-        value={it.name}
-        onCommit={(v) =>
-          v &&
-          edit((t) => {
-            t.name = v;
-          })
-        }
-      />
-    </>
-  );
+	const catalogue = useEditorState((s) => s.catalogue);
+	const it = objects.objects[pick.i];
+	if (!it || !isModelKind(pick.kind)) return null;
+	const kind = pick.kind;
+	const edit = (fn: (t: PlacedObject) => void) =>
+		change((o) => {
+			const t = o.objects[pick.i];
+			if (t) fn(t);
+		});
+	const curve = isCurve(it);
+	const track = catalogue?.[it.model];
+	// (its own walls and floors only where its catalogue's model has them: a building's)
+	const allowed = (curve ? ALONG : SINGLE).filter(
+		(c) => c === it.collision || (c === "model" ? !!track?.collision?.includes("model") : !track?.collision || track.collision.includes(c)),
+	);
+	const fits = (track?.fits ?? (kind === "fences" ? ["place", "bend"] : ["place"])) as ObjectFit[];
+	const n = it.curve[0];
+	return (
+		<>
+			<ModelRow kind={kind} model={it.model} />
+			{kind === "boards" ? (
+				<Row label="Text">
+					<TextField
+						label="What its card says"
+						value={it.text ?? ""}
+						placeholder={boardText(it.name) || "nothing: a blank card"}
+						onCommit={(v) =>
+							edit((t) => {
+								if (v) t.text = v.slice(0, 40);
+								else delete t.text;
+							})
+						}
+					/>
+					<span>drawn as large as fits the card; | breaks a line (none: its name's)</span>
+				</Row>
+			) : null}
+			{track?.lights?.length ? <LightRows lights={track.lights} it={it} edit={edit} /> : null}
+			{!curve && n ? (
+				<>
+					<PointRows
+						label="x, z"
+						at={{ x: n.p[0], z: n.p[1] }}
+						set={(k, v) =>
+							edit((t) => {
+								const m = t.curve[0];
+								if (m) m.p[k === "x" ? 0 : 1] = v;
+							})
+						}
+					/>
+					<Row label="Heading">
+						<NumberField
+							label="Heading (degrees)"
+							step={1}
+							value={Math.round((it.heading ?? 0) * DEG * 10) / 10}
+							onCommit={(v) =>
+								v != null &&
+								edit((t) => {
+									t.heading = Math.atan2(Math.sin(v / DEG), Math.cos(v / DEG));
+								})
+							}
+						/>
+						<span>° from north (+z), towards +x</span>
+					</Row>
+				</>
+			) : null}
+			{curve ? <CurveRows it={it} pick={pick} edit={edit} /> : null}
+			<Row label="Hit">
+				<SelectField
+					label="Collision"
+					value={it.collision}
+					options={allowed.map((c) => [c, COLLISION_LABELS[c]] as const)}
+					onChange={(v) =>
+						edit((t) => {
+							t.collision = v;
+						})
+					}
+				/>
+			</Row>
+			{curve && fits.length > 1 ? (
+				<Row label="Fit">
+					<SelectField
+						label="Fit"
+						value={it.fit ?? "place"}
+						options={fits.map((f) => [f, FIT_LABELS[f]] as const)}
+						onChange={(v) =>
+							edit((t) => {
+								t.fit = v;
+							})
+						}
+					/>
+				</Row>
+			) : null}
+			<Row label="Scale">
+				{(["across", "up", "deep"] as const).map((axis, k) => (
+					<NumberField
+						key={axis}
+						label={`Scale ${axis}`}
+						step={0.05}
+						value={it.scale?.[k] ?? 1}
+						onCommit={(v) =>
+							v != null &&
+							v > 0 &&
+							edit((t) => {
+								const s: [number, number, number] = [...(t.scale ?? [1, 1, 1])];
+								s[k] = v;
+								if (s.every((x) => x === 1)) delete t.scale;
+								else t.scale = s;
+							})
+						}
+					/>
+				))}
+				<span>across, up, deep (1: as the model is)</span>
+			</Row>
+			<LayoutRows objects={objects} layout={layout} it={it} edit={edit} />
+			<ExportName
+				value={it.name}
+				onCommit={(v) =>
+					v &&
+					edit((t) => {
+						t.name = v;
+					})
+				}
+			/>
+		</>
+	);
 }
 
 const hex2 = (v: number) =>
-  Math.round(Math.min(Math.max(v, 0), 1) * 255)
-    .toString(16)
-    .padStart(2, '0');
+	Math.round(Math.min(Math.max(v, 0), 1) * 255)
+		.toString(16)
+		.padStart(2, "0");
 /** A colour (red, green, blue: 0 to 1) as a colour field has it (#rrggbb), and back (to a thousandth). */
-const toHex = (c: readonly number[]) => `#${c.map(hex2).join('')}`;
+const toHex = (c: readonly number[]) => `#${c.map(hex2).join("")}`;
 const fromHex = (h: string): [number, number, number] =>
-  [1, 3, 5].map((i) => Math.round((Number.parseInt(h.slice(i, i + 2), 16) / 255) * 1000) / 1000) as [
-    number,
-    number,
-    number,
-  ];
+	[1, 3, 5].map((i) => Math.round((Number.parseInt(h.slice(i, i + 2), 16) / 255) * 1000) / 1000) as [number, number, number];
 
 /** A colour picked: given once picking is done (the field left), only if it is another colour. */
-function ColourField({
-  label,
-  value,
-  onCommit,
-}: Readonly<{ label: string; value: readonly number[]; onCommit: (c: [number, number, number]) => void }>) {
-  const shown = toHex(value);
-  const [text, setText] = useState(shown);
-  const [editing, setEditing] = useState(false);
-  const now = editing ? text : shown;
-  return (
-    <input
-      type="color"
-      aria-label={label}
-      title={label}
-      value={now}
-      onChange={(e) => {
-        setEditing(true);
-        setText(e.target.value);
-      }}
-      onBlur={() => {
-        setEditing(false);
-        if (text.toLowerCase() !== shown) onCommit(fromHex(text));
-      }}
-    />
-  );
+function ColourField({ label, value, onCommit }: Readonly<{ label: string; value: readonly number[]; onCommit: (c: [number, number, number]) => void }>) {
+	const shown = toHex(value);
+	const [text, setText] = useState(shown);
+	const [editing, setEditing] = useState(false);
+	const now = editing ? text : shown;
+	return (
+		<input
+			type="color"
+			aria-label={label}
+			title={label}
+			value={now}
+			onChange={(e) => {
+				setEditing(true);
+				setText(e.target.value);
+			}}
+			onBlur={() => {
+				setEditing(false);
+				if (text.toLowerCase() !== shown) onCommit(fromHex(text));
+			}}
+		/>
+	);
 }
 
-/** The lights of the object's model, as the object has them: each lit or not, its strength, reach and colour its
- * series' (the track's source/lights.json) unless changed here; a value emptied: its series' again. Only what is
- * changed is kept on the object. */
+/** The lights of the object's model, as the object has them: each lit or not, its strength, reach and colour its series' (the track's source/lights.json)
+ * unless changed here; a value emptied: its series' again. Only what is changed is kept on the object. */
 function LightRows({
-  lights,
-  it,
-  edit,
+	lights,
+	it,
+	edit,
 }: Readonly<{
-  lights: NonNullable<TrackModel['lights']>;
-  it: PlacedObject;
-  edit: (fn: (t: PlacedObject) => void) => void;
+	lights: NonNullable<TrackModel["lights"]>;
+	it: PlacedObject;
+	edit: (fn: (t: PlacedObject) => void) => void;
 }>) {
-  const series = useEditorState((s) => s.lightSeries);
-  const set = (k: number, change: Parameters<typeof withLightOption>[2]) =>
-    edit((t) => {
-      const next = withLightOption(t.lights, k, change, series[lights[k]?.series ?? '']);
-      if (next) t.lights = next;
-      else delete t.lights;
-    });
-  return (
-    <fieldset className="lights-of">
-      <legend>Lights</legend>
-      {lights.map((l, k) => {
-        const own = it.lights?.[String(k)];
-        const v = lightValues(series[l.series], own);
-        const name = `Light ${k + 1}`;
-        return (
-          <div key={`${l.series}:${l.at.join(',')}`} className="light">
-            <label title="Lit at night (off: not lit, in every game)">
-              <input type="checkbox" checked={v.on} onChange={(e) => set(k, { on: e.target.checked })} /> {lightText(l)}
-            </label>
-            {v.on ? (
-              <Row label="">
-                <NumberField
-                  label={`${name} strength`}
-                  value={v.strength}
-                  onCommit={(x) => (x === null || x >= 0) && set(k, { strength: x ?? undefined })}
-                />
-                <span>strong,</span>
-                <NumberField
-                  label={`${name} range (m)`}
-                  value={v.range}
-                  onCommit={(x) => (x === null || x > 0) && set(k, { range: x ?? undefined })}
-                />
-                <span>m reach,</span>
-                <ColourField label={`${name} colour`} value={v.colour} onCommit={(c) => set(k, { colour: c })} />
-                {own && (own.strength !== undefined || own.range !== undefined || own.colour) ? (
-                  <button
-                    type="button"
-                    className="small"
-                    title="Its strength, reach and colour its series' again"
-                    onClick={() => set(k, { strength: undefined, range: undefined, colour: undefined })}
-                  >
-                    As its series
-                  </button>
-                ) : null}
-              </Row>
-            ) : null}
-          </div>
-        );
-      })}
-      <p className="note">
-        Its lights are part of it: each as its series is (
-        {Object.keys(series).length ? 'source/lights.json' : 'none read'}) unless changed here.
-      </p>
-    </fieldset>
-  );
+	const series = useEditorState((s) => s.lightSeries);
+	const set = (k: number, change: Parameters<typeof withLightOption>[2]) =>
+		edit((t) => {
+			const next = withLightOption(t.lights, k, change, series[lights[k]?.series ?? ""]);
+			if (next) t.lights = next;
+			else delete t.lights;
+		});
+	return (
+		<fieldset className="lights-of">
+			<legend>Lights</legend>
+			{lights.map((l, k) => {
+				const own = it.lights?.[String(k)];
+				const v = lightValues(series[l.series], own);
+				const name = `Light ${k + 1}`;
+				return (
+					<div key={`${l.series}:${l.at.join(",")}`} className="light">
+						<label title="Lit at night (off: not lit, in every game)">
+							<input type="checkbox" checked={v.on} onChange={(e) => set(k, { on: e.target.checked })} /> {lightText(l)}
+						</label>
+						{v.on ? (
+							<Row label="">
+								<NumberField label={`${name} strength`} value={v.strength} onCommit={(x) => (x === null || x >= 0) && set(k, { strength: x ?? undefined })} />
+								<span>strong,</span>
+								<NumberField label={`${name} range (m)`} value={v.range} onCommit={(x) => (x === null || x > 0) && set(k, { range: x ?? undefined })} />
+								<span>m reach,</span>
+								<ColourField label={`${name} colour`} value={v.colour} onCommit={(c) => set(k, { colour: c })} />
+								{own && (own.strength !== undefined || own.range !== undefined || own.colour) ? (
+									<button
+										type="button"
+										className="small"
+										title="Its strength, reach and colour its series' again"
+										onClick={() => set(k, { strength: undefined, range: undefined, colour: undefined })}
+									>
+										As its series
+									</button>
+								) : null}
+							</Row>
+						) : null}
+					</div>
+				);
+			})}
+			<p className="note">
+				Its lights are part of it: each as its series is ({Object.keys(series).length ? "source/lights.json" : "none read"}) unless changed here.
+			</p>
+		</fieldset>
+	);
 }
 
 /** The layouts an object is in: every one (those made later too), or those ticked (never none: the one shown kept). */
 function LayoutRows({
-  objects,
-  layout,
-  it,
-  edit,
+	objects,
+	layout,
+	it,
+	edit,
 }: Readonly<{
-  objects: TrackObjects;
-  layout: string;
-  it: PlacedObject;
-  edit: (fn: (t: PlacedObject) => void) => void;
+	objects: TrackObjects;
+	layout: string;
+	it: PlacedObject;
+	edit: (fn: (t: PlacedObject) => void) => void;
 }>) {
-  const all = Object.keys(objects.layouts);
-  const every = !it.layouts;
-  const on = (l: string) => every || !!it.layouts?.includes(l);
-  return (
-    <fieldset className="layouts-of">
-      <legend>In</legend>
-      <label title="In every layout, those made later too">
-        <input
-          type="checkbox"
-          checked={every}
-          onChange={(e) =>
-            edit((t) => {
-              setLayouts(t, e.target.checked ? null : [layout], all);
-            })
-          }
-        />{' '}
-        every layout
-      </label>
-      {all.map((l) => (
-        <label key={l}>
-          <input
-            type="checkbox"
-            checked={on(l)}
-            disabled={every || (on(l) && (it.layouts?.length ?? 0) <= 1)}
-            onChange={(e) =>
-              edit((t) => {
-                const now = t.layouts ?? all;
-                setLayouts(t, e.target.checked ? [...now, l] : now.filter((x) => x !== l), all);
-              })
-            }
-          />{' '}
-          {l}
-        </label>
-      ))}
-    </fieldset>
-  );
+	const all = Object.keys(objects.layouts);
+	const every = !it.layouts;
+	const on = (l: string) => every || !!it.layouts?.includes(l);
+	return (
+		<fieldset className="layouts-of">
+			<legend>In</legend>
+			<label title="In every layout, those made later too">
+				<input
+					type="checkbox"
+					checked={every}
+					onChange={(e) =>
+						edit((t) => {
+							setLayouts(t, e.target.checked ? null : [layout], all);
+						})
+					}
+				/>{" "}
+				every layout
+			</label>
+			{all.map((l) => (
+				<label key={l}>
+					<input
+						type="checkbox"
+						checked={on(l)}
+						disabled={every || (on(l) && (it.layouts?.length ?? 0) <= 1)}
+						onChange={(e) =>
+							edit((t) => {
+								const now = t.layouts ?? all;
+								setLayouts(t, e.target.checked ? [...now, l] : now.filter((x) => x !== l), all);
+							})
+						}
+					/>{" "}
+					{l}
+				</label>
+			))}
+		</fieldset>
+	);
 }
 
 /** A curve of an object's copies: its nodes, the node picked, how far apart and how many rows, closed or not. */
-function CurveRows({
-  it,
-  pick,
-  edit,
-}: Readonly<{ it: PlacedObject; pick: ObjectPick; edit: (fn: (t: PlacedObject) => void) => void }>) {
-  const ed = useEditor();
-  const node = it.curve[pick.j];
-  const spacing = spacingOf(it);
-  return (
-    <>
-      <Row label="Curve">
-        {it.curve.length} nodes, {wallStacks({ ...it, spacing }).length} along it
-      </Row>
-      {node ? (
-        <>
-          <PointRows
-            label={`Node ${pick.j + 1}`}
-            at={{ x: node.p[0], z: node.p[1] }}
-            set={(k, v) =>
-              edit((t) => {
-                const m = t.curve[pick.j];
-                if (m) m.p[k === 'x' ? 0 : 1] = v;
-              })
-            }
-          />
-          <Row label="">
-            <label title="Its handles apart: dragging one leaves the other as it is">
-              <input
-                type="checkbox"
-                checked={!!node.corner}
-                onChange={(e) =>
-                  edit((t) => {
-                    const m = t.curve[pick.j];
-                    if (!m) return;
-                    if (e.target.checked) m.corner = true;
-                    else delete m.corner;
-                  })
-                }
-              />{' '}
-              corner
-            </label>
-          </Row>
-        </>
-      ) : null}
-      <Row label="Copies">
-        <NumberField
-          label="Spacing (m)"
-          value={it.spacing ?? null}
-          placeholder={String(Math.round(spacing * 100) / 100)}
-          onCommit={(v) =>
-            edit((t) => {
-              if (v == null) delete t.spacing;
-              else if (v > 0) t.spacing = v;
-            })
-          }
-        />
-        <span>m apart at most,</span>
-        <NumberField
-          label="Rows"
-          step={1}
-          value={it.rows ?? 1}
-          onCommit={(v) =>
-            v != null &&
-            v >= 1 &&
-            edit((t) => {
-              t.rows = Math.round(v);
-            })
-          }
-        />
-        <span>rows deep (to its right)</span>
-      </Row>
-      <Row label="">
-        <label>
-          <input
-            type="checkbox"
-            checked={!!it.closed}
-            onChange={(e) =>
-              edit((t) => {
-                t.closed = e.target.checked;
-              })
-            }
-          />{' '}
-          closed (a ring)
-        </label>
-        <button
-          type="button"
-          className="small"
-          title="Its handles along the way through its neighbours (S): the node picked, or every node"
-          onClick={() => ed.smoothPicked()}
-        >
-          Smooth {node ? 'node' : 'all'}
-        </button>
-      </Row>
-      <p className="note">
-        As a road: drag a node (square) to move that part of it, a handle (circle) to bend the curve (Alt: a corner);
-        the curve away from its nodes, or Shift and a node, to move the whole of it. Add Node (A) and a click, or a
-        double click on it, adds a node: on the curve where clicked, else on past its nearer end.
-      </p>
-    </>
-  );
+function CurveRows({ it, pick, edit }: Readonly<{ it: PlacedObject; pick: ObjectPick; edit: (fn: (t: PlacedObject) => void) => void }>) {
+	const ed = useEditor();
+	const node = it.curve[pick.j];
+	const spacing = spacingOf(it);
+	return (
+		<>
+			<Row label="Curve">
+				{it.curve.length} nodes, {wallStacks({ ...it, spacing }).length} along it
+			</Row>
+			{node ? (
+				<>
+					<PointRows
+						label={`Node ${pick.j + 1}`}
+						at={{ x: node.p[0], z: node.p[1] }}
+						set={(k, v) =>
+							edit((t) => {
+								const m = t.curve[pick.j];
+								if (m) m.p[k === "x" ? 0 : 1] = v;
+							})
+						}
+					/>
+					<Row label="">
+						<label title="Its handles apart: dragging one leaves the other as it is">
+							<input
+								type="checkbox"
+								checked={!!node.corner}
+								onChange={(e) =>
+									edit((t) => {
+										const m = t.curve[pick.j];
+										if (!m) return;
+										if (e.target.checked) m.corner = true;
+										else delete m.corner;
+									})
+								}
+							/>{" "}
+							corner
+						</label>
+					</Row>
+				</>
+			) : null}
+			<Row label="Copies">
+				<NumberField
+					label="Spacing (m)"
+					value={it.spacing ?? null}
+					placeholder={String(Math.round(spacing * 100) / 100)}
+					onCommit={(v) =>
+						edit((t) => {
+							if (v == null) delete t.spacing;
+							else if (v > 0) t.spacing = v;
+						})
+					}
+				/>
+				<span>m apart at most,</span>
+				<NumberField
+					label="Rows"
+					step={1}
+					value={it.rows ?? 1}
+					onCommit={(v) =>
+						v != null &&
+						v >= 1 &&
+						edit((t) => {
+							t.rows = Math.round(v);
+						})
+					}
+				/>
+				<span>rows deep (to its right)</span>
+			</Row>
+			<Row label="">
+				<label>
+					<input
+						type="checkbox"
+						checked={!!it.closed}
+						onChange={(e) =>
+							edit((t) => {
+								t.closed = e.target.checked;
+							})
+						}
+					/>{" "}
+					closed (a ring)
+				</label>
+				<button
+					type="button"
+					className="small"
+					title="Its handles along the way through its neighbours (S): the node picked, or every node"
+					onClick={() => ed.smoothPicked()}
+				>
+					Smooth {node ? "node" : "all"}
+				</button>
+			</Row>
+			<p className="note">
+				As a road: drag a node (square) to move that part of it, a handle (circle) to bend the curve (Alt: a corner); the curve away from its nodes, or Shift
+				and a node, to move the whole of it. Add Node (A) and a click, or a double click on it, adds a node: on the curve where clicked, else on past its nearer
+				end.
+			</p>
+		</>
+	);
 }
 
 const COLOURS: Options<LineColour> = [
-  ['white', 'white'],
-  ['yellow', 'yellow'],
+	["white", "white"],
+	["yellow", "yellow"],
 ];
 const STYLES: Options<LineStyle> = [
-  ['solid', 'solid'],
-  ['dotted', 'dotted'],
+	["solid", "solid"],
+	["dotted", "dotted"],
 ];
 
 /** A mark's curve (a paint mark's, a rubber mark's): how long it is, the node picked, whether it is a ring, its width. */
 function MarkCurveRows({
-  m,
-  pick,
-  edit,
+	m,
+	pick,
+	edit,
 }: Readonly<{
-  m: Pick<PaintMark, 'curve' | 'closed' | 'width'>;
-  pick: ObjectPick;
-  edit: (fn: (k: Pick<PaintMark, 'curve' | 'closed' | 'width'>) => void) => void;
+	m: Pick<PaintMark, "curve" | "closed" | "width">;
+	pick: ObjectPick;
+	edit: (fn: (k: Pick<PaintMark, "curve" | "closed" | "width">) => void) => void;
 }>) {
-  const ed = useEditor();
-  const num =
-    (fn: (k: Pick<PaintMark, 'curve' | 'closed' | 'width'>, v: number) => void, min = 0) =>
-    (v: number | null) =>
-      v != null && v > min && edit((k) => fn(k, v));
-  const node = pick.h ? undefined : m.curve[pick.j];
-  return (
-    <>
-      <Row label="Line">
-        {m.curve.length} nodes, {Math.round(markLength(m) * 100) / 100} m long
-      </Row>
-      {node ? (
-        <>
-          <PointRows
-            label={`Node ${pick.j + 1}`}
-            at={{ x: node.p[0], z: node.p[1] }}
-            set={(c, v) =>
-              edit((k) => {
-                const n = k.curve[pick.j];
-                if (n) moveMarkNode(k, pick.j, c === 'x' ? v : n.p[0], c === 'z' ? v : n.p[1]);
-              })
-            }
-          />
-          <Row label="">
-            <label title="Its handles apart: dragging one leaves the other as it is">
-              <input
-                type="checkbox"
-                checked={!!node.corner}
-                onChange={(e) =>
-                  edit((k) => {
-                    const n = k.curve[pick.j];
-                    if (!n) return;
-                    if (e.target.checked) n.corner = true;
-                    else delete n.corner;
-                  })
-                }
-              />{' '}
-              corner
-            </label>
-          </Row>
-        </>
-      ) : null}
-      <Row label="">
-        <label>
-          <input
-            type="checkbox"
-            checked={!!m.closed}
-            disabled={m.curve.length < 3}
-            onChange={(e) =>
-              edit((k) => {
-                if (e.target.checked) k.closed = true;
-                else delete k.closed;
-              })
-            }
-          />{' '}
-          closed (a ring)
-        </label>
-        <button
-          type="button"
-          className="small"
-          title="Its handles along the way through its neighbours (S): the node picked, or every node"
-          onClick={() => ed.smoothPicked()}
-        >
-          Smooth {node ? 'node' : 'all'}
-        </button>
-      </Row>
-      <Row label="Width">
-        <NumberField
-          label="Width (m)"
-          value={m.width}
-          onCommit={num((k, v) => {
-            k.width = v;
-          })}
-        />
-        <span>m wide</span>
-      </Row>
-    </>
-  );
+	const ed = useEditor();
+	const num =
+		(fn: (k: Pick<PaintMark, "curve" | "closed" | "width">, v: number) => void, min = 0) =>
+		(v: number | null) =>
+			v != null && v > min && edit((k) => fn(k, v));
+	const node = pick.h ? undefined : m.curve[pick.j];
+	return (
+		<>
+			<Row label="Line">
+				{m.curve.length} nodes, {Math.round(markLength(m) * 100) / 100} m long
+			</Row>
+			{node ? (
+				<>
+					<PointRows
+						label={`Node ${pick.j + 1}`}
+						at={{ x: node.p[0], z: node.p[1] }}
+						set={(c, v) =>
+							edit((k) => {
+								const n = k.curve[pick.j];
+								if (n) moveMarkNode(k, pick.j, c === "x" ? v : n.p[0], c === "z" ? v : n.p[1]);
+							})
+						}
+					/>
+					<Row label="">
+						<label title="Its handles apart: dragging one leaves the other as it is">
+							<input
+								type="checkbox"
+								checked={!!node.corner}
+								onChange={(e) =>
+									edit((k) => {
+										const n = k.curve[pick.j];
+										if (!n) return;
+										if (e.target.checked) n.corner = true;
+										else delete n.corner;
+									})
+								}
+							/>{" "}
+							corner
+						</label>
+					</Row>
+				</>
+			) : null}
+			<Row label="">
+				<label>
+					<input
+						type="checkbox"
+						checked={!!m.closed}
+						disabled={m.curve.length < 3}
+						onChange={(e) =>
+							edit((k) => {
+								if (e.target.checked) k.closed = true;
+								else delete k.closed;
+							})
+						}
+					/>{" "}
+					closed (a ring)
+				</label>
+				<button
+					type="button"
+					className="small"
+					title="Its handles along the way through its neighbours (S): the node picked, or every node"
+					onClick={() => ed.smoothPicked()}
+				>
+					Smooth {node ? "node" : "all"}
+				</button>
+			</Row>
+			<Row label="Width">
+				<NumberField
+					label="Width (m)"
+					value={m.width}
+					onCommit={num((k, v) => {
+						k.width = v;
+					})}
+				/>
+				<span>m wide</span>
+			</Row>
+		</>
+	);
 }
 
-function MarkRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>) {
-  const m = objects.marks[pick.i];
-  if (!m) return null;
-  const edit = (fn: (k: PaintMark) => void) =>
-    change((o) => {
-      const k = o.marks[pick.i];
-      if (k) fn(k);
-    });
-  const num =
-    (fn: (k: PaintMark, v: number) => void, min = 0) =>
-    (v: number | null) =>
-      v != null && v > min && edit((k) => fn(k, v));
-  return (
-    <>
-      <MarkCurveRows m={m} pick={pick} edit={edit} />
-      <Row label="Paint">
-        <SelectField
-          label="Colour"
-          value={m.colour}
-          options={COLOURS}
-          onChange={(v) =>
-            edit((k) => {
-              k.colour = v;
-            })
-          }
-        />
-        <SelectField
-          label="Style"
-          value={m.style}
-          options={STYLES}
-          onChange={(v) =>
-            edit((k) => {
-              k.style = v;
-              if (v === 'solid') {
-                delete k.dash;
-                delete k.gap;
-              }
-            })
-          }
-        />
-      </Row>
-      {m.style === 'dotted' ? (
-        <Row label="Dashes">
-          <NumberField
-            label="Dash (m)"
-            value={m.dash ?? DASH}
-            onCommit={num((k, v) => {
-              k.dash = v;
-            })}
-          />
-          <span>painted,</span>
-          <NumberField
-            label="Gap (m)"
-            value={m.gap ?? GAP}
-            onCommit={num((k, v) => {
-              k.gap = v;
-            })}
-          />
-          <span>not</span>
-        </Row>
-      ) : null}
-      <p className="note">
-        As a tyre wall: drag a node (square) to move it, a handle (circle) to bend the line (Alt: a corner), the line to
-        move the whole of it. A node dragged near another mark&apos;s end snaps onto it (Ctrl: not; Shift: its way by
-        15° instead). Add Node (A) and a click, or a double click on it, adds a node. Placing: drag from its start to
-        its end, then click on for more nodes. Marks of the same paint whose ends meet are painted as one line, their
-        corners mitred; where they overlap, painted once.
-      </p>
-      <ExportName
-        value={m.name}
-        onCommit={(v) =>
-          v &&
-          edit((k) => {
-            k.name = v;
-          })
-        }
-      />
-    </>
-  );
+function MarkRows({ objects, pick, change }: Readonly<Omit<PartProps, "layout">>) {
+	const m = objects.marks[pick.i];
+	if (!m) return null;
+	const edit = (fn: (k: PaintMark) => void) =>
+		change((o) => {
+			const k = o.marks[pick.i];
+			if (k) fn(k);
+		});
+	const num =
+		(fn: (k: PaintMark, v: number) => void, min = 0) =>
+		(v: number | null) =>
+			v != null && v > min && edit((k) => fn(k, v));
+	return (
+		<>
+			<MarkCurveRows m={m} pick={pick} edit={edit} />
+			<Row label="Paint">
+				<SelectField
+					label="Colour"
+					value={m.colour}
+					options={COLOURS}
+					onChange={(v) =>
+						edit((k) => {
+							k.colour = v;
+						})
+					}
+				/>
+				<SelectField
+					label="Style"
+					value={m.style}
+					options={STYLES}
+					onChange={(v) =>
+						edit((k) => {
+							k.style = v;
+							if (v === "solid") {
+								delete k.dash;
+								delete k.gap;
+							}
+						})
+					}
+				/>
+			</Row>
+			{m.style === "dotted" ? (
+				<Row label="Dashes">
+					<NumberField
+						label="Dash (m)"
+						value={m.dash ?? DASH}
+						onCommit={num((k, v) => {
+							k.dash = v;
+						})}
+					/>
+					<span>painted,</span>
+					<NumberField
+						label="Gap (m)"
+						value={m.gap ?? GAP}
+						onCommit={num((k, v) => {
+							k.gap = v;
+						})}
+					/>
+					<span>not</span>
+				</Row>
+			) : null}
+			<p className="note">
+				As a tyre wall: drag a node (square) to move it, a handle (circle) to bend the line (Alt: a corner), the line to move the whole of it. A node dragged
+				near another mark&apos;s end snaps onto it (Ctrl: not; Shift: its way by 15° instead). Add Node (A) and a click, or a double click on it, adds a node.
+				Placing: drag from its start to its end, then click on for more nodes. Marks of the same paint whose ends meet are painted as one line, their corners
+				mitred; where they overlap, painted once.
+			</p>
+			<ExportName
+				value={m.name}
+				onCommit={(v) =>
+					v &&
+					edit((k) => {
+						k.name = v;
+					})
+				}
+			/>
+		</>
+	);
 }
 
 /** how dark each rubber mark can be */
 const RUBBER_DARKNESS: Options<RubberWear> = [
-  ['almost_new', 'Almost new'],
-  ['used', 'Used'],
-  ['very_used', 'Very used'],
+	["almost_new", "Almost new"],
+	["used", "Used"],
+	["very_used", "Very used"],
 ];
 
-function RubberRows({ objects, pick, change }: Readonly<Omit<PartProps, 'layout'>>) {
-  const m = objects.rubber?.[pick.i];
-  if (!m) return null;
-  const edit = (fn: (k: RubberMark) => void) =>
-    change((o) => {
-      const k = o.rubber?.[pick.i];
-      if (k) fn(k);
-    });
-  return (
-    <>
-      <MarkCurveRows m={m} pick={pick} edit={edit} />
-      <Row label="Rubber">
-        <SelectField
-          label="Darkness"
-          value={m.wear}
-          options={RUBBER_DARKNESS}
-          onChange={(v) =>
-            edit((k) => {
-              k.wear = v;
-            })
-          }
-        />
-        <span>wider where it turns tight, as the cars slide there</span>
-      </Row>
-      <p className="note">
-        Rubber is the track&apos;s, laid in every layout, over the road, its paint and its rumbles. Drag a node (square)
-        to move it, a handle (circle) to bend it (Alt: a corner), the band to move the whole of it; a node dragged near
-        another rubber mark&apos;s snaps onto it (Ctrl: not). Add Node (A) and a click, or a double click on it, adds a
-        node. Placing: drag from its start to its end, then click on for more nodes.
-      </p>
-      <ExportName
-        value={m.name}
-        onCommit={(v) =>
-          v &&
-          edit((k) => {
-            k.name = v;
-          })
-        }
-      />
-    </>
-  );
+function RubberRows({ objects, pick, change }: Readonly<Omit<PartProps, "layout">>) {
+	const m = objects.rubber?.[pick.i];
+	if (!m) return null;
+	const edit = (fn: (k: RubberMark) => void) =>
+		change((o) => {
+			const k = o.rubber?.[pick.i];
+			if (k) fn(k);
+		});
+	return (
+		<>
+			<MarkCurveRows m={m} pick={pick} edit={edit} />
+			<Row label="Rubber">
+				<SelectField
+					label="Darkness"
+					value={m.wear}
+					options={RUBBER_DARKNESS}
+					onChange={(v) =>
+						edit((k) => {
+							k.wear = v;
+						})
+					}
+				/>
+				<span>wider where it turns tight, as the cars slide there</span>
+			</Row>
+			<p className="note">
+				Rubber is the track&apos;s, laid in every layout, over the road, its paint and its rumbles. Drag a node (square) to move it, a handle (circle) to bend
+				it (Alt: a corner), the band to move the whole of it; a node dragged near another rubber mark&apos;s snaps onto it (Ctrl: not). Add Node (A) and a
+				click, or a double click on it, adds a node. Placing: drag from its start to its end, then click on for more nodes.
+			</p>
+			<ExportName
+				value={m.name}
+				onCommit={(v) =>
+					v &&
+					edit((k) => {
+						k.name = v;
+					})
+				}
+			/>
+		</>
+	);
 }
