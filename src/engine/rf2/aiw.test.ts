@@ -3,7 +3,7 @@
 // its first straight and merging back, two grid slots, two pit boxes and three timing gates. Written as Studio 397's own AIWs are (and, where rFactor 2 is
 // here, as Joesville's is).
 import { existsSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { LayoutObjects } from "../../domain/types";
 import type { LineNode, RacingLine } from "../ailines";
 import { aiLineOf } from "../aimake";
@@ -421,8 +421,13 @@ describe("a layout's AIW", () => {
 // ---------------------------------------------------------------- as Studio 397's
 
 describe.skipIf(!existsSync(JOESVILLE))("Joesville Speedway's AIW", () => {
-	const sample = parse(readFileSync(JOESVILLE, "latin1"));
-	const ours = parse(aiwText(input()));
+	// (read before its tests, not as they are gathered: a skipped suite is still gathered, where there is no sample)
+	let sample: ReturnType<typeof parse>;
+	let ours: ReturnType<typeof parse>;
+	beforeAll(() => {
+		sample = parse(readFileSync(JOESVILLE, "latin1"));
+		ours = parse(aiwText(input()));
+	});
 
 	it("has the sections, fields and links ours has, in the same order", () => {
 		expect(ours.sections).toEqual(sample.sections);
