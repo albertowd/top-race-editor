@@ -400,11 +400,13 @@ On Linux it needs a display: `xvfb-run npm run build-track -- ...` (and `--no-sa
 
 A track's own CI needs no checkout of the editor: the release's zip (`top-race-editor-<version>-win-x64.zip`, on a
 Windows runner) is the app, the same build in it. Unzipped, its program takes the same arguments after `--build`; its
-log is its output, its exit code the build's:
+log is its output, its exit code the build's. Run it from bash (on GitHub's Windows runners, `shell: bash`): bash
+waits for it. PowerShell does not wait for a windowed program (Electron's is one), not even with its output sent to a
+file, so there it would go on at once with the build still running and no exit code; it waits only when the output is
+piped (`| Out-Host`) or with `Start-Process -Wait -NoNewWindow -PassThru`.
 
-```powershell
-& "top-race-editor\Top Race Editor.exe" --build --project . --games ac,beamng,rf2
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```sh
+"top-race-editor/Top Race Editor.exe" --build --project . --games ac,beamng,rf2
 ```
 
 AC's track is packed with 7-Zip (on GitHub's Windows runners already).
