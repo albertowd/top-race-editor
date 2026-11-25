@@ -7,6 +7,7 @@ import type {
 	Gate,
 	LayoutKind,
 	LayoutObjects,
+	LineKind,
 	MarkKind,
 	ModelKind,
 	ObjectCollision,
@@ -20,13 +21,18 @@ import type {
 	TrackKind,
 	TrackObjects,
 	Vec2,
+	WallNode,
 } from "../domain/types";
 import { addArea, addCorner, areaName, inside, middleOf, moveArea, nearestEdge, removeCorner } from "./areas";
 import { addLineNode, FORK, forkAndMerge, isLineKind, keepPitOn, lineOf, MERGE, moveForkOrMerge, moveLine, removeLineNode } from "./lines";
 import { markMiddle, moveMarkNode, newMark, newRubber, offMark } from "./marks";
 import { addWallNode, handleAt, moveWallHandle, nearestOnWall, TYRE_R, TYRE_SPACING } from "./walls";
 
-export const LAYOUT_KINDS: readonly LayoutKind[] = ["grid", "pits", "hotlap", "timing"];
+export const LAYOUT_KINDS: readonly LayoutKind[] = ["grid", "pits", "hotlap", "safety_car", "timing"];
+
+/** a layout's kinds that are one spot at most: the hotlap's start, the safety car's */
+export type SingleSpotKind = "hotlap" | "safety_car";
+export const isSingleSpot = (k: ObjectKind): k is SingleSpotKind => k === "hotlap" || k === "safety_car";
 export const TRACK_KINDS: readonly TrackKind[] = ["marks", "rubber", "areas"];
 
 /** a rubber mark's width (m: a kart's band) and darkness where nothing says */
@@ -51,6 +57,11 @@ export const OBJECT_LABELS: Record<ObjectKind, { one: string; many: string; what
 	grid: { one: "Grid slot", many: "Grid", what: "the race's grid, first slot to last (AC_START_n)" },
 	pits: { one: "Pit box", many: "Pits", what: "the pit boxes, where a race starts and stops in the pits (AC_PIT_n)" },
 	hotlap: { one: "Hotlap start", many: "Hotlap", what: "where a hotlap starts (AC_HOTLAP_START_0)" },
+	safety_car: {
+		one: "Safety car start",
+		many: "Safety car",
+		what: "where rFactor 2's safety car waits for its start (none: on the pit lane before its exit)",
+	},
 	timing: { one: "Timing gate", many: "Timing", what: "the timing lines: a post either side (AC_TIME_n_L, _R)" },
 	cones: { one: "Cone", many: "Cones", what: "the loose cones" },
 	boards: { one: "Board", many: "Boards", what: "the distance and pit boards, facing the way they are read" },
@@ -153,6 +164,7 @@ export const OBJECT_SIZES = {
 	grid: [1.2, 1.9],
 	pits: [1.6, 2.6],
 	hotlap: [1.2, 1.9],
+	safety_car: [1.9, 4.6],
 	board: [0.6, 0.12],
 	cone: 0.2,
 	pole: 0.35,
@@ -188,19 +200,23 @@ export function countOf(o: TrackObjects, layout: string, kind: ObjectKind): numb
 	const lay = o.layouts[layout];
 	if (!lay) return 0;
 	if (isLineKind(kind)) return lineOf(lay, kind) ? 1 : 0;
-	return kind === "hotlap" ? (lay.hotlap ? 1 : 0) : lay[kind].length;
+	if (isSingleSpot(kind)) return lay[kind] ? 1 : 0;
+	return lay[kind].length;
 }
 
-/** The spots of a layout's kind that has them (grid, pits; the hotlap as one), or null. */
+/** The spots of a layout's kind that has them (grid, pits; the hotlap's start and the safety car's as one), or null. */
 function spotsOf(o: TrackObjects, layout: string, kind: ObjectKind): Spot[] | null {
 	const lay = o.layouts[layout];
 	if (!lay) return null;
 	if (kind === "grid" || kind === "pits") return lay[kind];
-	if (kind === "hotlap") return lay.hotlap ? [lay.hotlap] : [];
+	if (isSingleSpot(kind)) {
+		const one = lay[kind];
+		return one ? [one] : [];
+	}
 	return null;
 }
 
-/** The spot picked, if what is picked is a layout's spot (a grid slot, a pit box, the hotlap's start). */
+/** The spot picked, if what is picked is a layout's spot (a grid slot, a pit box, the hotlap's start, the safety car's). */
 export function spotOf(o: TrackObjects, layout: string, p: ObjectPick): Spot | null {
 	return spotsOf(o, layout, p.kind)?.[p.i] ?? null;
 }
@@ -228,44 +244,58 @@ export function positionOf(o: TrackObjects, layout: string, p: ObjectPick): Poin
 	const spot = spotOf(o, layout, p);
 	if (spot) return spot;
 	const lay = o.layouts[layout];
-	if (isMarkKind(p.kind)) {
-		const m = marksOf(o, p.kind)[p.i];
-		if (!m) return null;
-		const n = m.curve[p.j];
-		const [x, z] = n ? (p.h ? handleAt(n, p.h) : n.p) : markMiddle(m);
-		return { x, z };
-	}
+	if (isMarkKind(p.kind)) return markPosition(o, p.kind, p);
 	if (p.kind === "areas") {
 		const a = o.areas?.[p.i];
 		if (!a) return null;
 		const [x, z] = (p.j >= 0 ? a.points[p.j] : undefined) ?? middleOf(a.points);
 		return { x, z };
 	}
-	if (p.kind === "timing") {
-		const g = lay?.timing[p.i];
-		if (!g) return null;
-		if (p.j === 0) return g.left;
-		return p.j === 1 ? g.right : gateMiddle(g);
-	}
-	if (isLineKind(p.kind)) {
-		const line = lineOf(lay, p.kind);
-		if (!line) return null;
-		const fm = p.kind === "pit" && (p.j === FORK || p.j === MERGE) ? forkAndMerge(lay?.lines) : null;
-		if (fm) {
-			const [x, z] = p.j === FORK ? fm.fork : fm.merge;
-			return { x, z };
-		}
-		const n = line.curve[p.j];
-		if (!n) return curveMiddle({ curve: line.curve } as PlacedObject);
-		const [x, z] = p.h ? handleAt(n, p.h) : n.p;
-		return { x, z };
-	}
+	if (p.kind === "timing") return gatePosition(lay, p);
+	if (isLineKind(p.kind)) return linePosition(lay, p.kind, p);
 	const it = objectOf(o, p);
 	if (!it) return null;
 	const n = it.curve[p.j];
 	if (!n) return curveMiddle(it);
-	const [x, z] = p.h ? handleAt(n, p.h) : n.p;
+	return nodePoint(n, p.h);
+}
+
+/** Where a curve's node is, or (h) one of its handles. */
+function nodePoint(n: WallNode, h: ObjectPick["h"]): Point {
+	const [x, z] = h ? handleAt(n, h) : n.p;
 	return { x, z };
+}
+
+/** Where a mark picked is: its node or handle, or its middle. */
+function markPosition(o: TrackObjects, kind: MarkKind, p: ObjectPick): Point | null {
+	const m = marksOf(o, kind)[p.i];
+	if (!m) return null;
+	const n = m.curve[p.j];
+	if (n) return nodePoint(n, p.h);
+	const [x, z] = markMiddle(m);
+	return { x, z };
+}
+
+/** Where a timing gate picked is: its left post (j 0), its right (j 1), or its middle. */
+function gatePosition(lay: LayoutObjects | undefined, p: ObjectPick): Point | null {
+	const g = lay?.timing[p.i];
+	if (!g) return null;
+	if (p.j === 0) return g.left;
+	return p.j === 1 ? g.right : gateMiddle(g);
+}
+
+/** Where a racing line picked is: the pit line's fork or merge, its node or handle, or its middle. */
+function linePosition(lay: LayoutObjects | undefined, kind: LineKind, p: ObjectPick): Point | null {
+	const line = lineOf(lay, kind);
+	if (!line) return null;
+	const fm = kind === "pit" && (p.j === FORK || p.j === MERGE) ? forkAndMerge(lay?.lines) : null;
+	if (fm) {
+		const [x, z] = p.j === FORK ? fm.fork : fm.merge;
+		return { x, z };
+	}
+	const n = line.curve[p.j];
+	if (!n) return curveMiddle({ curve: line.curve } as PlacedObject);
+	return nodePoint(n, p.h);
 }
 
 /** Whether a pick is still there (an object: of its kind still, in the layout shown or not: one of another layout is picked to be put in this one too). */
@@ -297,6 +327,7 @@ export function offFootprint(it: PlacedObject, x: number, z: number): number {
 const half = (k: ObjectKind): number => {
 	if (k === "grid" || k === "hotlap") return OBJECT_SIZES.grid[1] / 2;
 	if (k === "pits") return OBJECT_SIZES.pits[1] / 2;
+	if (k === "safety_car") return OBJECT_SIZES.safety_car[1] / 2;
 	if (isModelKind(k)) return REACH[k];
 	return OBJECT_SIZES.cone;
 };
@@ -311,8 +342,7 @@ export function objectAt(
 	wz: number,
 	tol: number,
 	kinds: readonly ObjectKind[] = OBJECT_KINDS,
-	picked: ObjectPick | null = null,
-	grab = tol,
+	{ picked = null, grab = tol }: { picked?: ObjectPick | null; grab?: number } = {},
 ): ObjectPick | null {
 	let best: ObjectPick | null = null;
 	let bd = Infinity;
@@ -334,56 +364,10 @@ export function objectAt(
 				consider(kind, i, 0, Math.hypot(g.left.x - wx, g.left.z - wz), OBJECT_SIZES.post);
 				consider(kind, i, 1, Math.hypot(g.right.x - wx, g.right.z - wz), OBJECT_SIZES.post);
 			});
-		} else if (kind === "areas") {
-			(o.areas ?? []).forEach((a, i) => {
-				// (its corners first, then its edges and inside: the whole)
-				a.points.forEach(([x, z], j) => {
-					consider(kind, i, j, Math.hypot(x - wx, z - wz), OBJECT_SIZES.post, undefined, 1);
-				});
-				const e = nearestEdge(a.points, wx, wz);
-				consider(kind, i, -1, inside(a.points, wx, wz) ? 0 : e.d, 0.5);
-			});
-		} else if (isMarkKind(kind)) {
-			marksOf(o, kind).forEach((m, i) => {
-				// (the picked one's handles and its nodes, the nearest (its ends before the rest), then its line: a straight one's handles lie on it, near its nodes)
-				if (picked?.kind === kind && picked.i === i)
-					m.curve.forEach((n, j) => {
-						for (const h of ["in", "out"] as const) {
-							if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
-							const [x, z] = handleAt(n, h);
-							consider(kind, i, j, Math.hypot(x - wx, z - wz), 0, h, 1);
-						}
-					});
-				m.curve.forEach((n, j) => {
-					const end = j === 0 || j === m.curve.length - 1;
-					consider(kind, i, j, Math.hypot(n.p[0] - wx, n.p[1] - wz) - (end ? 1e-6 : 0), OBJECT_SIZES.post, undefined, 1);
-				});
-				consider(kind, i, -1, offMark(m, wx, wz), m.width / 2);
-			});
-		} else if (isLineKind(kind)) {
-			const line = lineOf(lay, kind);
-			if (!line) continue;
-			// (the pit line's fork and merge first, then the picked line's handles, its nodes, then its curve)
-			const fm = kind === "pit" ? forkAndMerge(lay?.lines) : null;
-			if (fm) {
-				consider(kind, 0, FORK, Math.hypot(fm.fork[0] - wx, fm.fork[1] - wz), LINE_REACH, undefined, 3);
-				consider(kind, 0, MERGE, Math.hypot(fm.merge[0] - wx, fm.merge[1] - wz), LINE_REACH, undefined, 3);
-			}
-			if (picked?.kind === kind)
-				line.curve.forEach((n, j) => {
-					for (const h of ["in", "out"] as const) {
-						if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
-						const [x, z] = handleAt(n, h);
-						consider(kind, 0, j, Math.hypot(x - wx, z - wz), 0, h, 2);
-					}
-				});
-			line.curve.forEach((n, j) => {
-				// (a pit line's ends are its fork and merge)
-				if (kind === "pit" && fm && (j === 0 || j === line.curve.length - 1)) return;
-				consider(kind, 0, j, Math.hypot(n.p[0] - wx, n.p[1] - wz), LINE_REACH / 2, undefined, 1);
-			});
-			if (line.curve.length > 1) consider(kind, 0, -1, nearestOnWall(line, wx, wz).d, LINE_REACH / 2);
-		} else if (!isModelKind(kind)) {
+		} else if (kind === "areas") considerAreas(o, wx, wz, consider);
+		else if (isMarkKind(kind)) considerMarks(o, kind, picked, wx, wz, consider);
+		else if (isLineKind(kind)) considerLine(lay, kind, picked, wx, wz, consider);
+		else if (!isModelKind(kind)) {
 			spotsOf(o, layout, kind)?.forEach((s, i) => {
 				consider(kind, i, -1, Math.hypot(s.x - wx, s.z - wz), half(kind));
 			});
@@ -391,31 +375,83 @@ export function objectAt(
 	}
 	o.objects.forEach((it, i) => {
 		const kind = kindOfModel(it.model);
-		if (!wanted.has(kind)) return;
-		// (one not in the layout shown picked too, but after one that is, where both are near)
-		const away = inLayout(it, layout) ? 0 : -1;
-		if (!isCurve(it)) {
-			const n = it.curve[0];
-			// (a gantry: anywhere over its beam, across the road)
-			const d = n && (kind === "gantries" ? offFootprint(it, wx, wz) : Math.hypot(n.p[0] - wx, n.p[1] - wz));
-			if (n && d !== undefined) consider(kind, i, -1, d, REACH[kind], undefined, away);
-			return;
-		}
-		// (the picked curve's handles first, then its nodes, then its curve: the curve only away from them)
-		if (picked?.kind === kind && picked.i === i)
-			it.curve.forEach((n, j) => {
-				for (const h of ["in", "out"] as const) {
-					if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
-					const [x, z] = handleAt(n, h);
-					consider(kind, i, j, Math.hypot(x - wx, z - wz), 0, h, 2);
-				}
-			});
-		it.curve.forEach((n, j) => {
-			consider(kind, i, j, Math.hypot(n.p[0] - wx, n.p[1] - wz), TYRE_R, undefined, 1 + away);
-		});
-		consider(kind, i, -1, nearestOnWall(it, wx, wz).d, TYRE_R, undefined, away);
+		if (wanted.has(kind)) considerObject(it, i, kind, layout, picked, [wx, wz], consider);
 	});
 	return best;
+}
+
+/** What objectAt weighs up: one thing (kind, i; its part j, its handle h) d metres off, taken within reach (or the tolerance), ranked over those at the same
+ * distance. */
+type Consider = (kind: ObjectKind, i: number, j: number, d: number, reach: number, h?: "in" | "out", rank?: number) => void;
+
+/** A curve's handles (those off their node), each weighed up at the rank given. */
+function considerHandles(curve: readonly WallNode[], kind: ObjectKind, i: number, rank: number, wx: number, wz: number, consider: Consider) {
+	curve.forEach((n, j) => {
+		for (const h of ["in", "out"] as const) {
+			if (Math.hypot(n[h][0], n[h][1]) < 1e-6) continue;
+			const [x, z] = handleAt(n, h);
+			consider(kind, i, j, Math.hypot(x - wx, z - wz), 0, h, rank);
+		}
+	});
+}
+
+/** The paved areas weighed up: each one's corners first, then its edges and inside, the whole. */
+function considerAreas(o: TrackObjects, wx: number, wz: number, consider: Consider) {
+	(o.areas ?? []).forEach((a, i) => {
+		a.points.forEach(([x, z], j) => {
+			consider("areas", i, j, Math.hypot(x - wx, z - wz), OBJECT_SIZES.post, undefined, 1);
+		});
+		const e = nearestEdge(a.points, wx, wz);
+		consider("areas", i, -1, inside(a.points, wx, wz) ? 0 : e.d, 0.5);
+	});
+}
+
+/** A mark kind's marks weighed up: the picked one's handles and its nodes, the nearest (its ends before the rest), then its line (a straight one's handles lie
+ * on it, near its nodes). */
+function considerMarks(o: TrackObjects, kind: MarkKind, picked: ObjectPick | null, wx: number, wz: number, consider: Consider) {
+	marksOf(o, kind).forEach((m, i) => {
+		if (picked?.kind === kind && picked.i === i) considerHandles(m.curve, kind, i, 1, wx, wz, consider);
+		m.curve.forEach((n, j) => {
+			const end = j === 0 || j === m.curve.length - 1;
+			consider(kind, i, j, Math.hypot(n.p[0] - wx, n.p[1] - wz) - (end ? 1e-6 : 0), OBJECT_SIZES.post, undefined, 1);
+		});
+		consider(kind, i, -1, offMark(m, wx, wz), m.width / 2);
+	});
+}
+
+/** A layout's racing line weighed up: the pit line's fork and merge first, then the picked line's handles, its nodes (a pit line's ends are its fork and
+ * merge), then its curve. */
+function considerLine(lay: LayoutObjects | undefined, kind: LineKind, picked: ObjectPick | null, wx: number, wz: number, consider: Consider) {
+	const line = lineOf(lay, kind);
+	if (!line) return;
+	const fm = kind === "pit" ? forkAndMerge(lay?.lines) : null;
+	if (fm) {
+		consider(kind, 0, FORK, Math.hypot(fm.fork[0] - wx, fm.fork[1] - wz), LINE_REACH, undefined, 3);
+		consider(kind, 0, MERGE, Math.hypot(fm.merge[0] - wx, fm.merge[1] - wz), LINE_REACH, undefined, 3);
+	}
+	if (picked?.kind === kind) considerHandles(line.curve, kind, 0, 2, wx, wz, consider);
+	line.curve.forEach((n, j) => {
+		if (kind === "pit" && fm && (j === 0 || j === line.curve.length - 1)) return;
+		consider(kind, 0, j, Math.hypot(n.p[0] - wx, n.p[1] - wz), LINE_REACH / 2, undefined, 1);
+	});
+	if (line.curve.length > 1) consider(kind, 0, -1, nearestOnWall(line, wx, wz).d, LINE_REACH / 2);
+}
+
+/** An object weighed up (one not in the layout shown picked too, but after one that is, where both are near): a single one where it stands (a gantry:
+ * anywhere over its beam, across the road); a curve's handles first (picked), then its nodes, then its curve, the curve only away from them. */
+function considerObject(it: PlacedObject, i: number, kind: ModelKind, layout: string, picked: ObjectPick | null, [wx, wz]: Vec2, consider: Consider) {
+	const away = inLayout(it, layout) ? 0 : -1;
+	if (!isCurve(it)) {
+		const n = it.curve[0];
+		const d = n && (kind === "gantries" ? offFootprint(it, wx, wz) : Math.hypot(n.p[0] - wx, n.p[1] - wz));
+		if (n && d !== undefined) consider(kind, i, -1, d, REACH[kind], undefined, away);
+		return;
+	}
+	if (picked?.kind === kind && picked.i === i) considerHandles(it.curve, kind, i, 2, wx, wz, consider);
+	it.curve.forEach((n, j) => {
+		consider(kind, i, j, Math.hypot(n.p[0] - wx, n.p[1] - wz), TYRE_R, undefined, 1 + away);
+	});
+	consider(kind, i, -1, nearestOnWall(it, wx, wz).d, TYRE_R, undefined, away);
 }
 
 // ---------------------------------------------------------------- edits (on drafts)
@@ -426,18 +462,9 @@ const sameKind = (o: TrackObjects, layout: string, kind: ModelKind) => objectsOf
 /** What is picked moved by (dx, dz): a part of it (a gate's post, a curve's node), the whole of it, or (whole) all of its kind in the layout (a single object),
  * the whole curve. */
 export function moveObject(o: TrackObjects, layout: string, p: ObjectPick, dx: number, dz: number, whole = false) {
-	const by = (q: Point) => {
-		q.x += dx;
-		q.z += dz;
-	};
 	const lay = o.layouts[layout];
 	if (isMarkKind(p.kind)) {
-		const m = markList(o, p.kind)[p.i];
-		if (!m) return;
-		if (!whole && p.j >= 0 && !p.h) {
-			const n = m.curve[p.j];
-			if (n) moveMarkNode(m, p.j, n.p[0] + dx, n.p[1] + dz);
-		} else for (const n of m.curve) n.p = [n.p[0] + dx, n.p[1] + dz];
+		moveMark(o, p.kind, p, dx, dz, whole);
 		return;
 	}
 	if (p.kind === "areas") {
@@ -446,36 +473,71 @@ export function moveObject(o: TrackObjects, layout: string, p: ObjectPick, dx: n
 		return;
 	}
 	if (isLineKind(p.kind)) {
-		if (!lay) return;
-		// (the fork or the merge: along the fast line, to the point of it nearest where it is dragged to)
-		const fm = p.kind === "pit" && (p.j === FORK || p.j === MERGE) ? forkAndMerge(lay.lines) : null;
-		if (fm) {
-			const [x, z] = p.j === FORK ? fm.fork : fm.merge;
-			moveForkOrMerge(lay.lines, p.j, x + dx, z + dz);
-		} else moveLine(lay, p.kind, whole ? -1 : p.j, dx, dz);
+		if (lay) moveLinePick(lay, p.kind, p, dx, dz, whole);
 		return;
 	}
 	if (isModelKind(p.kind)) {
-		const it = o.objects[p.i];
-		if (!it) return;
-		const all = whole && !isCurve(it) ? sameKind(o, layout, p.kind).filter((x) => !isCurve(x)) : [it];
-		for (const x of all)
-			x.curve.forEach((n, j) => {
-				if (whole || p.j < 0 || j === p.j || !isCurve(x)) n.p = [n.p[0] + dx, n.p[1] + dz];
-			});
+		moveModel(o, layout, p.kind, p, [dx, dz], whole);
 		return;
 	}
 	if (p.kind === "timing") {
-		const gates = whole ? (lay?.timing ?? []) : [lay?.timing[p.i]];
-		for (const g of gates) {
-			if (!g) continue;
-			if (whole || p.j !== 1) by(g.left);
-			if (whole || p.j !== 0) by(g.right);
-		}
+		moveGates(lay, p, dx, dz, whole);
 		return;
 	}
+	moveSpots(o, layout, p, dx, dz, whole);
+}
+
+/** A spot picked moved by (dx, dz); whole: all the layout's of its kind. */
+function moveSpots(o: TrackObjects, layout: string, p: ObjectPick, dx: number, dz: number, whole: boolean) {
 	const spots = spotsOf(o, layout, p.kind) ?? [];
-	for (const s of whole ? spots : [spots[p.i]]) if (s) by(s);
+	for (const s of whole ? spots : [spots[p.i]]) if (s) shift(s, dx, dz);
+}
+
+/** A point moved by (dx, dz). */
+function shift(q: Point, dx: number, dz: number) {
+	q.x += dx;
+	q.z += dz;
+}
+
+/** A timing gate picked moved by (dx, dz): one of its posts, or the whole of it; whole: all the layout's gates. */
+function moveGates(lay: LayoutObjects | undefined, p: ObjectPick, dx: number, dz: number, whole: boolean) {
+	const gates = whole ? (lay?.timing ?? []) : [lay?.timing[p.i]];
+	for (const g of gates) {
+		if (!g) continue;
+		if (whole || p.j !== 1) shift(g.left, dx, dz);
+		if (whole || p.j !== 0) shift(g.right, dx, dz);
+	}
+}
+
+/** A mark picked moved by (dx, dz): its node, or the whole of it. */
+function moveMark(o: TrackObjects, kind: MarkKind, p: ObjectPick, dx: number, dz: number, whole: boolean) {
+	const m = markList(o, kind)[p.i];
+	if (!m) return;
+	if (!whole && p.j >= 0 && !p.h) {
+		const n = m.curve[p.j];
+		if (n) moveMarkNode(m, p.j, n.p[0] + dx, n.p[1] + dz);
+	} else for (const n of m.curve) n.p = [n.p[0] + dx, n.p[1] + dz];
+}
+
+/** A racing line picked moved by (dx, dz): the fork or the merge along the fast line, to the point of it nearest where it is dragged to; else its node, or
+ * (whole) the whole line. */
+function moveLinePick(lay: LayoutObjects, kind: LineKind, p: ObjectPick, dx: number, dz: number, whole: boolean) {
+	const fm = kind === "pit" && (p.j === FORK || p.j === MERGE) ? forkAndMerge(lay.lines) : null;
+	if (fm) {
+		const [x, z] = p.j === FORK ? fm.fork : fm.merge;
+		moveForkOrMerge(lay.lines, p.j, x + dx, z + dz);
+	} else moveLine(lay, kind, whole ? -1 : p.j, dx, dz);
+}
+
+/** An object picked moved by (dx, dz): a curve's node, or the whole curve; a single one, or (whole) all the single ones of its kind in the layout. */
+function moveModel(o: TrackObjects, layout: string, kind: ModelKind, p: ObjectPick, [dx, dz]: Vec2, whole: boolean) {
+	const it = o.objects[p.i];
+	if (!it) return;
+	const all = whole && !isCurve(it) ? sameKind(o, layout, kind).filter((x) => !isCurve(x)) : [it];
+	for (const x of all)
+		x.curve.forEach((n, j) => {
+			if (whole || p.j < 0 || j === p.j || !isCurve(x)) n.p = [n.p[0] + dx, n.p[1] + dz];
+		});
 }
 
 /** What is picked (a spot, a single object) turned to look along heading; whole: all of its kind turned with it as one, about it. */
@@ -498,26 +560,11 @@ export function turnAll(o: TrackObjects, layout: string, p: ObjectPick, d: numbe
 		[q.x, q.z] = turned(q.x, q.z, cx, cz, d);
 	};
 	if (isMarkKind(p.kind)) {
-		for (const m of markList(o, p.kind))
-			for (const n of m.curve) {
-				n.p = turned(n.p[0], n.p[1], cx, cz, d);
-				n.in = turned(n.in[0], n.in[1], 0, 0, d);
-				n.out = turned(n.out[0], n.out[1], 0, 0, d);
-			}
+		for (const m of markList(o, p.kind)) turnCurve(m.curve, d, cx, cz);
 		return;
 	}
-	if (isModelKind(p.kind)) {
-		const it = o.objects[p.i];
-		const all = it && isCurve(it) ? [it] : sameKind(o, layout, p.kind).filter((x) => !isCurve(x));
-		for (const x of all) {
-			for (const n of x.curve) {
-				n.p = turned(n.p[0], n.p[1], cx, cz, d);
-				n.in = turned(n.in[0], n.in[1], 0, 0, d);
-				n.out = turned(n.out[0], n.out[1], 0, 0, d);
-			}
-			if (!isCurve(x)) x.heading = wrap((x.heading ?? 0) + d);
-		}
-	} else if (p.kind === "timing") {
+	if (isModelKind(p.kind)) turnModels(o, layout, p.kind, p.i, d, cx, cz);
+	else if (p.kind === "timing") {
 		for (const g of lay?.timing ?? []) {
 			pt(g.left);
 			pt(g.right);
@@ -527,6 +574,25 @@ export function turnAll(o: TrackObjects, layout: string, p: ObjectPick, d: numbe
 			pt(s);
 			s.heading = wrap(s.heading + d);
 		}
+	}
+}
+
+/** Objects turned by d about (cx, cz): the curve i, or (i a single one) all the single ones of its kind in the layout, each turned with them. */
+function turnModels(o: TrackObjects, layout: string, kind: ModelKind, i: number, d: number, cx: number, cz: number) {
+	const it = o.objects[i];
+	const all = it && isCurve(it) ? [it] : sameKind(o, layout, kind).filter((x) => !isCurve(x));
+	for (const x of all) {
+		turnCurve(x.curve, d, cx, cz);
+		if (!isCurve(x)) x.heading = wrap((x.heading ?? 0) + d);
+	}
+}
+
+/** A curve's nodes turned by d about (cx, cz), their handles with them. */
+function turnCurve(curve: readonly WallNode[], d: number, cx: number, cz: number) {
+	for (const n of curve) {
+		n.p = turned(n.p[0], n.p[1], cx, cz, d);
+		n.in = turned(n.in[0], n.in[1], 0, 0, d);
+		n.out = turned(n.out[0], n.out[1], 0, 0, d);
 	}
 }
 
@@ -560,7 +626,10 @@ const COLLISION: Partial<Record<ModelKind, ObjectCollision>> = { cones: "dynamic
 
 /** Of a curve gained or lost: what it is hit as, as a single one is or a curve is (a box as one, a wall along). */
 function collisionFor(it: PlacedObject): ObjectCollision {
-	if (isCurve(it)) return it.collision === "static" ? "wall" : it.collision === "dynamic" ? "none" : it.collision;
+	if (isCurve(it)) {
+		if (it.collision === "static") return "wall";
+		return it.collision === "dynamic" ? "none" : it.collision;
+	}
 	return it.collision === "wall" ? "static" : it.collision;
 }
 
@@ -572,80 +641,83 @@ function median(v: number[]): number {
 	return s[Math.floor(s.length / 2)] as number;
 }
 
+/** What addObject is told besides where: the object to add a node to (within, within tol of its curve), a timing gate's posts, a name, a model; a new rubber
+ * mark's width and darkness. */
+interface NewObject {
+	within?: number;
+	gate?: Gate;
+	name?: string;
+	tol?: number;
+	model?: string;
+	/** a new rubber mark's width and darkness */
+	rubber?: Pick<RubberMark, "width" | "wear">;
+}
+
+/** A paved area added: into the area picked, on its edge where clicked; else a new one, a rectangle there. */
+function addAreaAt(o: TrackObjects, [x, z]: Vec2, heading: number, extra: NewObject): ObjectPick {
+	const a = extra.within === undefined ? undefined : o.areas?.[extra.within];
+	const j = a ? addCorner(a, x, z, Math.max(extra.tol ?? 0.5, 0.5)) : null;
+	if (a && j !== null) return { kind: "areas", i: extra.within as number, j };
+	return { kind: "areas", i: addArea(o, x, z, heading, extra.name ?? areaName(names(o)), extra.model), j: -1 };
+}
+
+/** A mark added: into the mark picked, a node on its curve where clicked, else on past its nearer end; else a new one, its far end picked to drag on. */
+function addMarkAt(o: TrackObjects, kind: MarkKind, [x, z]: Vec2, heading: number, extra: NewObject): ObjectPick {
+	const list = markList(o, kind);
+	const m = extra.within === undefined ? undefined : list[extra.within];
+	if (m && extra.within !== undefined) return { kind, i: extra.within, j: addWallNode(m, x, z, extra.tol ?? 0.5) };
+	if (kind === "rubber") list.push(newRubber(extra.name ?? freeName("RUBBER_", names(o), 1), x, z, heading, extra.rubber ?? NEW_RUBBER));
+	else list.push(newMark(extra.name ?? freeName("MARK_", names(o), 1), x, z, heading));
+	return { kind, i: list.length - 1, j: 1 };
+}
+
+/** An object added: a node into the curve picked (of its kind); else a new one of the model (a tyre wall spaced as the others are); a cone or a board this
+ * layout's own, as before, anything else every layout's. */
+function addModelAt(o: TrackObjects, layout: string, kind: ModelKind, [x, z]: Vec2, heading: number, extra: NewObject): ObjectPick {
+	const w = extra.within === undefined ? undefined : o.objects[extra.within];
+	if (w && extra.within !== undefined && kindOfModel(w.model) === kind) {
+		const j = addWallNode(w, x, z, extra.tol ?? 0.5);
+		w.collision = collisionFor(w);
+		if (isCurve(w)) {
+			w.closed ??= false;
+			w.rows ??= 1;
+			w.fit ??= "place";
+			delete w.heading;
+		}
+		return { kind, i: extra.within, j };
+	}
+	const model = extra.model ?? firstModel(kind);
+	const it: PlacedObject = {
+		name: extra.name ?? freeName(prefixOf(kind, model), names(o)),
+		model,
+		curve: [{ p: [x, z], in: [0, 0], out: [0, 0] }],
+		heading: wrap(heading),
+		collision: COLLISION[kind] ?? "none",
+	};
+	if (kind === "tyres") {
+		const walls = o.objects.filter((t) => kindOfModel(t.model) === "tyres" && t.spacing);
+		it.spacing = walls.length ? median(walls.map((t) => t.spacing as number)) : TYRE_SPACING;
+	}
+	if (kind === "cones" || kind === "boards") it.layouts = [layout];
+	o.objects.push(it);
+	return { kind, i: o.objects.length - 1, j: kind === "tyres" ? 0 : -1 };
+}
+
 /** A new object of a kind at (x, z), looking along heading; within: the object (a curve's, of its kind) to add a node to (walls.ts's addWallNode, within tol of
  * its curve); gate: its posts (a timing gate). What was added. */
-export function addObject(
-	o: TrackObjects,
-	layout: string,
-	kind: ObjectKind,
-	x: number,
-	z: number,
-	heading: number,
-	extra: {
-		within?: number;
-		gate?: Gate;
-		name?: string;
-		tol?: number;
-		model?: string;
-		/** a new rubber mark's width and darkness */
-		rubber?: Pick<RubberMark, "width" | "wear">;
-	} = {},
-): ObjectPick {
+export function addObject(o: TrackObjects, layout: string, kind: ObjectKind, x: number, z: number, heading: number, extra: NewObject = {}): ObjectPick {
 	const spot = (name?: string): Spot => ({ ...(name ? { name } : {}), x, z, heading: wrap(heading) });
-	if (kind === "areas") {
-		// (into the area picked, on its edge where clicked; else a new one, a rectangle there)
-		const a = extra.within === undefined ? undefined : o.areas?.[extra.within];
-		const j = a ? addCorner(a, x, z, Math.max(extra.tol ?? 0.5, 0.5)) : null;
-		if (a && j !== null) return { kind, i: extra.within as number, j };
-		return { kind, i: addArea(o, x, z, heading, extra.name ?? areaName(names(o)), extra.model), j: -1 };
-	}
-	if (isMarkKind(kind)) {
-		// (into the mark picked: a node on its curve where clicked, else on past its nearer end; else a new one, its far end picked to drag on)
-		const list = markList(o, kind);
-		const m = extra.within === undefined ? undefined : list[extra.within];
-		if (m && extra.within !== undefined) return { kind, i: extra.within, j: addWallNode(m, x, z, extra.tol ?? 0.5) };
-		if (kind === "rubber") list.push(newRubber(extra.name ?? freeName("RUBBER_", names(o), 1), x, z, heading, extra.rubber ?? NEW_RUBBER));
-		else list.push(newMark(extra.name ?? freeName("MARK_", names(o), 1), x, z, heading));
-		return { kind, i: list.length - 1, j: 1 };
-	}
-	if (isModelKind(kind)) {
-		const w = extra.within === undefined ? undefined : o.objects[extra.within];
-		if (w && extra.within !== undefined && kindOfModel(w.model) === kind) {
-			const j = addWallNode(w, x, z, extra.tol ?? 0.5);
-			w.collision = collisionFor(w);
-			if (isCurve(w)) {
-				w.closed ??= false;
-				w.rows ??= 1;
-				w.fit ??= "place";
-				delete w.heading;
-			}
-			return { kind, i: extra.within, j };
-		}
-		const model = extra.model ?? firstModel(kind);
-		const it: PlacedObject = {
-			name: extra.name ?? freeName(prefixOf(kind, model), names(o)),
-			model,
-			curve: [{ p: [x, z], in: [0, 0], out: [0, 0] }],
-			heading: wrap(heading),
-			collision: COLLISION[kind] ?? "none",
-		};
-		if (kind === "tyres") {
-			const walls = o.objects.filter((t) => kindOfModel(t.model) === "tyres" && t.spacing);
-			it.spacing = walls.length ? median(walls.map((t) => t.spacing as number)) : TYRE_SPACING;
-		}
-		// (a cone or a board: this layout's own, as before; anything else: every layout's)
-		if (kind === "cones" || kind === "boards") it.layouts = [layout];
-		o.objects.push(it);
-		return { kind, i: o.objects.length - 1, j: kind === "tyres" ? 0 : -1 };
-	}
+	if (kind === "areas") return addAreaAt(o, [x, z], heading, extra);
+	if (isMarkKind(kind)) return addMarkAt(o, kind, [x, z], heading, extra);
+	if (isModelKind(kind)) return addModelAt(o, layout, kind, [x, z], heading, extra);
 	o.layouts[layout] ??= emptyLayout();
 	const lay = o.layouts[layout];
 	if (isLineKind(kind)) {
 		const j = addLineNode(lay, kind, x, z, extra.tol ?? 0.5);
 		return { kind, i: 0, j: j ?? -1 };
 	}
-	if (kind === "hotlap") {
-		lay.hotlap = spot();
+	if (isSingleSpot(kind)) {
+		lay[kind] = spot();
 		return { kind, i: 0, j: -1 };
 	}
 	if (kind === "timing") {
@@ -658,35 +730,9 @@ export function addObject(
 
 /** What is picked taken away (a curve's node: that node, the object with its last); whether anything was. */
 export function removeObject(o: TrackObjects, layout: string, p: ObjectPick): boolean {
-	if (isMarkKind(p.kind)) {
-		// (a node, of a mark with more than two: that node; else the whole mark)
-		const list = markList(o, p.kind);
-		const m = list[p.i];
-		if (!m) return false;
-		if (p.j >= 0 && !p.h && m.curve.length > 2) {
-			m.curve.splice(p.j, 1);
-			if (m.curve.length < 3) delete m.closed;
-			return true;
-		}
-		const gone = list.splice(p.i, 1).length > 0;
-		if (p.kind === "rubber" && !list.length) delete o.rubber;
-		return gone;
-	}
+	if (isMarkKind(p.kind)) return removeMark(o, p.kind, p);
 	if (p.kind === "areas") return removeCorner(o, p.i, p.h ? -1 : p.j);
-	if (isModelKind(p.kind)) {
-		const it = o.objects[p.i];
-		if (!it) return false;
-		if (p.j >= 0 && isCurve(it)) {
-			it.curve.splice(p.j, 1);
-			if (!isCurve(it)) {
-				// (one node left: one of it, facing as its curve went)
-				const n = it.curve[0];
-				it.heading = n ? headingOf(n.out[0] || -n.in[0], n.out[1] || -n.in[1]) : 0;
-				it.collision = collisionFor(it);
-			}
-		} else o.objects.splice(p.i, 1);
-		return true;
-	}
+	if (isModelKind(p.kind)) return removeModel(o, p);
 	const lay = o.layouts[layout];
 	if (!lay) return false;
 	// (the pit line's fork and merge are where it leaves and joins the fast line: they stay; the line is taken away whole, picked on its curve)
@@ -696,7 +742,42 @@ export function removeObject(o: TrackObjects, layout: string, p: ObjectPick): bo
 		lay.hotlap = null;
 		return had;
 	}
+	if (p.kind === "safety_car") {
+		const had = !!lay.safety_car;
+		delete lay.safety_car;
+		return had;
+	}
 	return lay[p.kind].splice(p.i, 1).length > 0;
+}
+
+/** A mark picked taken away: a node, of a mark with more than two, that node; else the whole mark (the last rubber: the rubber with it). */
+function removeMark(o: TrackObjects, kind: MarkKind, p: ObjectPick): boolean {
+	const list = markList(o, kind);
+	const m = list[p.i];
+	if (!m) return false;
+	if (p.j >= 0 && !p.h && m.curve.length > 2) {
+		m.curve.splice(p.j, 1);
+		if (m.curve.length < 3) delete m.closed;
+		return true;
+	}
+	const gone = list.splice(p.i, 1).length > 0;
+	if (kind === "rubber" && !list.length) delete o.rubber;
+	return gone;
+}
+
+/** An object picked taken away: a curve's node (one node left: one of it, facing as its curve went), or the whole object. */
+function removeModel(o: TrackObjects, p: ObjectPick): boolean {
+	const it = o.objects[p.i];
+	if (!it) return false;
+	if (p.j >= 0 && isCurve(it)) {
+		it.curve.splice(p.j, 1);
+		if (!isCurve(it)) {
+			const n = it.curve[0];
+			it.heading = n ? headingOf(n.out[0] || -n.in[0], n.out[1] || -n.in[1]) : 0;
+			it.collision = collisionFor(it);
+		}
+	} else o.objects.splice(p.i, 1);
+	return true;
 }
 
 /** A grid slot, pit box, gate, object... earlier (by -1) or later among its kind: their numbers are their order. The pick where it went, or null. */
@@ -713,7 +794,7 @@ export function reorderObject(o: TrackObjects, layout: string, p: ObjectPick, by
 	if (isLineKind(p.kind)) return null;
 	if (p.kind === "areas") return null;
 	if (isMarkKind(p.kind)) list = markList(o, p.kind);
-	else if (p.kind !== "hotlap") list = o.layouts[layout]?.[p.kind];
+	else if (!isSingleSpot(p.kind)) list = o.layouts[layout]?.[p.kind];
 	const j = p.i + by;
 	if (!list || j < 0 || j >= list.length) return null;
 	[list[p.i], list[j]] = [list[j], list[p.i]];

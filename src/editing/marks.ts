@@ -23,13 +23,20 @@ const DOUBLES_BACK = (150 * Math.PI) / 180;
 const wrap = (h: number) => Math.atan2(Math.sin(h), Math.cos(h));
 const third = (a: Vec2, b: Vec2): Vec2 => [(b[0] - a[0]) / 3, (b[1] - a[1]) / 3];
 
+/** The point at k of points; past either end, round from the other one where they make a ring (else none). */
+function pointAround(points: readonly Vec2[], k: number, ring: boolean): Vec2 | undefined {
+	const n = points.length;
+	if (k >= 0 && k < n) return points[k];
+	return ring ? points[(k + n) % n] : undefined;
+}
+
 /** A curve straight from point to point, a corner at each point between (closed: on back to its first). */
 export function straightThrough(points: readonly Vec2[], closed = false): WallNode[] {
 	const n = points.length;
 	const ring = closed && n > 2;
 	return points.map((p, i) => {
-		const prev = i > 0 ? points[i - 1] : ring ? points[n - 1] : undefined;
-		const next = i < n - 1 ? points[i + 1] : ring ? points[0] : undefined;
+		const prev = pointAround(points, i - 1, ring);
+		const next = pointAround(points, i + 1, ring);
 		const node: WallNode = {
 			p: [p[0], p[1]],
 			in: prev ? third(p, prev) : [0, 0],
@@ -195,16 +202,6 @@ function wayOut(P: Vec2[], end: 0 | 1): Vec2 {
  * turning back on each other where they meet (one over the other) are left apart: their paint is one where they overlap all the same (as the build lays it). */
 export function paintChains(marks: readonly Paintable[]): PaintChain[] {
 	const out: PaintChain[] = [];
-	const chain = (m: Paintable, idx: number[], points: Vec2[], closed: boolean): PaintChain => ({
-		marks: idx,
-		points,
-		closed,
-		width: m.width,
-		colour: m.colour,
-		style: m.style,
-		dash: dashOf(m),
-		gap: gapOf(m),
-	});
 	const pts = marks.map(pointsOf);
 	const open: number[] = [];
 	marks.forEach((m, i) => {
@@ -212,101 +209,154 @@ export function paintChains(marks: readonly Paintable[]): PaintChain[] {
 		if (P.length < 2) return;
 		if (m.points ? !!m.closed && P.length > 2 : m.curve && isRing({ curve: m.curve, closed: m.closed })) {
 			if (samePoint(P[0] as Vec2, P.at(-1) as Vec2)) P.pop();
-			out.push(chain(m, [i], P, true));
+			out.push(chainOf(m, [i], P, true));
 		} else open.push(i);
 	});
-	// (each end of the open ones: what it may join, nearest first, then the straightest)
+	const link = endLinks(marks, pts, open);
+	// (each run of marks joined: from one with an end joined to none, along the links; the rest are rings)
+	const done = new Set<number>();
+	const runs: Run[] = [];
+	for (const i of open)
+		if (!done.has(i)) {
+			const free = freeEnd(link, i);
+			if (free >= 0) runs.push(walkRun(pts, link, done, i, free as 0 | 1));
+		}
+	for (const i of open) if (!done.has(i)) runs.push(walkRun(pts, link, done, i, 0));
+	for (const r of runs) {
+		const m = marks[r.idx[0] as number] as Paintable;
+		if (r.closed && r.points.length < 3) r.closed = false;
+		out.push(chainOf(m, r.idx, r.points, r.closed));
+	}
+	out.sort((a, b) => Math.min(...a.marks) - Math.min(...b.marks));
+	seams(out);
+	return out;
+}
+
+/** A line painted as the mark m is: the marks it is made of (idx), its points, closed or not. */
+const chainOf = (m: Paintable, idx: number[], points: Vec2[], closed: boolean): PaintChain => ({
+	marks: idx,
+	points,
+	closed,
+	width: m.width,
+	colour: m.colour,
+	style: m.style,
+	dash: dashOf(m),
+	gap: gapOf(m),
+});
+
+/** An end of a mark: the mark, and which end (0 its first point, 1 its last). */
+interface MarkEnd {
+	i: number;
+	e: 0 | 1;
+}
+
+/** A run of marks joined: the marks, in the order they go, its points, whether it closes a ring. */
+interface Run {
+	idx: number[];
+	points: Vec2[];
+	closed: boolean;
+}
+
+/** A run of points' end (0 its first, 1 its last). */
+const endOf = (P: readonly Vec2[], e: 0 | 1) => (e ? P.at(-1) : P[0]) as Vec2;
+
+/** What each end of the open marks (mark i, end e: key i * 2 + e) is joined to: of those of one paint, the nearest first, then the straightest. */
+function endLinks(marks: readonly Paintable[], pts: readonly Vec2[][], open: readonly number[]): Map<number, number> {
 	const byKey = new Map<string, number[]>();
 	for (const i of open) {
 		const k = paintKey(marks[i] as Paintable);
 		byKey.set(k, [...(byKey.get(k) ?? []), i]);
 	}
-	/** what each end (mark i, end e: key i * 2 + e) is joined to */
 	const link = new Map<number, number>();
 	for (const group of byKey.values()) {
 		const meet = Math.max(MARK_MEET, ((marks[group[0] as number] as Paintable).width ?? 0) / 2);
-		const pairs: { a: number; b: number; d: number; turn: number }[] = [];
-		const ends = group.flatMap((i) => [0, 1].map((e) => ({ i, e: e as 0 | 1 })));
-		for (let x = 0; x < ends.length; x++)
-			for (let y = x + 1; y < ends.length; y++) {
-				const A = ends[x] as { i: number; e: 0 | 1 };
-				const B = ends[y] as { i: number; e: 0 | 1 };
-				// (a mark's own two ends: only a long one's, round to its start)
-				if (A.i === B.i && lengthOf(pts[A.i] as Vec2[]) <= 4 * meet) continue;
-				const PA = pts[A.i] as Vec2[];
-				const PB = pts[B.i] as Vec2[];
-				const qa = (A.e ? PA.at(-1) : PA[0]) as Vec2;
-				const qb = (B.e ? PB.at(-1) : PB[0]) as Vec2;
-				const d = Math.hypot(qa[0] - qb[0], qa[1] - qb[1]);
-				if (d > meet) continue;
-				// (the way on from one into the other: out of A, then into B, against B's way out)
-				const ua = wayOut(PA, A.e);
-				const ub = wayOut(PB, B.e);
-				const turn = Math.acos(Math.min(1, Math.max(-1, -(ua[0] * ub[0] + ua[1] * ub[1]))));
-				if (turn > DOUBLES_BACK) continue;
-				pairs.push({ a: A.i * 2 + A.e, b: B.i * 2 + B.e, d: Math.round(d * 1000), turn });
-			}
-		pairs.sort((p, q) => p.d - q.d || p.turn - q.turn);
-		for (const { a, b } of pairs) {
+		for (const { a, b } of groupPairs(pts, group, meet)) {
 			if (link.has(a) || link.has(b)) continue;
 			link.set(a, b);
 			link.set(b, a);
 		}
 	}
-	// (each run of marks joined: from one with an end joined to none, along the links; the rest are rings)
-	const done = new Set<number>();
-	const walk = (start: number, from: 0 | 1) => {
-		const idx: number[] = [];
-		let points: Vec2[] = [];
-		let i = start;
-		let enter: 0 | 1 = from;
-		let closed = false;
-		for (;;) {
-			done.add(i);
-			idx.push(i);
-			const P = enter === 0 ? (pts[i] as Vec2[]) : [...(pts[i] as Vec2[])].reverse();
-			if (!points.length) points = [...P];
-			else {
-				// (where they meet: halfway between the two ends)
-				const a = points.at(-1) as Vec2;
-				const b = P[0] as Vec2;
-				points[points.length - 1] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-				points.push(...P.slice(1));
-			}
-			const leave = (enter === 0 ? 1 : 0) as 0 | 1;
-			const to = link.get(i * 2 + leave);
-			if (to === undefined) break;
-			const j = Math.floor(to / 2);
-			if (j === start && to % 2 === from) {
-				// (round to the first again: a ring, its first and last point one, halfway)
-				const a = points.at(-1) as Vec2;
-				const b = points[0] as Vec2;
-				points[0] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-				points.pop();
-				closed = true;
-				break;
-			}
-			if (done.has(j)) break;
-			i = j;
-			enter = (to % 2) as 0 | 1;
+	return link;
+}
+
+/** The ends of a group of marks of one paint that may join (within meet), nearest first, then the straightest. */
+function groupPairs(pts: readonly Vec2[][], group: readonly number[], meet: number) {
+	const pairs: { a: number; b: number; d: number; turn: number }[] = [];
+	const ends = group.flatMap((i) => [0, 1].map((e) => ({ i, e: e as 0 | 1 })));
+	for (let x = 0; x < ends.length; x++)
+		for (let y = x + 1; y < ends.length; y++) {
+			const pair = endPair(pts, ends[x] as MarkEnd, ends[y] as MarkEnd, meet);
+			if (pair) pairs.push(pair);
 		}
-		return { idx, points, closed };
-	};
-	const runs: { idx: number[]; points: Vec2[]; closed: boolean }[] = [];
-	for (const i of open)
-		if (!done.has(i)) {
-			const free = !link.has(i * 2) ? 0 : !link.has(i * 2 + 1) ? 1 : -1;
-			if (free >= 0) runs.push(walk(i, free as 0 | 1));
+	pairs.sort((p, q) => p.d - q.d || p.turn - q.turn);
+	return pairs;
+}
+
+/** Two ends that may join: how far apart (to a millimetre), how much the way turns from one into the other; none where they are apart, a mark's own two ends
+ * are (only a long one's may: round to its start), or they turn back on each other. */
+function endPair(pts: readonly Vec2[][], A: MarkEnd, B: MarkEnd, meet: number) {
+	if (A.i === B.i && lengthOf(pts[A.i] as Vec2[]) <= 4 * meet) return null;
+	const PA = pts[A.i] as Vec2[];
+	const PB = pts[B.i] as Vec2[];
+	const qa = endOf(PA, A.e);
+	const qb = endOf(PB, B.e);
+	const d = Math.hypot(qa[0] - qb[0], qa[1] - qb[1]);
+	if (d > meet) return null;
+	// (the way on from one into the other: out of A, then into B, against B's way out)
+	const ua = wayOut(PA, A.e);
+	const ub = wayOut(PB, B.e);
+	const turn = Math.acos(Math.min(1, Math.max(-1, -(ua[0] * ub[0] + ua[1] * ub[1]))));
+	if (turn > DOUBLES_BACK) return null;
+	return { a: A.i * 2 + A.e, b: B.i * 2 + B.e, d: Math.round(d * 1000), turn };
+}
+
+/** A mark's end joined to none (0 its first, 1 its last; -1: both are joined). */
+function freeEnd(link: ReadonlyMap<number, number>, i: number): number {
+	if (!link.has(i * 2)) return 0;
+	if (!link.has(i * 2 + 1)) return 1;
+	return -1;
+}
+
+/** The run of marks joined from mark start, in at its end from, along the links (each mark walked added to done). */
+function walkRun(pts: readonly Vec2[][], link: ReadonlyMap<number, number>, done: Set<number>, start: number, from: 0 | 1): Run {
+	const idx: number[] = [];
+	let points: Vec2[] = [];
+	let i = start;
+	let enter: 0 | 1 = from;
+	let closed = false;
+	for (;;) {
+		done.add(i);
+		idx.push(i);
+		const P = enter === 0 ? (pts[i] as Vec2[]) : [...(pts[i] as Vec2[])].reverse();
+		points = joinedOn(points, P);
+		const leave = (enter === 0 ? 1 : 0) as 0 | 1;
+		const to = link.get(i * 2 + leave);
+		if (to === undefined) break;
+		const j = Math.floor(to / 2);
+		if (j === start && to % 2 === from) {
+			// (round to the first again: a ring, its first and last point one, halfway)
+			const a = points.at(-1) as Vec2;
+			const b = points[0] as Vec2;
+			points[0] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+			points.pop();
+			closed = true;
+			break;
 		}
-	for (const i of open) if (!done.has(i)) runs.push(walk(i, 0));
-	for (const r of runs) {
-		const m = marks[r.idx[0] as number] as Paintable;
-		if (r.closed && r.points.length < 3) r.closed = false;
-		out.push(chain(m, r.idx, r.points, r.closed));
+		if (done.has(j)) break;
+		i = j;
+		enter = (to % 2) as 0 | 1;
 	}
-	out.sort((a, b) => Math.min(...a.marks) - Math.min(...b.marks));
-	seams(out);
-	return out;
+	return { idx, points, closed };
+}
+
+/** A run's points with the next mark's (P) on after them, where they meet halfway between the two ends (none yet: a copy of P's). */
+function joinedOn(points: Vec2[], P: readonly Vec2[]): Vec2[] {
+	if (!points.length) return [...P];
+	const a = points.at(-1) as Vec2;
+	const b = P[0] as Vec2;
+	points[points.length - 1] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+	points.push(...P.slice(1));
+	return points;
 }
 
 /** Where two left with b's (x, z): where the line from p along u meets the one from q along v; null if they run on the same way. */
@@ -325,10 +375,20 @@ function seams(chains: PaintChain[]): void {
 	chains.forEach((c, i) => {
 		if (!c.closed && c.points.length >= 2) ends.push({ c: i, e: 0 }, { c: i, e: 1 });
 	});
-	const at = (x: { c: number; e: 0 | 1 }) => {
-		const P = (chains[x.c] as PaintChain).points;
-		return (x.e ? P.at(-1) : P[0]) as Vec2;
-	};
+	const at = (x: { c: number; e: 0 | 1 }) => endOf((chains[x.c] as PaintChain).points, x.e);
+	const used = new Set<number>();
+	for (const { x, y } of seamPairs(chains, ends)) {
+		if (used.has(x) || used.has(y)) continue;
+		used.add(x).add(y);
+		const A = ends[x] as { c: number; e: 0 | 1 };
+		const B = ends[y] as { c: number; e: 0 | 1 };
+		cutSeam(chains[A.c] as PaintChain, A.e, chains[B.c] as PaintChain, B.e, at(A), at(B));
+	}
+}
+
+/** The ends of different lines that meet (within MARK_MEET, or half the wider's width; not one turning back over the other), the nearest first. */
+function seamPairs(chains: readonly PaintChain[], ends: readonly { c: number; e: 0 | 1 }[]) {
+	const at = (x: { c: number; e: 0 | 1 }) => endOf((chains[x.c] as PaintChain).points, x.e);
 	const pairs: { x: number; y: number; d: number }[] = [];
 	for (let i = 0; i < ends.length; i++)
 		for (let j = i + 1; j < ends.length; j++) {
@@ -345,54 +405,49 @@ function seams(chains: PaintChain[]): void {
 			pairs.push({ x: i, y: j, d });
 		}
 	pairs.sort((p, q) => p.d - q.d);
-	const used = new Set<number>();
-	for (const { x, y } of pairs) {
-		if (used.has(x) || used.has(y)) continue;
-		used.add(x).add(y);
-		const A = ends[x] as { c: number; e: 0 | 1 };
-		const B = ends[y] as { c: number; e: 0 | 1 };
-		const ca = chains[A.c] as PaintChain;
-		const cb = chains[B.c] as PaintChain;
-		const pa = at(A);
-		const pb = at(B);
-		const J: Vec2 = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
-		// (A goes on into J along ua; B comes out of it the way -ub; each one's left (across its way, the same side))
-		const ua = wayOut(ca.points, A.e);
-		const ub = wayOut(cb.points, B.e);
-		const la: Vec2 = [-ua[1], ua[0]];
-		const lb: Vec2 = [ub[1], -ub[0]];
-		const ha = ca.width / 2;
-		const hb = cb.width / 2;
-		const side = (sg: number) => crossing([J[0] + la[0] * ha * sg, J[1] + la[1] * ha * sg], ua, [J[0] + lb[0] * hb * sg, J[1] + lb[1] * hb * sg], ub);
-		const reach = SEAM_LIMIT * Math.max(ha, hb);
-		let a = side(1);
-		let b = side(-1);
-		if (!a || !b || Math.hypot(a[0] - J[0], a[1] - J[1]) > reach || Math.hypot(b[0] - J[0], b[1] - J[1]) > reach) {
-			// (straight on, or too sharp a corner: square across the way between them)
-			const w: Vec2 = [ua[0] - ub[0], ua[1] - ub[1]];
-			const m = Math.hypot(w[0], w[1]) || 1;
-			a = [J[0] - (w[1] / m) * reach, J[1] + (w[0] / m) * reach];
-			b = [J[0] + (w[1] / m) * reach, J[1] - (w[0] / m) * reach];
+	return pairs;
+}
+
+/** Two lines' ends (ca's end ea at pa, cb's end eb at pb) met at the seam between them: each carried on to the corner their edges make, and cut along the seam
+ * from where their inner edges cross to where their outer ones do (going on straight, or too sharp a corner: square across). */
+function cutSeam(ca: PaintChain, ea: 0 | 1, cb: PaintChain, eb: 0 | 1, pa: Vec2, pb: Vec2) {
+	const J: Vec2 = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
+	// (A goes on into J along ua; B comes out of it the way -ub; each one's left (across its way, the same side))
+	const ua = wayOut(ca.points, ea);
+	const ub = wayOut(cb.points, eb);
+	const la: Vec2 = [-ua[1], ua[0]];
+	const lb: Vec2 = [ub[1], -ub[0]];
+	const ha = ca.width / 2;
+	const hb = cb.width / 2;
+	const side = (sg: number) => crossing([J[0] + la[0] * ha * sg, J[1] + la[1] * ha * sg], ua, [J[0] + lb[0] * hb * sg, J[1] + lb[1] * hb * sg], ub);
+	const reach = SEAM_LIMIT * Math.max(ha, hb);
+	let a = side(1);
+	let b = side(-1);
+	if (!a || !b || Math.hypot(a[0] - J[0], a[1] - J[1]) > reach || Math.hypot(b[0] - J[0], b[1] - J[1]) > reach) {
+		// (straight on, or too sharp a corner: square across the way between them)
+		const w: Vec2 = [ua[0] - ub[0], ua[1] - ub[1]];
+		const m = Math.hypot(w[0], w[1]) || 1;
+		a = [J[0] - (w[1] / m) * reach, J[1] + (w[0] / m) * reach];
+		b = [J[0] + (w[1] / m) * reach, J[1] - (w[0] / m) * reach];
+	}
+	const far = Math.min(reach, Math.max(Math.hypot(a[0] - J[0], a[1] - J[1]), Math.hypot(b[0] - J[0], b[1] - J[1])));
+	for (const [c, e, u] of [
+		[ca, ea, ua],
+		[cb, eb, ub],
+	] as const) {
+		// (its end at J, then on past it as far as the corner reaches; its side: back along it from J)
+		const P = c.points;
+		const tip: Vec2 = [J[0] + u[0] * (far + c.width), J[1] + u[1] * (far + c.width)];
+		if (e) {
+			P[P.length - 1] = J;
+			P.push(tip);
+		} else {
+			P[0] = J;
+			P.unshift(tip);
 		}
-		const far = Math.min(reach, Math.max(Math.hypot(a[0] - J[0], a[1] - J[1]), Math.hypot(b[0] - J[0], b[1] - J[1])));
-		for (const [c, e, u] of [
-			[ca, A.e, ua],
-			[cb, B.e, ub],
-		] as const) {
-			// (its end at J, then on past it as far as the corner reaches; its side: back along it from J)
-			const P = c.points;
-			const tip: Vec2 = [J[0] + u[0] * (far + c.width), J[1] + u[1] * (far + c.width)];
-			if (e) {
-				P[P.length - 1] = J;
-				P.push(tip);
-			} else {
-				P[0] = J;
-				P.unshift(tip);
-			}
-			const keep: Vec2 = [J[0] - u[0] * c.width, J[1] - u[1] * c.width];
-			c.cuts ??= [];
-			c.cuts.push({ a, b, keep, reach: far + 2 * Math.max(ca.width, cb.width) });
-		}
+		const keep: Vec2 = [J[0] - u[0] * c.width, J[1] - u[1] * c.width];
+		c.cuts ??= [];
+		c.cuts.push({ a, b, keep, reach: far + 2 * Math.max(ca.width, cb.width) });
 	}
 }
 

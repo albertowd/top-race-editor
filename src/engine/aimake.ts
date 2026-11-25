@@ -166,37 +166,12 @@ export function aiLineOf(
 ): { points: Float32Array; along: Float32Array; extra: Float32Array } {
 	// (the road a kart keeps CLEAR of the edges of, and its sides measured to: the one given, kerbs left out, else onRoad)
 	const clear = clearRoad ?? onRoad;
-	let drawn = pointsAlong(line, step);
-	let fastAt: V2[] | null = null;
-	if (pit?.fast) {
-		// (the fast line as its own AI line has it, kept clear; the pit lane leaving and joining it there)
-		const F0 = pointsAlong(pit.fast, step);
-		fastAt = keepClear(F0, true, clear, { step, margin });
-		drawn = followFast(drawn, F0, fastAt, ON_LINE);
-		const runs = (pts: V2[]) => {
-			let k = 0;
-			while (k < pts.length - 1 && nearestOf(fastAt as V2[], pts[k] as V2) <= ON_LINE) k++;
-			return k;
-		};
-		drawn = keepClear(drawn, false, clear, {
-			pinned: [runs(drawn), runs([...drawn].reverse())],
-			side: PIT_SIDE,
-			step,
-			margin,
-		});
-	} else drawn = keepClear(drawn, line.closed, clear, pit ? { side: PIT_SIDE, step, margin } : { step, margin });
+	const { drawn, fastAt } = keptClear(line, step, clear, pit, margin);
 	const P = fastAt ? onFastAtEnds(drawn, fastAt, step) : drawn;
 	const n = P.length;
 	const closed = line.closed;
 	const at = (i: number) => (closed ? (P[((i % n) + n) % n] as V2) : (P[Math.min(Math.max(i, 0), n - 1)] as V2));
-	// (the floor's height, the last one's where the line leaves it)
-	const Y = new Float64Array(n);
-	let last = 0;
-	for (let i = 0; i < n; i++) {
-		const y = floor((P[i] as V2)[0], (P[i] as V2)[1]);
-		Y[i] = Number.isNaN(y) ? last : y;
-		last = Y[i] as number;
-	}
+	const Y = floorHeights(P, floor);
 	const yAt = (i: number) => Y[closed ? ((i % n) + n) % n : Math.min(Math.max(i, 0), n - 1)] as number;
 	const h = (x: number, z: number, near: number) => {
 		const y = floor(x, z);
@@ -206,8 +181,7 @@ export function aiLineOf(
 	const along = new Float32Array(n);
 	const extra = new Float32Array(n * 18);
 	const span = Math.max(1, Math.round(TURN_SPAN / step));
-	const radius = new Float64Array(n);
-	const turn = new Float64Array(n);
+	const curvature = new Float64Array(n);
 	let s = 0;
 	for (let i = 0; i < n; i++) {
 		const p = P[i] as V2;
@@ -215,32 +189,9 @@ export function aiLineOf(
 		points.set([p[0], Y[i] as number, p[1]], i * 3);
 		along[i] = s;
 		// (its turn: the circle through it and the points TURN_SPAN either side; which way, as the way turns)
-		const a = at(i - span);
-		const b = at(i + span);
-		const ab = Math.hypot(b[0] - a[0], b[1] - a[1]);
-		const ap = Math.hypot(p[0] - a[0], p[1] - a[1]);
-		const pb = Math.hypot(b[0] - p[0], b[1] - p[1]);
-		const cross = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
-		// (its curvature, signed as AC's way: -1 turning left, as the line's own left is (-tz, tx); 1 right)
-		radius[i] = Math.abs(cross) > 1e-9 ? (-Math.sign(cross) * 2 * Math.abs(cross)) / (ab * ap * pb || 1) : 0;
+		curvature[i] = turnCurvature(at(i - span), p, at(i + span));
 	}
-	// (the curvature averaged over CURVE_SPAN either side: a line drawn within a few centimetres of where it should be turns tighter and looser by turns over a
-	// few metres, and its radius, its way and its speed with it)
-	const cspan = Math.max(0, Math.round(CURVE_SPAN / step));
-	const k = Float64Array.from(radius);
-	for (let i = 0; i < n; i++) {
-		let sum = 0;
-		let m = 0;
-		for (let d = -cspan; d <= cspan; d++) {
-			const j = closed ? (((i + d) % n) + n) % n : i + d;
-			if (j < 0 || j >= n) continue;
-			sum += k[j] as number;
-			m++;
-		}
-		const c = sum / (m || 1);
-		radius[i] = Math.min(Math.abs(c) > 1e-9 ? 1 / Math.abs(c) : STRAIGHT, STRAIGHT);
-		turn[i] = Math.abs(c) > 1e-9 ? Math.sign(c) : i ? (turn[i - 1] as number) : 1;
-	}
+	const { radius, turn } = averagedTurns(curvature, closed, Math.max(0, Math.round(CURVE_SPAN / step)));
 	// (eased over EASE points either side where it changes)
 	const way = Float64Array.from(turn, (_, i) => {
 		let sum = 0;
@@ -250,20 +201,17 @@ export function aiLineOf(
 		}
 		return sum / (2 * EASE + 1);
 	});
-	// (its speed: as fast as it may turn, braking before and speeding up after; a lap's round twice)
-	const v = Float64Array.from(radius, (r) => Math.min(pit ? PIT_SPEED : TOP, Math.sqrt(GRIP * r)));
 	const ds = (i: number) => Math.max(1e-3, Math.abs((along[(i + 1) % n] as number) - (along[i] as number)) || step);
-	for (let pass = 0; pass < (closed ? 2 : 1); pass++) {
-		for (let i = n - 2 + (closed ? 1 : 0); i >= 0; i--) {
-			const j = (i + 1) % n;
-			v[i] = Math.min(v[i] as number, Math.sqrt((v[j] as number) ** 2 + 2 * BRAKE * ds(i)));
-		}
-		for (let i = 1; i < n + (closed ? 1 : 0); i++) {
-			const j = i % n;
-			const k = i - 1;
-			v[j] = Math.min(v[j] as number, Math.sqrt((v[k] as number) ** 2 + 2 * ACCEL * ds(k)));
-		}
-	}
+	const v = speeds(radius, closed, pit ? PIT_SPEED : TOP, ds);
+	// (the road to the side sx, sz of a point: to its edge, SIDE_MIN to SIDE_MAX metres (a pit lane's PIT_SIDE at most))
+	const side = (p: V2, sx: number, sz: number) => {
+		let d = 0;
+		const most = pit ? PIT_SIDE : SIDE_MAX;
+		while (d < most && clear(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
+		// (a pit lane off the road's pictures there (its edge, a gap): its own road's width still)
+		if (pit && d === 0) return PIT_SIDE;
+		return Math.min(most, Math.max(SIDE_MIN, d));
+	};
 	for (let i = 0; i < n; i++) {
 		const p = P[i] as V2;
 		// (its way, over a metre either side, rising as the floor does)
@@ -282,14 +230,6 @@ export function aiLineOf(
 		const nm = Math.hypot(hx, 1, hz);
 		// (the floor's lean across it: its normal's along its right)
 		const camber = Math.asin(Math.max(-1, Math.min(1, (-hx / nm) * -lx + (-hz / nm) * -lz)));
-		const side = (sx: number, sz: number) => {
-			let d = 0;
-			const most = pit ? PIT_SIDE : SIDE_MAX;
-			while (d < most && clear(p[0] + sx * (d + 0.1), p[1] + sz * (d + 0.1))) d += 0.1;
-			// (a pit lane off the road's pictures there (its edge, a gap): its own road's width still)
-			if (pit && d === 0) return PIT_SIDE;
-			return Math.min(most, Math.max(SIDE_MIN, d));
-		};
 		const j = closed ? (i + 1) % n : Math.min(i + 1, n - 1);
 		const accel = j === i ? 0 : ((v[j] as number) ** 2 - (v[i] as number) ** 2) / (2 * ds(i));
 		const brake = accel < -0.5 ? Math.min(1, -accel / BRAKE) : 0;
@@ -304,8 +244,8 @@ export function aiLineOf(
 				r,
 				// (AC's left first: towards (fz, -fx), the other side of the roads' left, as the recorded lines have it; the other way round, AC finds the grid off its
 				// road and its karts stop)
-				side(-lx, -lz),
-				side(lx, lz),
+				side(p, -lx, -lz),
+				side(p, lx, lz),
 				camber,
 				way[i] as number,
 				-hx / nm,
@@ -322,4 +262,109 @@ export function aiLineOf(
 		);
 	}
 	return { points, along, extra };
+}
+
+/** A line's points every step metres along it, kept clear of the edges of the road clear says is there (keepClear). A pit lane's (pit): its road no wider
+ * than PIT_SIDE either side; with the fast line (pit.fast), that kept clear as its own AI line has it (fastAt, else null) and the pit lane leaving and joining
+ * it there, its runs on it at either end left where they are. */
+function keptClear(
+	line: RacingLine,
+	step: number,
+	clear: (x: number, z: number) => boolean,
+	pit: { fast?: RacingLine } | undefined,
+	margin: number | undefined,
+): { drawn: V2[]; fastAt: V2[] | null } {
+	const drawn = pointsAlong(line, step);
+	if (!pit?.fast) return { drawn: keepClear(drawn, line.closed, clear, pit ? { side: PIT_SIDE, step, margin } : { step, margin }), fastAt: null };
+	// (the fast line as its own AI line has it, kept clear; the pit lane leaving and joining it there)
+	const F0 = pointsAlong(pit.fast, step);
+	const fastAt = keepClear(F0, true, clear, { step, margin });
+	const following = followFast(drawn, F0, fastAt, ON_LINE);
+	const runs = (pts: V2[]) => {
+		let k = 0;
+		while (k < pts.length - 1 && nearestOf(fastAt, pts[k] as V2) <= ON_LINE) k++;
+		return k;
+	};
+	const kept = keepClear(following, false, clear, {
+		pinned: [runs(following), runs([...following].reverse())],
+		side: PIT_SIDE,
+		step,
+		margin,
+	});
+	return { drawn: kept, fastAt };
+}
+
+/** The floor's height under each of the points P, the last one's where they leave it. */
+function floorHeights(P: V2[], floor: (x: number, z: number) => number): Float64Array {
+	const Y = new Float64Array(P.length);
+	let last = 0;
+	for (let i = 0; i < P.length; i++) {
+		const y = floor((P[i] as V2)[0], (P[i] as V2)[1]);
+		Y[i] = Number.isNaN(y) ? last : y;
+		last = Y[i] as number;
+	}
+	return Y;
+}
+
+/** A line's curvature at p, from the circle through it and a, b either side of it, signed as AC's way: -1 turning left, as the line's own left is (-tz, tx);
+ * 1 right (0 where they are in a row). */
+function turnCurvature(a: V2, p: V2, b: V2): number {
+	const ab = Math.hypot(b[0] - a[0], b[1] - a[1]);
+	const ap = Math.hypot(p[0] - a[0], p[1] - a[1]);
+	const pb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+	const cross = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
+	return Math.abs(cross) > 1e-9 ? (-Math.sign(cross) * 2 * Math.abs(cross)) / (ab * ap * pb || 1) : 0;
+}
+
+/** The mean of the values v over span points either side of point i (a closed line's round its ends, an open one's as far as it goes). */
+function meanAround(v: Float64Array, i: number, span: number, closed: boolean): number {
+	const n = v.length;
+	let sum = 0;
+	let m = 0;
+	for (let d = -span; d <= span; d++) {
+		const j = closed ? (((i + d) % n) + n) % n : i + d;
+		if (j < 0 || j >= n) continue;
+		sum += v[j] as number;
+		m++;
+	}
+	return sum / (m || 1);
+}
+
+/** Each point's radius and which way it turns (1, -1) from the curvature k averaged over cspan points either side: a line drawn within a few centimetres of
+ * where it should be turns tighter and looser by turns over a few metres, and its radius, its way and its speed with it. Where it runs straight it turns as
+ * the point before does (the first: 1). */
+function averagedTurns(k: Float64Array, closed: boolean, cspan: number): { radius: Float64Array; turn: Float64Array } {
+	const n = k.length;
+	const radius = new Float64Array(n);
+	const turn = new Float64Array(n);
+	for (let i = 0; i < n; i++) {
+		const c = meanAround(k, i, cspan, closed);
+		const bent = Math.abs(c) > 1e-9;
+		radius[i] = Math.min(bent ? 1 / Math.abs(c) : STRAIGHT, STRAIGHT);
+		if (bent) turn[i] = Math.sign(c);
+		else turn[i] = i ? (turn[i - 1] as number) : 1;
+	}
+	return { radius, turn };
+}
+
+/** A line's speed at each point: as fast as it may turn (its radius), no more than top, braking before and speeding up after (ds: metres from a point to the
+ * next); a lap's round twice. */
+function speeds(radius: Float64Array, closed: boolean, top: number, ds: (i: number) => number): Float64Array {
+	const n = radius.length;
+	const v = Float64Array.from(radius, (r) => Math.min(top, Math.sqrt(GRIP * r)));
+	const passes = closed ? 2 : 1;
+	// (a closed line's last point runs on to its first)
+	const round = closed ? 1 : 0;
+	for (let pass = 0; pass < passes; pass++) {
+		for (let i = n - 2 + round; i >= 0; i--) {
+			const j = (i + 1) % n;
+			v[i] = Math.min(v[i] as number, Math.sqrt((v[j] as number) ** 2 + 2 * BRAKE * ds(i)));
+		}
+		for (let i = 1; i < n + round; i++) {
+			const j = i % n;
+			const k = i - 1;
+			v[j] = Math.min(v[j] as number, Math.sqrt((v[k] as number) ** 2 + 2 * ACCEL * ds(k)));
+		}
+	}
+	return v;
 }

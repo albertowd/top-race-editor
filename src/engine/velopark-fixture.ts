@@ -18,7 +18,7 @@ export const triangle = () => Triangle.load(new Uint8Array(readFileSync(WASM)));
 /** Faces filled on Node's worker threads (as many as the computer takes), or here with workers 0. */
 export async function nodeFiller(workers?: number): Promise<{
 	filler: Filler;
-	outliner?: MergeOptions["outliner"];
+	outliner?: NonNullable<MergeOptions["outliner"]>;
 	close(): void;
 	workers: number;
 }> {

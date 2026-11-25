@@ -330,8 +330,9 @@ class Bytes {
 /** A record: its bytes as stored where given (what the fields do not hold kept), else zeros, the fields written over. */
 function record(size: number, raw: Uint8Array | undefined, put: (r: Bytes, fresh: boolean) => void): Uint8Array {
 	const b = new Uint8Array(size);
-	if (raw && raw.length === size) b.set(raw);
-	put(new Bytes(b), !(raw && raw.length === size));
+	const whole = raw?.length === size;
+	if (whole) b.set(raw);
+	put(new Bytes(b), !whole);
 	return b;
 }
 
@@ -533,75 +534,90 @@ function readMaterial(L: Layout, r: Bytes, at: number): [GmtMaterial, number] {
 	};
 	const raw = rawUnless(r.b.subarray(at, at + headSize(L)), materialHead(L, m, undefined));
 	if (raw) m.raw = raw;
-	let p = at + headSize(L);
-	if (L === LAYOUTS.new) {
-		const s: GmtShader = { name: nameAt(r.b, p, NAME), params: r.u32s(p + 64, 11), textures: [] };
-		const n = r.u32(p + 108);
-		const sraw = rawUnless(r.b.subarray(p, p + SHADER_NEW), shaderNew({ ...s, textures: new Array(n) }, undefined));
-		if (sraw) s.raw = sraw;
-		p += SHADER_NEW;
-		for (let k = 0; k < n; k++) {
-			const [t, q] = readTexture(L, r, p);
-			s.textures.push(t);
-			p = q;
-		}
-		m.shaders.push(s);
-	} else {
-		const spans: [number, number][] = [];
-		for (let k = 0; k < L.levels; k++) {
-			const first = r.u32(p);
-			const n = r.u32(p + 4);
-			const s: GmtShader = { name: nameAt(r.b, p + 8, NAME), params: r.u32s(p + 72, 48), textures: [] };
-			const sraw = rawUnless(r.b.subarray(p, p + SHADER_OLD), shaderOld({ ...s, textures: new Array(n) }, first, undefined));
-			if (sraw) s.raw = sraw;
-			spans.push([first, n]);
-			m.shaders.push(s);
-			p += SHADER_OLD;
-		}
-		m.tail = r.u32s(p, OLD_TAIL / 4);
-		p += OLD_TAIL;
-		const total = r.u32(p);
-		p += 4;
-		const all: GmtTexture[] = [];
-		for (let k = 0; k < total; k++) {
-			const [t, q] = readTexture(L, r, p);
-			all.push(t);
-			p = q;
-		}
-		let next = 0;
-		spans.forEach(([first, n], k) => {
-			if (first !== next) throw new Error(`material ${m.name}: its level ${k}'s textures from ${first}, not ${next}`);
-			m.shaders[k]?.textures.push(...all.slice(first, first + n));
-			next += n;
-		});
-		if (next !== total) throw new Error(`material ${m.name}: ${total} textures, its levels ${next}`);
+	const p = at + headSize(L);
+	return [m, L === LAYOUTS.new ? readShaderNew(L, r, p, m) : readShadersOld(L, r, p, m)];
+}
+
+/** n textures from p on, and where they end. */
+function readTextures(L: Layout, r: Bytes, p: number, n: number): [GmtTexture[], number] {
+	const all: GmtTexture[] = [];
+	for (let k = 0; k < n; k++) {
+		const [t, q] = readTexture(L, r, p);
+		all.push(t);
+		p = q;
 	}
-	return [m, p];
+	return [all, p];
+}
+
+/** The new layout's shader of a material at p, its textures after it, added to the material; where they end. */
+function readShaderNew(L: Layout, r: Bytes, p: number, m: GmtMaterial): number {
+	const s: GmtShader = { name: nameAt(r.b, p, NAME), params: r.u32s(p + 64, 11), textures: [] };
+	const n = r.u32(p + 108);
+	const sraw = rawUnless(r.b.subarray(p, p + SHADER_NEW), shaderNew({ ...s, textures: new Array(n) }, undefined));
+	if (sraw) s.raw = sraw;
+	const [textures, end] = readTextures(L, r, p + SHADER_NEW, n);
+	s.textures = textures;
+	m.shaders.push(s);
+	return end;
+}
+
+/** The old layout's shaders of a material at p (one a level), its tail and the levels' textures after them, added to the material; where they end. */
+function readShadersOld(L: Layout, r: Bytes, p: number, m: GmtMaterial): number {
+	const spans: [number, number][] = [];
+	for (let k = 0; k < L.levels; k++) {
+		const first = r.u32(p);
+		const n = r.u32(p + 4);
+		const s: GmtShader = { name: nameAt(r.b, p + 8, NAME), params: r.u32s(p + 72, 48), textures: [] };
+		const sraw = rawUnless(r.b.subarray(p, p + SHADER_OLD), shaderOld({ ...s, textures: new Array(n) }, first, undefined));
+		if (sraw) s.raw = sraw;
+		spans.push([first, n]);
+		m.shaders.push(s);
+		p += SHADER_OLD;
+	}
+	m.tail = r.u32s(p, OLD_TAIL / 4);
+	p += OLD_TAIL;
+	const total = r.u32(p);
+	const [all, end] = readTextures(L, r, p + 4, total);
+	let next = 0;
+	spans.forEach(([first, n], k) => {
+		if (first !== next) throw new Error(`material ${m.name}: its level ${k}'s textures from ${first}, not ${next}`);
+		m.shaders[k]?.textures.push(...all.slice(first, first + n));
+		next += n;
+	});
+	if (next !== total) throw new Error(`material ${m.name}: ${total} textures, its levels ${next}`);
+	return end;
 }
 
 function materialBytes(L: Layout, m: GmtMaterial): Uint8Array[] {
 	const out = [materialHead(L, m, m.raw)];
-	if (L === LAYOUTS.new) {
-		if (m.shaders.length !== 1) throw new Error(`material ${m.name}: ${m.shaders.length} shaders, the layout 1`);
-		for (const s of m.shaders) {
-			out.push(shaderNew(s, s.raw));
-			for (const t of s.textures) out.push(textureRecord(L, t, t.raw));
-		}
-	} else {
-		if (m.shaders.length !== L.levels) throw new Error(`material ${m.name}: ${m.shaders.length} shaders, not 3`);
-		let first = 0;
-		for (const s of m.shaders) {
-			out.push(shaderOld(s, first, s.raw));
-			first += s.textures.length;
-		}
-		const tail = new Uint8Array(OLD_TAIL + 4);
-		const w = new Bytes(tail);
-		w.setU32s(0, m.tail ?? []);
-		w.setU32(OLD_TAIL, first);
-		out.push(tail);
-		for (const s of m.shaders) for (const t of s.textures) out.push(textureRecord(L, t, t.raw));
-	}
+	if (L === LAYOUTS.new) shaderBytesNew(L, m, out);
+	else shaderBytesOld(L, m, out);
 	return out;
+}
+
+/** The new layout's shader of a material, each followed by its textures, onto out. */
+function shaderBytesNew(L: Layout, m: GmtMaterial, out: Uint8Array[]): void {
+	if (m.shaders.length !== 1) throw new Error(`material ${m.name}: ${m.shaders.length} shaders, the layout 1`);
+	for (const s of m.shaders) {
+		out.push(shaderNew(s, s.raw));
+		for (const t of s.textures) out.push(textureRecord(L, t, t.raw));
+	}
+}
+
+/** The old layout's shaders of a material (one a level), its tail and every level's textures after them, onto out. */
+function shaderBytesOld(L: Layout, m: GmtMaterial, out: Uint8Array[]): void {
+	if (m.shaders.length !== L.levels) throw new Error(`material ${m.name}: ${m.shaders.length} shaders, not 3`);
+	let first = 0;
+	for (const s of m.shaders) {
+		out.push(shaderOld(s, first, s.raw));
+		first += s.textures.length;
+	}
+	const tail = new Uint8Array(OLD_TAIL + 4);
+	const w = new Bytes(tail);
+	w.setU32s(0, m.tail ?? []);
+	w.setU32(OLD_TAIL, first);
+	out.push(tail);
+	for (const s of m.shaders) for (const t of s.textures) out.push(textureRecord(L, t, t.raw));
 }
 
 // ---- the header --------------------------------------------------------------------------------------------------
@@ -681,6 +697,62 @@ function headerBytes(L: Layout, g: Gmt, at: Places, raw: Uint8Array | undefined)
 
 // ---- reading and writing -----------------------------------------------------------------------------------------
 
+/** a mesh record as read: where it is, its vertices' and indices' counts and firsts, its palette's length */
+interface MeshRec {
+	at: number;
+	vc: number;
+	ic: number;
+	fv: number;
+	fi: number;
+	palette: number;
+}
+
+/** The mc mesh records after the header. */
+function readMeshRecs(L: Layout, r: Bytes, mc: number): MeshRec[] {
+	let p = L.header;
+	const recs: MeshRec[] = [];
+	for (let k = 0; k < mc; k++) {
+		recs.push({
+			at: p,
+			vc: r.u32(p + 4),
+			ic: r.u32(p + 12),
+			fv: r.u32(p + 24),
+			fi: r.u32(p + 32),
+			palette: L === LAYOUTS.new ? r.u32(p + 92) : 0,
+		});
+		p += L.mesh;
+	}
+	return recs;
+}
+
+/** A bone record at p. */
+function readBone(r: Bytes, p: number): GmtBone {
+	const bone: GmtBone = {
+		name: nameAt(r.b, p + 12, BONE_NAME),
+		head: [r.u32(p), r.u32(p + 4), r.u32(p + 8)],
+		data: r.b.slice(p + 44, p + BONE),
+	};
+	const raw = rawUnless(r.b.subarray(p, p + BONE), boneRecord(bone, undefined));
+	if (raw) bone.raw = raw;
+	return bone;
+}
+
+/** A mesh of its record: its vertices and indices from the file's (at vat and iat), its palette at p. */
+function readMesh(L: Layout, r: Bytes, m: MeshRec, vat: number, iat: number, p: number): GmtMesh {
+	const vertices: GmtVertex[] = [];
+	for (let i = 0; i < m.vc; i++) vertices.push(readVertex(r, vat + (m.fv + i) * L.vertex, L.uvSets));
+	const indices: number[] = [];
+	for (let i = 0; i < m.ic; i++) indices.push(r.u16(iat + (m.fi + i) * 2));
+	const palette = Array.from(r.b.subarray(p, p + m.palette));
+	return {
+		flags: r.u32(m.at),
+		material: r.u32(m.at + 36),
+		vertices,
+		indices,
+		palette,
+	};
+}
+
 function layoutOf(b: Uint8Array): GmtLayout | null {
 	if (b.length < 0x1cc) return null;
 	const tag = hex(b.subarray(0x1bc, 0x1cc));
@@ -695,34 +767,14 @@ export function readGmt(bytes: Uint8Array): Gmt | GmtEncrypted {
 	const r = new Bytes(bytes);
 	const table = r.u32s(0x13c, 12);
 	const [vc, ic, mc, fc, pc, bc] = [0, 2, 4, 6, 8, 10].map((i) => table[i] ?? 0) as [number, number, number, number, number, number];
-	let p = L.header;
-	const recs: { at: number; vc: number; ic: number; fv: number; fi: number; palette: number }[] = [];
-	for (let k = 0; k < mc; k++) {
-		recs.push({
-			at: p,
-			vc: r.u32(p + 4),
-			ic: r.u32(p + 12),
-			fv: r.u32(p + 24),
-			fi: r.u32(p + 32),
-			palette: L === LAYOUTS.new ? r.u32(p + 92) : 0,
-		});
-		p += L.mesh;
-	}
+	const recs = readMeshRecs(L, r, mc);
+	let p = L.header + mc * L.mesh;
 	const faces: GmtFace[] = [];
 	for (let k = 0; k < fc; k++, p += FACE) faces.push(readFace(r, p));
 	const planes: GmtPlane[] = [];
 	for (let k = 0; k < pc; k++, p += PLANE) planes.push({ normal: r.vec3(p), flags: r.u32(p + 12) });
 	const bones: GmtBone[] = [];
-	for (let k = 0; k < bc; k++, p += BONE) {
-		const bone: GmtBone = {
-			name: nameAt(bytes, p + 12, BONE_NAME),
-			head: [r.u32(p), r.u32(p + 4), r.u32(p + 8)],
-			data: bytes.slice(p + 44, p + BONE),
-		};
-		const raw = rawUnless(bytes.subarray(p, p + BONE), boneRecord(bone, undefined));
-		if (raw) bone.raw = raw;
-		bones.push(bone);
-	}
+	for (let k = 0; k < bc; k++, p += BONE) bones.push(readBone(r, p));
 	const vat = p;
 	p += vc * L.vertex;
 	const iat = p;
@@ -732,33 +784,15 @@ export function readGmt(bytes: Uint8Array): Gmt | GmtEncrypted {
 	let fi = 0;
 	for (const [k, m] of recs.entries()) {
 		if (m.fv !== fv || m.fi !== fi) throw new Error(`mesh ${k}: its vertices from ${m.fv}, indices from ${m.fi}`);
-		const vertices: GmtVertex[] = [];
-		for (let i = 0; i < m.vc; i++) vertices.push(readVertex(r, vat + (fv + i) * L.vertex, L.uvSets));
-		const indices: number[] = [];
-		for (let i = 0; i < m.ic; i++) indices.push(r.u16(iat + (fi + i) * 2));
-		const palette = Array.from(bytes.subarray(p, p + m.palette));
+		meshes.push(readMesh(L, r, m, vat, iat, p));
 		p += m.palette;
-		const mesh: GmtMesh = {
-			flags: r.u32(m.at),
-			material: r.u32(m.at + 36),
-			vertices,
-			indices,
-			palette,
-		};
-		meshes.push(mesh);
 		fv += m.vc;
 		fi += m.ic;
 	}
 	if (fv !== vc || fi !== ic) throw new Error(`the meshes have ${fv} of ${vc} vertices, ${fi} of ${ic} indices`);
 	if (p - 4 !== r.u32(0)) throw new Error(`the materials at ${p - 4}, not ${r.u32(0)}`);
-	const n = r.u32(p);
-	p += 4;
-	const materials: GmtMaterial[] = [];
-	for (let k = 0; k < n; k++) {
-		const [m, q] = readMaterial(L, r, p);
-		materials.push(m);
-		p = q;
-	}
+	const [materials, end] = readMaterials(L, r, p);
+	p = end;
 	if (p !== bytes.length) throw new Error(`${bytes.length - p} bytes past the materials`);
 	const g: Gmt = {
 		kind: "gmt",
@@ -784,19 +818,48 @@ export function readGmt(bytes: Uint8Array): Gmt | GmtEncrypted {
 		bones,
 		materials,
 	};
-	// (each record kept as stored only where its fields do not make it again)
+	keepStored(L, bytes, g, recs);
+	return g;
+}
+
+/** The materials' count at p, then them; and where they end. */
+function readMaterials(L: Layout, r: Bytes, p: number): [GmtMaterial[], number] {
+	const n = r.u32(p);
+	p += 4;
+	const materials: GmtMaterial[] = [];
+	for (let k = 0; k < n; k++) {
+		const [m, q] = readMaterial(L, r, p);
+		materials.push(m);
+		p = q;
+	}
+	return [materials, p];
+}
+
+/** The header's and the mesh records' bytes kept as stored, each only where its fields do not make it again. */
+function keepStored(L: Layout, bytes: Uint8Array, g: Gmt, recs: MeshRec[]): void {
 	const at = places(memory(L, g.bits), g);
 	const header = rawUnless(bytes.subarray(4, L.header), headerBytes(L, g, at, undefined));
 	if (header) g.header = header;
 	let pal = at.palettes;
-	meshes.forEach((m, k) => {
-		const rec = recs[k] as (typeof recs)[number];
+	g.meshes.forEach((m, k) => {
+		const rec = recs[k] as MeshRec;
 		const place = { firstVertex: rec.fv, firstIndex: rec.fi, palette: pal };
 		const raw = rawUnless(bytes.subarray(rec.at, rec.at + L.mesh), meshRecord(L, m, place, undefined));
 		if (raw) m.raw = raw;
 		pal += m.palette.length;
 	});
-	return g;
+}
+
+/** The meshes' indices, fi of them, 16 bits each. */
+function indexBytes(g: Gmt, fi: number): Uint8Array {
+	const ib = new Bytes(new Uint8Array(fi * 2));
+	let i = 0;
+	for (const m of g.meshes)
+		for (const x of m.indices) {
+			if (x > 0xffff) throw new Error(`index ${x}: past 16 bits`);
+			ib.setU16(2 * i++, x);
+		}
+	return ib.b;
 }
 
 export function writeGmt(g: Gmt | GmtEncrypted): Uint8Array {
@@ -829,15 +892,7 @@ export function writeGmt(g: Gmt | GmtEncrypted): Uint8Array {
 	const vb = new Bytes(new Uint8Array(fv * L.vertex));
 	let v = 0;
 	for (const m of g.meshes) for (const x of m.vertices) writeVertex(vb, L.vertex * v++, x, L.uvSets);
-	parts.push(vb.b);
-	const ib = new Bytes(new Uint8Array(fi * 2));
-	let i = 0;
-	for (const m of g.meshes)
-		for (const x of m.indices) {
-			if (x > 0xffff) throw new Error(`index ${x}: past 16 bits`);
-			ib.setU16(2 * i++, x);
-		}
-	parts.push(ib.b);
+	parts.push(vb.b, indexBytes(g, fi));
 	for (const m of g.meshes) parts.push(Uint8Array.from(m.palette));
 	const count = new Uint8Array(4);
 	new Bytes(count).setU32(0, g.materials.length);

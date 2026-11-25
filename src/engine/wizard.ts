@@ -79,20 +79,29 @@ export class WizardError extends Error {}
 /** A float as Python writes it (4.0, not 4). */
 const F = (x: number) => new PyNumber(x, pyFloat(x));
 /** a value's floats as Python's (every number of it a float) */
-const floats = (v: unknown): unknown =>
-	typeof v === "number"
-		? F(v)
-		: Array.isArray(v)
-			? v.map(floats)
-			: v && typeof v === "object" && !(v instanceof PyNumber)
-				? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, floats(x)]))
-				: v;
+function floats(v: unknown): unknown {
+	if (typeof v === "number") return F(v);
+	if (Array.isArray(v)) return v.map(floats);
+	if (v && typeof v === "object" && !(v instanceof PyNumber)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, floats(x)]));
+	return v;
+}
+
+/** A string without the run of one character it starts with. */
+function trimStartOf(s: string, c: string): string {
+	let start = 0;
+	while (start < s.length && s[start] === c) start++;
+	return s.slice(start);
+}
+
+/** A string without the run of one character it ends with. */
+function trimEndOf(s: string, c: string): string {
+	let end = s.length;
+	while (end > 0 && s[end - 1] === c) end--;
+	return s.slice(0, end);
+}
 
 export function slug(name: string): string {
-	const s = name
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
+	const s = trimEndOf(trimStartOf(name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), "-"), "-");
 	return s || "new-track";
 }
 
@@ -101,7 +110,7 @@ function g(x: number): string {
 	if (x === 0) return "0";
 	const [m, e] = x.toExponential(5).split("e") as [string, string];
 	const exp = Number(e);
-	const trim = (s: string) => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
+	const trim = (s: string) => (s.includes(".") ? trimEndOf(s, "0").replace(/\.$/, "") : s);
 	if (exp < -4 || exp >= 6) return `${trim(m)}e${exp < 0 ? "-" : "+"}${String(Math.abs(exp)).padStart(2, "0")}`;
 	return trim(x.toFixed(5 - exp));
 }
@@ -147,16 +156,16 @@ const heightsArea = (p: Plan): Area => {
 export async function planOf(body: unknown, root: string, files: HostFiles): Promise<Plan> {
 	if (!body || typeof body !== "object" || Array.isArray(body)) throw new WizardError("plan: not an object");
 	const b = body as Record<string, unknown>;
-	const name = String(b.name ?? "").trim();
+	const name = String((b.name as string | undefined) ?? "").trim();
 	if (!name) throw new WizardError("name: the track needs one");
-	const given = String(b.folder ?? "").trim();
+	const given = String((b.folder as string | undefined) ?? "").trim();
 	const folder = normal(given && absolute(given) ? given : `${root}/${given || slug(name)}`);
 	const lat = num(b.lat, "latitude", -84, 84);
 	const lon = num(b.lon, "longitude", -180, 180);
 	const width = num(b.width, "width", ...AREA);
 	const depth = num(b.depth, "depth", ...AREA);
-	const image = String(b.image || "esri");
-	const hp = String(b.heights || "terrarium");
+	const image = String((b.image as string | undefined) || "esri");
+	const hp = String((b.heights as string | undefined) || "terrarium");
 	provider(image, "image");
 	provider(hp, "heights");
 	const mpp = num(b.mpp ?? 1, "metres a pixel", ...MPP);
@@ -294,7 +303,7 @@ const median = (v: number[]) => {
 };
 
 /** A file of JSON as Python's json writes it, its lines (indented) ended as Python's on Windows ends them. */
-const json = (v: unknown, indent?: number) => new TextEncoder().encode(indent === undefined ? dumpPyJson(v) : dumpPyJson(v, indent).split("\n").join("\r\n"));
+const json = (v: unknown, indent?: number) => new TextEncoder().encode(indent === undefined ? dumpPyJson(v) : dumpPyJson(v, indent).replaceAll("\n", "\r\n"));
 
 /** The terrain made: its description (the track tools' terrain.new()) written, then its layers (terrain.write()). */
 export type BuildTerrain = (args: TerrainArgs, job: Job) => Promise<void>;
@@ -375,7 +384,7 @@ export async function make(
 
 	step("picture");
 	const ip = provider(p.image, "image");
-	const [rgb, z] = await picture(ip, await keyFor(ip, keys), p.place, area, p.mpp, host, progress, stopped);
+	const [rgb, z] = await picture(ip, await keyFor(ip, keys), p.place, area, p.mpp, host, { progress, stop: stopped });
 	const pic = `${sur}/picture.jpg`;
 	await files.write(pic, await host.encodeJpeg(rgb, 0.9));
 	const source = `${ip.label}, zoom ${z}, fetched ${today} (${ip.attribution})`;
@@ -396,7 +405,7 @@ export async function make(
 	step("heights");
 	const hp = provider(p.heights, "heights");
 	const [x, zz] = gridPoints(heightsArea(p), p.step);
-	const [h, res] = await heights(hp, await keyFor(hp, keys), p.place, x, zz, host, progress, stopped);
+	const [h, res] = await heights(hp, await keyFor(hp, keys), p.place, x, zz, host, { progress, stop: stopped });
 	const [[xa, xb], [za, zb]] = heightsArea(p);
 	const shape = [new Set(zz).size, new Set(x).size];
 	const rows = x.map((xi, i) => {
@@ -498,12 +507,15 @@ function cut(im: Picture, left: number, top: number, w: number): Picture {
 
 // ---------------------------------------------------------------- the wizard the engine serves
 
+/** An error's message (what was thrown, as a string, where not an Error). */
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 /** The page's wizard: the providers and the keys, a place found, a tile for its map, a plan estimated and made (one job at a time). */
 export class Wizard {
 	readonly jobs = new Map<string, Job>();
 	/** each job's end, for the tests */
 	readonly ends = new Map<string, Promise<void>>();
-	private tiles = new Map<string, Promise<Uint8Array>>();
+	private readonly tiles = new Map<string, Promise<Uint8Array>>();
 
 	constructor(
 		readonly root: string,
@@ -571,7 +583,7 @@ export class Wizard {
 			job.say("made");
 		} catch (err) {
 			job.state = job.stop ? "stopped" : "failed";
-			job.error = job.stop ? "stopped" : (err instanceof Error ? err.message : String(err)) || "Error";
+			job.error = job.stop ? "stopped" : messageOf(err) || "Error";
 			job.say(`${job.state}: ${job.error}`);
 		}
 	}

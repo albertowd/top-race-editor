@@ -58,8 +58,10 @@ export interface RoadDesc {
 /** np.interp(x, xp, fp): fp[-1] at and past the last, fp[0] before the first. */
 export function interp(x: number, xp: ArrayLike<number>, fp: ArrayLike<number>): number {
 	const n = xp.length;
+	const first = xp[0] as number;
 	const last = xp[n - 1] as number;
-	if (!(x >= (xp[0] as number))) return x < (xp[0] as number) ? (fp[0] as number) : Number.NaN;
+	if (x < first) return fp[0] as number;
+	if (Number.isNaN(x) || Number.isNaN(first)) return Number.NaN;
 	if (x >= last) return fp[n - 1] as number;
 	let lo = 0;
 	let hi = n - 1;
@@ -159,7 +161,7 @@ function maximum1d(a: Float64Array, size: number): Float64Array {
 	return out;
 }
 
-const norm2 = (x: number, z: number) => Math.sqrt(x * x + z * z);
+const norm2 = (x: number, z: number) => Math.hypot(x, z);
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
 // ---- a road's middle -------------------------------------------------------------------------------------------
@@ -169,13 +171,13 @@ export function spline(P: number[][], n = 8): number[][] {
 	const d = P[0]?.length ?? 0;
 	if (P.length < 3) {
 		const first = P[0] as number[];
-		const last = P[P.length - 1] as number[];
+		const last = P.at(-1) as number[];
 		return linspace(0, 1, n * (P.length - 1) + 1).map((t) => first.map((v, k) => v * (1 - t) + (last[k] as number) * t));
 	}
 	const Q = [
 		(P[0] as number[]).map((v, k) => 2 * v - ((P[1] as number[])[k] as number)),
 		...P,
-		(P[P.length - 1] as number[]).map((v, k) => 2 * v - ((P[P.length - 2] as number[])[k] as number)),
+		(P.at(-1) as number[]).map((v, k) => 2 * v - ((P.at(-2) as number[])[k] as number)),
 	];
 	const dist = (a: number[], b: number[]) => Math.max(Math.sqrt(norm2((b[0] as number) - (a[0] as number), (b[1] as number) - (a[1] as number))), 1e-6);
 	const out: number[][] = [];
@@ -204,7 +206,7 @@ export function spline(P: number[][], n = 8): number[][] {
 			out.push(row);
 		}
 	}
-	out.push([...(P[P.length - 1] as number[])]);
+	out.push([...(P.at(-1) as number[])]);
 	return out;
 }
 
@@ -330,7 +332,7 @@ export function fine(road: RoadDesc, raw = false): Fine {
 	let f = fines.get(key);
 	if (!f) {
 		const m = stripped(road);
-		const L = m.s[m.s.length - 1] as number;
+		const L = m.s.at(-1) as number;
 		const at = Float64Array.from([...arange(0, L, FINE), L]);
 		const mx = Float64Array.from(at, (a) => interp(a, m.s, m.x));
 		const mz = Float64Array.from(at, (a) => interp(a, m.s, m.z));
@@ -433,9 +435,9 @@ function pick(qx: Float64Array, qz: Float64Array, ang: Float64Array): number[] {
 		}
 	}
 	if (keep.length > 2) {
-		const a = keep[keep.length - 1] as number;
-		const b = keep[keep.length - 2] as number;
-		if (norm2((qx[a] as number) - (qx[b] as number), (qz[a] as number) - (qz[b] as number)) < ROW * 0.3) keep.splice(keep.length - 2, 1);
+		const a = keep.at(-1) as number;
+		const b = keep.at(-2) as number;
+		if (norm2((qx[a] as number) - (qx[b] as number), (qz[a] as number) - (qz[b] as number)) < ROW * 0.3) keep.splice(-2, 1);
 	}
 	return keep;
 }
@@ -447,10 +449,9 @@ export interface RoadMesh {
 	F: Int32Array;
 }
 
-/** A road's mesh: its top as high as its heights say, or height(x, z) + ROAD when given. Its lines along it each keep their own points, the strips between them
- * zipped through the fine rows: no point but is shared. */
-export function mesh(road: RoadDesc, height?: (x: number, z: number) => number): RoadMesh {
-	const f = fine(road);
+/** A road's lines' points as kept (pick), all in one: x and z, mapping (u, v) and how far along and across (two each); and each line's fine rows kept with
+ * its points' indices. */
+function linePoints(road: RoadDesc, f: Fine) {
 	const n = f.at.length;
 	const ang = Float64Array.from({ length: n }, (_, i) => Math.atan2(-(f.lx[i] as number), f.lz[i] as number));
 	const deg = unwrap(ang).map((a) => a * (180 / Math.PI));
@@ -477,36 +478,78 @@ export function mesh(road: RoadDesc, height?: (x: number, z: number) => number):
 		}
 		kept.push([keep, idx]);
 	}
-	const F: number[] = [];
-	for (let l = 0; l + 1 < kept.length; l++) {
-		// (two lines zipped along: on along the one whose next point is at the nearer fine row, a quad split the same way where both have one at the same)
-		const [ra, ia] = kept[l] as [number[], number[]];
-		const [rb, ib] = kept[l + 1] as [number[], number[]];
-		let i = 0;
-		let j = 0;
-		while (i < ia.length - 1 || j < ib.length - 1) {
-			const na = i < ia.length - 1 ? (ra[i + 1] as number) : Infinity;
-			const nb = j < ib.length - 1 ? (rb[j + 1] as number) : Infinity;
-			if (na < nb) {
-				F.push(ia[i] as number, ib[j] as number, ia[i + 1] as number);
-				i++;
-			} else if (nb < na) {
-				F.push(ia[i] as number, ib[j] as number, ib[j + 1] as number);
-				j++;
-			} else {
-				F.push(ia[i] as number, ib[j] as number, ib[j + 1] as number, ia[i] as number, ib[j + 1] as number, ia[i + 1] as number);
-				i++;
-				j++;
-			}
+	return { px, pz, us, so, kept };
+}
+
+/** Two lines zipped along into faces (pushed onto F): on along the one whose next point is at the nearer fine row, a quad split the same way where both have
+ * one at the same. */
+function zip(ra: number[], ia: number[], rb: number[], ib: number[], F: number[]) {
+	let i = 0;
+	let j = 0;
+	while (i < ia.length - 1 || j < ib.length - 1) {
+		const na = i < ia.length - 1 ? (ra[i + 1] as number) : Infinity;
+		const nb = j < ib.length - 1 ? (rb[j + 1] as number) : Infinity;
+		if (na < nb) {
+			F.push(ia[i] as number, ib[j] as number, ia[i + 1] as number);
+			i++;
+		} else if (nb < na) {
+			F.push(ia[i] as number, ib[j] as number, ib[j + 1] as number);
+			j++;
+		} else {
+			F.push(ia[i] as number, ib[j] as number, ib[j + 1] as number, ia[i] as number, ib[j + 1] as number, ia[i + 1] as number);
+			i++;
+			j++;
 		}
 	}
-	// (the strips where a column runs on the edge have no width: out, and the points left over with them)
+}
+
+/** Of faces over points (x, z), those with a width seen from above. */
+function wideFaces(F: number[], px: number[], pz: number[]): number[] {
 	const crossY = (a: number, b: number, c: number) =>
 		((pz[b] as number) - (pz[a] as number)) * ((px[c] as number) - (px[a] as number)) -
 		((px[b] as number) - (px[a] as number)) * ((pz[c] as number) - (pz[a] as number));
 	const faces: number[] = [];
 	for (let k = 0; k < F.length; k += 3)
 		if (Math.abs(crossY(F[k] as number, F[k + 1] as number, F[k + 2] as number)) > 1e-6) faces.push(F[k] as number, F[k + 1] as number, F[k + 2] as number);
+	return faces;
+}
+
+/** Faces over points (x, y, z) turned, where they face down, to face up. */
+function facingUp(P: Float64Array, out: Int32Array) {
+	for (let k = 0; k < out.length; k += 3) {
+		const a = out[k] as number;
+		const b = out[k + 1] as number;
+		const c = out[k + 2] as number;
+		const up =
+			((P[b * 3 + 2] as number) - (P[a * 3 + 2] as number)) * ((P[c * 3] as number) - (P[a * 3] as number)) -
+			((P[b * 3] as number) - (P[a * 3] as number)) * ((P[c * 3 + 2] as number) - (P[a * 3 + 2] as number));
+		if (up < 0) {
+			out[k] = c;
+			out[k + 2] = a;
+		}
+	}
+}
+
+/** A road's mesh: points (x, y, z), their mapping (u, v), faces (three corners each, facing up). */
+export interface RoadMesh {
+	P: Float64Array;
+	U: Float64Array;
+	F: Int32Array;
+}
+
+/** A road's mesh: its top as high as its heights say, or height(x, z) + ROAD when given. Its lines along it each keep their own points, the strips between them
+ * zipped through the fine rows: no point but is shared. */
+export function mesh(road: RoadDesc, height?: (x: number, z: number) => number): RoadMesh {
+	const f = fine(road);
+	const { px, pz, us, so, kept } = linePoints(road, f);
+	const F: number[] = [];
+	for (let l = 0; l + 1 < kept.length; l++) {
+		const [ra, ia] = kept[l] as [number[], number[]];
+		const [rb, ib] = kept[l + 1] as [number[], number[]];
+		zip(ra, ia, rb, ib, F);
+	}
+	// (the strips where a column runs on the edge have no width: out, and the points left over with them)
+	const faces = wideFaces(F, px, pz);
 	const used = [...new Set(faces)].sort((a, b) => a - b);
 	const remap = new Int32Array(px.length).fill(-1);
 	used.forEach((v, i) => {
@@ -532,18 +575,7 @@ export function mesh(road: RoadDesc, height?: (x: number, z: number) => number):
 	} else if (height)
 		// (ROAD over the ground along its normal: layer.ts)
 		for (let i = 0; i < m; i++) P[i * 3 + 1] = above(height, P[i * 3] as number, P[i * 3 + 2] as number, ROAD);
-	for (let k = 0; k < out.length; k += 3) {
-		const a = out[k] as number;
-		const b = out[k + 1] as number;
-		const c = out[k + 2] as number;
-		const up =
-			((P[b * 3 + 2] as number) - (P[a * 3 + 2] as number)) * ((P[c * 3] as number) - (P[a * 3] as number)) -
-			((P[b * 3] as number) - (P[a * 3] as number)) * ((P[c * 3 + 2] as number) - (P[a * 3 + 2] as number));
-		if (up < 0) {
-			out[k] = c;
-			out[k + 2] = a;
-		}
-	}
+	facingUp(P, out);
 	return { P, U, F: out };
 }
 
@@ -560,14 +592,15 @@ export function heightAt(road: RoadDesc, at: ArrayLike<number>, off: ArrayLike<n
 	if (!H) throw new Error(`${road.name}: no heights`);
 	const { step, rows } = H;
 	const f = fine(road, true);
-	const end = f.at[f.at.length - 1] as number;
+	const end = f.at.at(-1) as number;
 	const st = [...Array.from({ length: rows.length - 1 }, (_, i) => i * step), end];
 	const W = st.map((a) => [interp(a, f.at, f.wl), interp(a, f.at, f.wr)] as const);
 	const across1 = (k: number) => {
 		let a = across(...(W[k] as readonly [number, number]));
 		const row = rows[k] as number[];
-		if (row.length !== a.length) a = linspace(a[0] as number, a[a.length - 1] as number, row.length);
-		return { a: a.reverse(), row: [...row].reverse() };
+		if (row.length !== a.length) a = linspace(a[0] as number, a.at(-1) as number, row.length);
+		a.reverse();
+		return { a, row: [...row].reverse() };
 	};
 	const out = new Float64Array(at.length);
 	for (let p = 0; p < at.length; p++) {

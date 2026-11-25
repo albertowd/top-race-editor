@@ -180,8 +180,8 @@ describe("the objects not in the layout shown", () => {
 			// (in its layout: its strokes as they are; not: as many, all faint and dotted)
 			expect(shown.length).toBeGreaterThan(bare);
 			expect(shown.every((s) => s.alpha === 1)).toBe(true);
-			expect(away.length).toBe(shown.length);
-			expect(away.filter((s) => s.alpha === 0.4 && s.dash.length === 2).length).toBe(shown.length - bare);
+			expect(away).toHaveLength(shown.length);
+			expect(away.filter((s) => s.alpha === 0.4 && s.dash.length === 2)).toHaveLength(shown.length - bare);
 		} finally {
 			globalThis.Path2D = was;
 		}

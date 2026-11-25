@@ -63,7 +63,7 @@ describe("rFactor 2's text files", () => {
 		expect(t).toContain("ReflectionMapper=REFMAP0\r\n{\r\n  Type=Cubic");
 		expect(L).toContain("  TrackingIns=True");
 		// (its braces even)
-		expect(L.filter((l) => l.trim() === "{").length).toBe(L.filter((l) => l.trim() === "}").length);
+		expect(L.filter((l) => l.trim() === "{")).toHaveLength(L.filter((l) => l.trim() === "}").length);
 	});
 
 	it("write a layout's GDB and WET", () => {

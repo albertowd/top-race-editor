@@ -8,6 +8,7 @@ import type { Kn5, Kn5Mesh } from "./kn5tree";
 import type { LaidObject, Place } from "./laying";
 import { objectLit } from "./lightoptions";
 import { meshes } from "./mesh";
+import { byCodePoint } from "./order";
 import { pyRound } from "./trackfiles";
 
 /** What of a light its object makes its own, its series' otherwise (lightoptions.ts). */
@@ -50,8 +51,7 @@ export function objectNode(
 	F: ArrayLike<number>,
 	material: string,
 	materials: Record<string, Kn5>,
-	seen = true,
-	lod?: [number, number],
+	{ seen = true, lod }: { seen?: boolean; lod?: [number, number] } = {},
 ): Kn5Mesh {
 	const nv = V.length / 11;
 	const P = new Float64Array(nv * 3);
@@ -161,7 +161,7 @@ export function objectLights(lit: [ModelLight[], Place][], floor: (x: number, z:
 	// (a stable sort, as Python's sorted)
 	return out
 		.map((L, i) => [L, i] as const)
-		.sort((a, b) => (a[0].series < b[0].series ? -1 : a[0].series > b[0].series ? 1 : a[1] - b[1]))
+		.sort((a, b) => byCodePoint(a[0].series, b[0].series) || a[1] - b[1])
 		.map(([L]) => L);
 }
 
@@ -171,6 +171,178 @@ export interface ObjectsWritten {
 	lights: WorldLight[];
 	/** the ground the solid ones stand on, seen from above: each a ring (x, z) */
 	solid: number[][][];
+}
+
+/** The copies of one part of a model gathered to be merged in one model file. */
+interface MergedPart {
+	k: Kn5;
+	model: string;
+	part: string;
+	material: string;
+	lod?: [number, number];
+	/** the model its material is of (its textures with it) */
+	from?: Kn5;
+	/** its MERGE_CELL square (a part drawn only so near or so far), else null */
+	cell: [number, number] | null;
+	/** where it goes among the merged (place_objects' order: by its key as Python writes it) */
+	order: string;
+	copies: [Float64Array, ArrayLike<number>][];
+}
+
+/** What the objects are written by: the shared model and the layouts', the models' materials, the copies merged so far. */
+interface Writing {
+	shared: Kn5;
+	layouts: Record<string, Kn5>;
+	every: Kn5[];
+	files: Kn5[];
+	materials: Record<string, Kn5>;
+	layoutOf: Map<Kn5, string>;
+	merged: Map<string, MergedPart>;
+	apart: (o: LaidObject) => boolean;
+}
+
+type LaidPart = LaidObject["parts"][number];
+
+/** The materials a mesh takes its own from: those given, and the model its material is of with them where it has one. */
+const materialsWith = (materials: Record<string, Kn5>, from: Kn5 | undefined, model: string): Record<string, Kn5> =>
+	from ? { ...materials, [`template:${model}`]: from } : materials;
+
+/** The models an object is written into: every layout's in the shared model, but a knockable one in each layout's; none for one apart. */
+function targetsOf(o: LaidObject, w: Writing): Kn5[] {
+	if (w.apart(o)) return [];
+	if (o.layouts) return o.layouts.flatMap((l) => (w.layouts[l] ? [w.layouts[l] as Kn5] : []));
+	return o.collision === "dynamic" ? w.every : [w.shared];
+}
+
+/** A part with nothing to hit gathered with the other copies of it in its model file, to be one mesh drawn at once (one drawn only so near or so far, of each
+ * MERGE_CELL square, as a game measures that from the mesh's middle). */
+function gather(k: Kn5, o: LaidObject, p: LaidPart, w: Writing) {
+	const lod = p.lod ?? [0, 0];
+	const limited = lod[0] !== 0 || lod[1] !== 0;
+	const at = o.places[0] ?? [0, 0, 0];
+	const cell: [number, number] = limited ? [Math.floor(at[0] / MERGE_CELL), Math.floor(at[1] / MERGE_CELL)] : [0, 0];
+	const key = `${w.files.indexOf(k)}|${o.model}|${p.part}|${p.material}|${lod.join(",")}|${cell.join(",")}`;
+	const g = w.merged.get(key) ?? {
+		k,
+		model: o.model,
+		part: p.part,
+		material: p.material,
+		lod: p.lod,
+		from: p.from,
+		cell: limited ? cell : null,
+		order: sortKey(k === w.shared ? null : (w.layoutOf.get(k) ?? null), o.model, p.part, p.material, lod, cell),
+		copies: [],
+	};
+	g.copies.push([p.V, p.F]);
+	w.merged.set(key, g);
+}
+
+/** One part of an object into a model: gathered to be merged where it has nothing to hit, a building's mesh under its role, else meshes of its own. */
+function writePart(k: Kn5, o: LaidObject, p: LaidPart, w: Writing) {
+	if (o.collision === "none") {
+		gather(k, o, p, w);
+		return;
+	}
+	const materials = materialsWith(w.materials, p.from, o.model);
+	if (o.collision === "model") {
+		// (a building: each of its meshes as it is, under its role (its AC name's prefix), the object's name in it; its materials its model's)
+		const m = objectNode(k, roleName(o.name, p.part), p.V, p.F, p.material, materials, { seen: p.seen ?? true, lod: p.lod });
+		m.cast_shadows = p.shadows === false ? 0 : m.cast_shadows;
+		k.root.children.push(m);
+		return;
+	}
+	// (a part drawn only so near or so far, of many copies (a tyre wall): a mesh of each MERGE_CELL square, so its near part and its far stand-in are
+	// measured from the same middle, none far from what it draws)
+	const name = partName(o.name, p.part, o.parts.length);
+	const lod = p.lod ?? [0, 0];
+	const pieces =
+		(lod[0] !== 0 || lod[1] !== 0) && o.places.length > 1
+			? [...byCell(p.V, p.F)].map(([cell, m]) => ({ name: `${name}_${cell}`, ...m }))
+			: [{ name, V: p.V, F: p.F }];
+	for (const piece of pieces) k.root.children.push(objectNode(k, piece.name, piece.V, piece.F, p.material, materials, { lod: p.lod }));
+}
+
+/** An object's unseen mesh to hit in a model (1WALL_<name>): a wall's band, or a static one's boxes. */
+function writeHit(k: Kn5, o: LaidObject, materials: Record<string, Kn5>) {
+	const mat = o.parts[0]?.material ?? "";
+	if (o.wall) {
+		const V = new Float64Array((o.wall.P.length / 3) * 11);
+		for (let i = 0; i < o.wall.P.length / 3; i++) {
+			V.set(o.wall.P.subarray(i * 3, i * 3 + 3), i * 11);
+			V[i * 11 + 4] = 1;
+		}
+		k.root.children.push(objectNode(k, `1WALL_${o.name}`, V, o.wall.F, mat, materials, { seen: false }));
+	} else if (o.boxes?.length) {
+		const V = new Float64Array(o.boxes.length * 8 * 11);
+		const F: number[] = [];
+		o.boxes.forEach((b, j) => {
+			for (let i = 0; i < 8; i++) {
+				V.set(b.slice(i * 3, i * 3 + 3), (j * 8 + i) * 11);
+				V[(j * 8 + i) * 11 + 4] = 1;
+			}
+			for (const f of BOX_FACES) F.push(f + 8 * j);
+		});
+		k.root.children.push(objectNode(k, `1WALL_${o.name}`, V, F, mat, materials, { seen: false }));
+	}
+}
+
+/** The copies in runs of at most MERGE_MAX points, in their order. */
+function runsOf(copies: [Float64Array, ArrayLike<number>][]): [Float64Array, ArrayLike<number>][][] {
+	const runs: [Float64Array, ArrayLike<number>][][] = [];
+	let run: [Float64Array, ArrayLike<number>][] = [];
+	let n = 0;
+	for (const c of copies) {
+		const nv = c[0].length / 11;
+		if (run.length && n + nv > MERGE_MAX) {
+			runs.push(run);
+			run = [];
+			n = 0;
+		}
+		run.push(c);
+		n += nv;
+	}
+	runs.push(run);
+	return runs;
+}
+
+/** A part's copies merged into its model file: in meshes of at most MERGE_MAX points, named <MODEL>_<PART> (and _<ci>_<cj>, its square, for a part drawn only
+ * so near or so far), _<i> after the first. */
+function writeMerged(g: MergedPart, materials: Record<string, Kn5>) {
+	runsOf(g.copies).forEach((r, i) => {
+		const V = new Float64Array(r.reduce((a, [v]) => a + v.length, 0));
+		const F: number[] = [];
+		let at = 0;
+		for (const [v, f] of r) {
+			V.set(v, at);
+			for (const j of Array.from(f)) F.push(j + at / 11);
+			at += v.length;
+		}
+		const square = g.cell ? `_${g.cell[0]}_${g.cell[1]}` : "";
+		const nth = i ? `_${i}` : "";
+		const name = `${g.model.toUpperCase()}_${g.part.toUpperCase()}${square}${nth}`;
+		g.k.root.children.push(objectNode(g.k, name, V, F, g.material, materialsWith(materials, g.from, g.model), { lod: g.lod }));
+	});
+}
+
+/** The old models' tyre walls and poles emptied, and the layouts' physics objects and markers out (each game's build makes its own, from the places). */
+function clearOld(old: Kn5[], layouts: Record<string, Kn5>) {
+	for (const k of old) for (const [n] of meshes(k)) if (/^(TYRES_|1WALL_TYRE|POLE_|1WALL_POLE)/.test(n.name)) n.faces = new Uint16Array(0);
+	for (const k of Object.values(layouts))
+		k.root.children = k.root.children.filter((c) => !c.name.startsWith("AC_POBJECT_") && !(c.kind === 1 && MARKERS.test(c.name)));
+}
+
+/** A laid object into the models it goes in (every layout's in the shared model, but a knockable one: in each layout's), its parts and what it is hit by;
+ * its walls and boxes onto solid, its lights at each of its places onto lit. */
+function writeLaid(o: LaidObject, w: Writing, lightsOf: (model: string) => ModelLight[] | undefined, lit: [ModelLight[], Place][], solid: number[][][]) {
+	for (const k of targetsOf(o, w)) {
+		for (const p of o.parts) writePart(k, o, p, w);
+		writeHit(k, o, w.materials);
+	}
+	if (o.wall) solid.push(o.places.map(([x, z]) => [x, z]));
+	for (const b of o.boxes ?? []) solid.push([0, 1, 5, 4].map((i) => [b[i * 3] as number, b[i * 3 + 2] as number]));
+	// (its model's lights as it has them: those it has off out, its own values with the rest)
+	const lights = objectLit(lightsOf(o.model) ?? [], o.lights);
+	if (lights.length) for (const q of o.places) lit.push([lights, q]);
 }
 
 /** The laid objects into the models: shared (the model every layout has) and each layout's (by its name); the old models' tyre walls and poles emptied (old:
@@ -183,153 +355,32 @@ export function writeObjects(
 	materials: Record<string, Kn5>,
 	lightsOf: (model: string) => ModelLight[] | undefined,
 	floor: (x: number, z: number) => number,
-	old: Kn5[] = [],
-	apart: (o: LaidObject) => boolean = () => false,
+	{ old = [], apart = () => false }: { old?: Kn5[]; apart?: (o: LaidObject) => boolean } = {},
 ): ObjectsWritten {
-	for (const k of old) for (const [n] of meshes(k)) if (/^(TYRES_|1WALL_TYRE|POLE_|1WALL_POLE)/.test(n.name)) n.faces = new Uint16Array(0);
-	// (a layout's physics objects and its markers out: each game's build makes its own, from the places)
-	for (const k of Object.values(layouts))
-		k.root.children = k.root.children.filter((c) => !c.name.startsWith("AC_POBJECT_") && !(c.kind === 1 && MARKERS.test(c.name)));
+	clearOld(old, layouts);
 	shared.root.children = [];
 	const every = Object.values(layouts);
 	const count: Record<string, number> = {};
-	const files = [shared, ...every];
-	const merged = new Map<
-		string,
-		{
-			k: Kn5;
-			model: string;
-			part: string;
-			material: string;
-			lod?: [number, number];
-			/** the model its material is of (its textures with it) */
-			from?: Kn5;
-			/** its MERGE_CELL square (a part drawn only so near or so far), else null */
-			cell: [number, number] | null;
-			/** where it goes among the merged (place_objects' order: by its key as Python writes it) */
-			order: string;
-			copies: [Float64Array, ArrayLike<number>][];
-		}
-	>();
-	const layoutOf = new Map(Object.entries(layouts).map(([l, k]) => [k, l] as const));
+	const w: Writing = {
+		shared,
+		layouts,
+		every,
+		files: [shared, ...every],
+		materials,
+		layoutOf: new Map(Object.entries(layouts).map(([l, k]) => [k, l] as const)),
+		merged: new Map(),
+		apart,
+	};
 	const lit: [ModelLight[], Place][] = [];
 	const solid: number[][][] = [];
-	const node = (k: Kn5, name: string, V: Float64Array, F: ArrayLike<number>, material: string, seen = true, lod?: [number, number], from?: Kn5, model = "") =>
-		objectNode(k, name, V, F, material, from ? { ...materials, [`template:${model}`]: from } : materials, seen, lod);
 	for (const o of laid) {
 		const single = o.places.length === 1 && !o.wall;
 		// (a knockable one standing alone: a layout's physics object, in its places; each game makes its own)
-		if (o.collision === "dynamic" && single) {
-			count[o.model] = (count[o.model] ?? 0) + 1;
-			continue;
-		}
-		// (every layout's in the shared model, but a knockable one: in each layout's)
-		const targets: Kn5[] = apart(o)
-			? []
-			: o.layouts
-				? o.layouts.flatMap((l) => (layouts[l] ? [layouts[l] as Kn5] : []))
-				: o.collision === "dynamic"
-					? every
-					: [shared];
-		for (const k of targets) {
-			for (const p of o.parts) {
-				// (nothing to hit: one mesh of all the copies of this part of the model in this model file, drawn at once; one drawn only so near or so far, of each
-				// MERGE_CELL square, as a game measures that from the mesh's middle)
-				if (o.collision === "none") {
-					const lod = p.lod ?? [0, 0];
-					const limited = lod[0] !== 0 || lod[1] !== 0;
-					const at = o.places[0] ?? [0, 0, 0];
-					const cell: [number, number] = limited ? [Math.floor(at[0] / MERGE_CELL), Math.floor(at[1] / MERGE_CELL)] : [0, 0];
-					const key = `${files.indexOf(k)}|${o.model}|${p.part}|${p.material}|${lod.join(",")}|${cell.join(",")}`;
-					const g = merged.get(key) ?? {
-						k,
-						model: o.model,
-						part: p.part,
-						material: p.material,
-						lod: p.lod,
-						from: p.from,
-						cell: limited ? cell : null,
-						order: sortKey(k === shared ? null : (layoutOf.get(k) ?? null), o.model, p.part, p.material, lod, cell),
-						copies: [],
-					};
-					g.copies.push([p.V, p.F]);
-					merged.set(key, g);
-				} else if (o.collision === "model") {
-					// (a building: each of its meshes as it is, under its role (its AC name's prefix), the object's name in it; its materials its model's)
-					const m = node(k, roleName(o.name, p.part), p.V, p.F, p.material, p.seen ?? true, p.lod, p.from, o.model);
-					m.cast_shadows = p.shadows === false ? 0 : m.cast_shadows;
-					k.root.children.push(m);
-				} else {
-					// (a part drawn only so near or so far, of many copies (a tyre wall): a mesh of each MERGE_CELL square, so its near part and its far stand-in are
-					// measured from the same middle, none far from what it draws)
-					const name = partName(o.name, p.part, o.parts.length);
-					const lod = p.lod ?? [0, 0];
-					const pieces =
-						(lod[0] !== 0 || lod[1] !== 0) && o.places.length > 1
-							? [...byCell(p.V, p.F)].map(([cell, m]) => ({ name: `${name}_${cell}`, ...m }))
-							: [{ name, V: p.V, F: p.F }];
-					for (const piece of pieces) k.root.children.push(node(k, piece.name, piece.V, piece.F, p.material, true, p.lod, p.from, o.model));
-				}
-			}
-			const mat = o.parts[0]?.material ?? "";
-			if (o.wall) {
-				const V = new Float64Array((o.wall.P.length / 3) * 11);
-				for (let i = 0; i < o.wall.P.length / 3; i++) {
-					V.set(o.wall.P.subarray(i * 3, i * 3 + 3), i * 11);
-					V[i * 11 + 4] = 1;
-				}
-				k.root.children.push(node(k, `1WALL_${o.name}`, V, o.wall.F, mat, false));
-			} else if (o.boxes?.length) {
-				const V = new Float64Array(o.boxes.length * 8 * 11);
-				const F: number[] = [];
-				o.boxes.forEach((b, j) => {
-					for (let i = 0; i < 8; i++) {
-						V.set(b.slice(i * 3, i * 3 + 3), (j * 8 + i) * 11);
-						V[(j * 8 + i) * 11 + 4] = 1;
-					}
-					for (const f of BOX_FACES) F.push(f + 8 * j);
-				});
-				k.root.children.push(node(k, `1WALL_${o.name}`, V, F, mat, false));
-			}
-		}
-		if (o.wall) solid.push(o.places.map(([x, z]) => [x, z]));
-		for (const b of o.boxes ?? []) solid.push([0, 1, 5, 4].map((i) => [b[i * 3] as number, b[i * 3 + 2] as number]));
-		// (its model's lights as it has them: those it has off out, its own values with the rest)
-		const lights = objectLit(lightsOf(o.model) ?? [], o.lights);
-		if (lights.length) for (const q of o.places) lit.push([lights, q]);
+		if (o.collision !== "dynamic" || !single) writeLaid(o, w, lightsOf, lit, solid);
 		count[o.model] = (count[o.model] ?? 0) + 1;
 	}
-	// (the copies merged: in meshes of at most MERGE_MAX points, named <MODEL>_<PART> (and _<ci>_<cj>, its square, for a part drawn only so near or so far), _<i>
-	// after the first)
-	for (const g of [...merged.values()].sort((u, v) => (u.order < v.order ? -1 : u.order > v.order ? 1 : 0))) {
-		const runs: [Float64Array, ArrayLike<number>][][] = [];
-		let run: [Float64Array, ArrayLike<number>][] = [];
-		let n = 0;
-		for (const c of g.copies) {
-			const nv = c[0].length / 11;
-			if (run.length && n + nv > MERGE_MAX) {
-				runs.push(run);
-				run = [];
-				n = 0;
-			}
-			run.push(c);
-			n += nv;
-		}
-		runs.push(run);
-		runs.forEach((r, i) => {
-			const V = new Float64Array(r.reduce((a, [v]) => a + v.length, 0));
-			const F: number[] = [];
-			let at = 0;
-			for (const [v, f] of r) {
-				V.set(v, at);
-				for (let j = 0; j < f.length; j++) F.push((f[j] as number) + at / 11);
-				at += v.length;
-			}
-			const square = g.cell ? `_${g.cell[0]}_${g.cell[1]}` : "";
-			const name = `${g.model.toUpperCase()}_${g.part.toUpperCase()}${square}${i ? `_${i}` : ""}`;
-			g.k.root.children.push(node(g.k, name, V, F, g.material, true, g.lod, g.from, g.model));
-		});
-	}
+	// (the copies merged, in place_objects' order)
+	for (const g of [...w.merged.values()].sort((u, v) => byCodePoint(u.order, v.order))) writeMerged(g, materials);
 	return { count, lights: objectLights(lit, floor), solid };
 }
 

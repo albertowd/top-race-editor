@@ -98,7 +98,7 @@ describe("the rFactor 2 location's pieces", () => {
 		if (back.kind !== "gmt") throw new Error("scrambled");
 		expect(back.name).toBe("road_0");
 		expect(back.meshes[0]?.indices).toEqual(gmt.meshes[0]?.indices);
-		expect(back.faces.length).toBe(1);
+		expect(back.faces).toHaveLength(1);
 		expect(back.position).toEqual([0, 0, 0]);
 		expect(back.planes[0]?.normal).toEqual([0, 1, 0]);
 		const s = back.materials[0]?.shaders[0];
@@ -129,11 +129,11 @@ describe("the rFactor 2 location's pieces", () => {
 		const fill = new GmtFill();
 		fill.add(pieces[0] as typeof m, asphalt);
 		fill.add(pieces[1] as typeof m, asphalt);
-		expect(fill.meshes.length).toBe(1);
+		expect(fill.meshes).toHaveLength(1);
 		expect(fill.meshes[0]?.indices.length).toBe(180);
 		expect(Math.max(...(fill.meshes[0]?.indices ?? []))).toBe((fill.meshes[0]?.vertices.length ?? 0) - 1);
 		for (let k = 1; k < 16; k++) fill.add(pieces[2] as typeof m, diffuseMaterial(`m${k}`, "a.dds"));
-		expect(fill.materials.length).toBe(16);
+		expect(fill.materials).toHaveLength(16);
 		expect(fill.fits(pieces[2] as typeof m, asphalt)).toBe(true);
 		expect(fill.fits(pieces[2] as typeof m, diffuseMaterial("m16", "a.dds"))).toBe(false);
 	});

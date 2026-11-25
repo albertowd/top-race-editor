@@ -84,7 +84,7 @@ describe("a paint mark", () => {
 		expect(objectAt(o, "vp_a", 52, -2.02, 0.01)).toEqual({ kind: "marks", i: 0, j: -1 });
 		// (the picked one's handles too)
 		const picked = { kind: "marks", i: 0, j: -1 } as const;
-		expect(objectAt(o, "vp_a", 50 + 4 / 3, -2, 0.1, undefined, picked)).toEqual({
+		expect(objectAt(o, "vp_a", 50 + 4 / 3, -2, 0.1, undefined, { picked })).toEqual({
 			kind: "marks",
 			i: 0,
 			j: 0,
@@ -307,7 +307,7 @@ describe("a rubber mark", () => {
 		});
 		expect(countOf(o, "vp_a", "rubber")).toBe(1);
 		// (picked by its band, as wide as it is)
-		expect(objectAt(o, "vp_a", 10.6, 0.5, 0.01, ["rubber"], null)).toMatchObject({ kind: "rubber", i: 0 });
+		expect(objectAt(o, "vp_a", 10.6, 0.5, 0.01, ["rubber"])).toMatchObject({ kind: "rubber", i: 0 });
 		expect(positionOf(o, "vp_a", { kind: "rubber", i: 0, j: 2 })).toEqual({ x: 10, z: 5 });
 		const less = produce(o, (d: TrackObjects) => {
 			moveObjectEnd(d, { kind: "rubber", i: 0, j: 2 }, 12, 5);

@@ -134,7 +134,7 @@ export class Pool {
 			const reserve = this.opts.reserve ?? RESERVE;
 			if (busy.length && this.memoryFree - claimed - r.part.bytes < reserve) return;
 			let slot = this.slots.find((s) => !s.busy);
-			if (!slot) slot = this.add();
+			slot ??= this.add();
 			this.queue.shift();
 			slot.busy = { ...r, since: this.opts.now?.() ?? Date.now() };
 			slot.worker.send({ id: r.id, job: r.part.job, input: r.part.input }, r.part.transfer);
@@ -146,7 +146,7 @@ export class Pool {
 		const slot: Slot = { worker, busy: null };
 		worker.onReply((reply) => {
 			const r = slot.busy;
-			if (!r || r.id !== reply.id) return;
+			if (r?.id !== reply.id) return;
 			slot.busy = null;
 			if (reply.ok) r.resolve(reply.output);
 			else r.reject(new Error(reply.error));

@@ -270,7 +270,7 @@ The Scenery category (key 9) places models as they are, for every layout: trees 
 leaf, palm, bamboo, and the Velopark's own) and fence panels (concrete or steel posts). Buildings (key 0) places the
 buildings (a white shed, the judges' tower, the paddock's, the farm's, the houses), and Static objects (key -) the
 rest that stands as it is (a marshal's shelter, a chair, a timing table, banners, flagpoles, bins, a gate, a lamp)
-and parked karts; a model the catalogue has not is a static object. The start gantry is Grid & timing's. Each kind's
+and parked cars; a model the catalogue has not is a static object. The start gantry is Grid & timing's. Each kind's
 drop-down chooses the model that Place adds, and a placed one's form can change its model. The map draws each one
 seen from above, at scale, turned its way. A new fence panel faces the nearest road, so it runs along it.
 
@@ -368,8 +368,12 @@ as moveable instances ([objects.ts](src/engine/rf2/objects.ts)). Its pictures ar
 `<layout>Thmb.tga` (190 x 128), `<layout>SMicon.dds`, `swheel_trackmap.dds`, `<layout>_loading.jpg` (1920 x 1080, a
 render from its start under its data and map; without it the game loads on black), and the venue's
 `<venue>Icon.dds` (its roads drawn once, over a render of the whole track), named by every GDB's `VenueIcon`.
-Where there is no canvas, no pictures are drawn. Not made yet: the trackside cameras (CAM), the gantry's start lights,
-and packing (a MAS, an rFCMP).
+Where there is no canvas, no pictures are drawn. A working start gantry's lamps (its `KS_START_LIGHT_<n>` meshes) are a GMT of their own, its
+instance the `StartLight` the game lights the start with, as LochDrummond's ([startlights.ts](src/engine/rf2/startlights.ts)): each lamp its own
+material of two frames (`startlamp00.dds` off, `startlamp01.dds` on) that the start steps through, each lamp lit in turn, then all out; the
+GDB's `NumStartingLights` the lamps and one. The gantry's flag lamp (`GANTRY_FLAG`, which AC's script shows once the race starts) is left out: it
+stands where the start lamps are and, with no script to hide it, would cover them. A layout under no working gantry keeps the game's own lights. Not made yet: the trackside cameras
+(CAM) and packing (a MAS, an rFCMP).
 
 While it builds, the dialog shows how far it is: one bar for all of it, each stage weighed by what it took the last
 time (kept in `build/cache/editor_build.json`), and the time it may still take; every stage; what it is doing now,
@@ -393,6 +397,17 @@ npm run build-track -- --project <folder> [--games ac,beamng,rf2] [--install] [-
 It is the desktop app's engine (`desktop/main.mjs --build`, `desktop/buildcli.mjs`), so it builds just as the dialog
 does: by default for AC, packed. `--install` and the others are the dialog's ticks; `--all` makes every step again.
 On Linux it needs a display: `xvfb-run npm run build-track -- ...` (and `--no-sandbox` where it runs as root).
+
+A track's own CI needs no checkout of the editor: the release's zip (`top-race-editor-<version>-win-x64.zip`, on a
+Windows runner) is the app, the same build in it. Unzipped, its program takes the same arguments after `--build`; its
+log is its output, its exit code the build's:
+
+```powershell
+& "top-race-editor\Top Race Editor.exe" --build --project . --games ac,beamng,rf2
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+AC's track is packed with 7-Zip (on GitHub's Windows runners already).
 
 ## A new track
 

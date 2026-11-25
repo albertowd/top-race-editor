@@ -52,23 +52,37 @@ export function pyFloat(n: number): string {
 /** A number as Python writes it: an integer as one (the page's numbers come as JSON, read by Python as int where whole), else as its float's repr. */
 const pyNumber = (n: number) => (Number.isInteger(n) && Math.abs(n) < 2 ** 53 ? String(n) : pyFloat(n));
 
+/** The characters json.dumps writes as a backslash and one more. */
+const SHORT_ESCAPES = new Map<string, string>([
+	['"', String.raw`\"`],
+	["\\", String.raw`\\`],
+	["\n", String.raw`\n`],
+	["\r", String.raw`\r`],
+	["\t", String.raw`\t`],
+	["\b", String.raw`\b`],
+	["\f", String.raw`\f`],
+]);
+
+/** A character (by its code point) as json.dumps escapes it: \u and four hex digits, a character past the BMP as its surrogate pair, each escaped. */
+function unicodeEscape(c: number): string {
+	const units = c > 0xffff ? [0xd800 + ((c - 0x10000) >> 10), 0xdc00 + ((c - 0x10000) & 0x3ff)] : [c];
+	let out = "";
+	for (const u of units) {
+		const hex = u.toString(16).padStart(4, "0");
+		out += String.raw`\u${hex}`;
+	}
+	return out;
+}
+
 /** A string as json.dumps writes it (ensure_ascii; or, not, only what JSON must have escaped). */
 function pyStringOf(s: string, ascii = true): string {
 	let out = '"';
 	for (const ch of s) {
 		const c = ch.codePointAt(0) as number;
-		if (ch === '"') out += '\\"';
-		else if (ch === "\\") out += "\\\\";
-		else if (ch === "\n") out += "\\n";
-		else if (ch === "\r") out += "\\r";
-		else if (ch === "\t") out += "\\t";
-		else if (ch === "\b") out += "\\b";
-		else if (ch === "\f") out += "\\f";
-		else if (c < 0x20 || (ascii && c > 0x7e)) {
-			// (a character past the BMP as its surrogate pair, each escaped)
-			const units = c > 0xffff ? [0xd800 + ((c - 0x10000) >> 10), 0xdc00 + ((c - 0x10000) & 0x3ff)] : [c];
-			for (const u of units) out += `\\u${u.toString(16).padStart(4, "0")}`;
-		} else out += ch;
+		const short = SHORT_ESCAPES.get(ch);
+		if (short !== undefined) out += short;
+		else if (c < 0x20 || (ascii && c > 0x7e)) out += unicodeEscape(c);
+		else out += ch;
 	}
 	return `${out}"`;
 }
@@ -80,7 +94,7 @@ export interface PyDumps {
 }
 
 /** A value as json.dumps(value, indent=indent) writes it (indent undefined: on one line, ', ' and ': '). */
-export function dumpPyJson(v: PyJson | unknown, indent?: number, opts: PyDumps = {}): string {
+export function dumpPyJson(v: unknown, indent?: number, opts: PyDumps = {}): string {
 	const nl = (depth: number) => (indent === undefined ? "" : `\n${" ".repeat(indent * depth)}`);
 	const sep = opts.separators?.[0] ?? (indent === undefined ? ", " : ",");
 	const colon = opts.separators?.[1] ?? ": ";
@@ -97,7 +111,8 @@ export function dumpPyJson(v: PyJson | unknown, indent?: number, opts: PyDumps =
 		}
 		const entries = Object.entries(x as Record<string, unknown>).filter(([, y]) => y !== undefined);
 		if (!entries.length) return "{}";
-		return `{${entries.map(([k, y]) => `${nl(depth + 1)}${pyString(k)}${colon}${go(y, depth + 1)}`).join(sep)}${nl(depth)}}`;
+		const items = entries.map(([k, y]) => `${nl(depth + 1)}${pyString(k)}${colon}${go(y, depth + 1)}`).join(sep);
+		return `{${items}${nl(depth)}}`;
 	};
 	return go(v, 0);
 }

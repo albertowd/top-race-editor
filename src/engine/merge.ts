@@ -346,7 +346,21 @@ export function triRing(T: Float64Array | Int32Array, t: number): Ring {
 
 /** Some of a mesh's triangles' edges no two of them share, chained into rings (the way they go: anticlockwise round what they cover), and twice their area. */
 export function edgeRings(T: Float64Array | Int32Array, ids: number[]): { paths: Paths64; total: number } {
-	// (each edge's count one way less the other: those left over are the outline's, the way they go)
+	const { net, ends, total } = netEdges(T, ids);
+	const out = edgesOut(net);
+	const paths = new Paths64();
+	for (const start of out.keys()) {
+		while (out.get(start)?.length) {
+			const ring = chainFrom(start, out, ends, net.size);
+			if (ring.length >= 3) paths.push(toPath(ring));
+		}
+	}
+	return { paths, total };
+}
+
+/** Some of a mesh's triangles' edges, each by its two points' keys (the lower first) with its count one way less the other (those left over are the
+ * outline's, the way they go); the points by their keys, and twice the triangles' area. */
+function netEdges(T: Float64Array | Int32Array, ids: number[]): { net: Map<string, number>; ends: Map<string, Pt>; total: number } {
 	const net = new Map<string, number>();
 	const ends = new Map<string, Pt>();
 	let total = 0;
@@ -364,6 +378,11 @@ export function edgeRings(T: Float64Array | Int32Array, ids: number[]): { paths:
 			net.set(e, (net.get(e) ?? 0) + s);
 		}
 	}
+	return { net, ends, total };
+}
+
+/** The edges left over of netEdges, the way they go: by the key of the point each starts at, the keys of those it goes to (one for each time it is left). */
+function edgesOut(net: Map<string, number>): Map<string, string[]> {
 	const out = new Map<string, string[]>();
 	for (const [e, c] of net) {
 		if (!c) continue;
@@ -375,22 +394,21 @@ export function edgeRings(T: Float64Array | Int32Array, ids: number[]): { paths:
 			else out.set(from, [to]);
 		}
 	}
-	const paths = new Paths64();
-	for (const start of [...out.keys()]) {
-		while (out.get(start)?.length) {
-			const ring: Ring = [];
-			let k = start;
-			for (let guard = 0; guard <= net.size; guard++) {
-				const next = out.get(k)?.pop();
-				if (next === undefined) break;
-				ring.push(ends.get(k) as Pt);
-				k = next;
-				if (k === start) break;
-			}
-			if (ring.length >= 3) paths.push(toPath(ring));
-		}
+	return out;
+}
+
+/** A ring of the edges left over, from a point round to it again (or as far as they go, no more than limit edges), each edge taken out of them as it goes. */
+function chainFrom(start: string, out: Map<string, string[]>, ends: Map<string, Pt>, limit: number): Ring {
+	const ring: Ring = [];
+	let k = start;
+	for (let guard = 0; guard <= limit; guard++) {
+		const next = out.get(k)?.pop();
+		if (next === undefined) break;
+		ring.push(ends.get(k) as Pt);
+		k = next;
+		if (k === start) break;
 	}
-	return { paths, total };
+	return ring;
 }
 
 /** A mesh's outline, and which of its triangles lie over others of its own (none, null, when it covers as much as they do). */
@@ -405,6 +423,24 @@ export interface Outline {
 export function folded(T: Float64Array | Int32Array, n: number): Uint8Array {
 	const out = new Uint8Array(n);
 	// (filed by cells of FOLD_CELL, each pair looked at in the first cell both are in)
+	const { box, cells } = foldCells(T, n);
+	for (const [key, l] of cells) {
+		const [cx, cz] = key.split(",").map(Number) as [number, number];
+		for (let i = 0; i < l.length; i++)
+			for (let j = i + 1; j < l.length; j++) {
+				const a = l[i] as number;
+				const b = l[j] as number;
+				if (overlapHere(T, box, a, b, cx, cz)) {
+					out[a] = 1;
+					out[b] = 1;
+				}
+			}
+	}
+	return out;
+}
+
+/** Each of a mesh's triangles' box (x0, z0, x1, z1, four numbers each), and the triangles filed by the cells of FOLD_CELL their boxes cross. */
+function foldCells(T: Float64Array | Int32Array, n: number): { box: Float64Array; cells: Map<string, number[]> } {
 	const C = FOLD_CELL;
 	const box = new Float64Array(n * 4);
 	const cells = new Map<string, number[]>();
@@ -420,55 +456,51 @@ export function folded(T: Float64Array | Int32Array, n: number): Uint8Array {
 				else cells.set(k, [t]);
 			}
 	}
-	const v = (t: number, c: number, a: number) => T[t * 6 + (c % 3) * 2 + a] as number;
-	const apart = (a: number, b: number) => {
-		for (const [s, o] of [
-			[a, b],
-			[b, a],
-		] as const)
-			for (let c = 0; c < 3; c++) {
-				const nx = -(v(s, c + 1, 1) - v(s, c, 1));
-				const nz = v(s, c + 1, 0) - v(s, c, 0);
-				let lo1 = Infinity;
-				let hi1 = -Infinity;
-				let lo2 = Infinity;
-				let hi2 = -Infinity;
-				for (let k = 0; k < 3; k++) {
-					const p = v(s, k, 0) * nx + v(s, k, 1) * nz;
-					const q = v(o, k, 0) * nx + v(o, k, 1) * nz;
-					lo1 = Math.min(lo1, p);
-					hi1 = Math.max(hi1, p);
-					lo2 = Math.min(lo2, q);
-					hi2 = Math.max(hi2, q);
-				}
-				if (hi1 <= lo2 || hi2 <= lo1) return true;
-			}
+	return { box, cells };
+}
+
+/** Whether two triangles filed in cell (cx, cz) overlap and are looked at there: their boxes' insides not apart, the cell the first of both, and the triangles
+ * not apart. */
+function overlapHere(T: Float64Array | Int32Array, box: Float64Array, a: number, b: number, cx: number, cz: number): boolean {
+	// (their boxes' insides apart: apart; and the pair once, in the first cell of both)
+	if (
+		(box[a * 4 + 2] as number) <= (box[b * 4] as number) ||
+		(box[b * 4 + 2] as number) <= (box[a * 4] as number) ||
+		(box[a * 4 + 3] as number) <= (box[b * 4 + 1] as number) ||
+		(box[b * 4 + 3] as number) <= (box[a * 4 + 1] as number)
+	)
 		return false;
-	};
-	for (const [key, l] of cells) {
-		const [cx, cz] = key.split(",").map(Number) as [number, number];
-		for (let i = 0; i < l.length; i++)
-			for (let j = i + 1; j < l.length; j++) {
-				const a = l[i] as number;
-				const b = l[j] as number;
-				// (their boxes' insides apart: apart; and the pair once, in the first cell of both)
-				if (
-					(box[a * 4 + 2] as number) <= (box[b * 4] as number) ||
-					(box[b * 4 + 2] as number) <= (box[a * 4] as number) ||
-					(box[a * 4 + 3] as number) <= (box[b * 4 + 1] as number) ||
-					(box[b * 4 + 3] as number) <= (box[a * 4 + 1] as number)
-				)
-					continue;
-				const fx = Math.floor(Math.max(box[a * 4] as number, box[b * 4] as number) / C);
-				const fz = Math.floor(Math.max(box[a * 4 + 1] as number, box[b * 4 + 1] as number) / C);
-				if (fx !== cx || fz !== cz) continue;
-				if (!apart(a, b)) {
-					out[a] = 1;
-					out[b] = 1;
-				}
+	const fx = Math.floor(Math.max(box[a * 4] as number, box[b * 4] as number) / FOLD_CELL);
+	const fz = Math.floor(Math.max(box[a * 4 + 1] as number, box[b * 4 + 1] as number) / FOLD_CELL);
+	if (fx !== cx || fz !== cz) return false;
+	return !trianglesApart(T, a, b);
+}
+
+/** Whether two triangles' insides are apart: the line of one of their six edges has them on its two sides. */
+function trianglesApart(T: Float64Array | Int32Array, a: number, b: number): boolean {
+	const v = (t: number, c: number, i: number) => T[t * 6 + (c % 3) * 2 + i] as number;
+	for (const [s, o] of [
+		[a, b],
+		[b, a],
+	] as const)
+		for (let c = 0; c < 3; c++) {
+			const nx = -(v(s, c + 1, 1) - v(s, c, 1));
+			const nz = v(s, c + 1, 0) - v(s, c, 0);
+			let lo1 = Infinity;
+			let hi1 = -Infinity;
+			let lo2 = Infinity;
+			let hi2 = -Infinity;
+			for (let k = 0; k < 3; k++) {
+				const p = v(s, k, 0) * nx + v(s, k, 1) * nz;
+				const q = v(o, k, 0) * nx + v(o, k, 1) * nz;
+				lo1 = Math.min(lo1, p);
+				hi1 = Math.max(hi1, p);
+				lo2 = Math.min(lo2, q);
+				hi2 = Math.max(hi2, q);
 			}
-	}
-	return out;
+			if (hi1 <= lo2 || hi2 <= lo1) return true;
+		}
+	return false;
 }
 
 /** The box round polygons' outer rings, grid units, grown by pad. */
@@ -550,7 +582,7 @@ function snapTo(f: Poly[], over: Poly[]): Poly[] {
 		});
 		while (dedup.length > 1) {
 			const a = dedup[0] as Pt;
-			const z = dedup[dedup.length - 1] as Pt;
+			const z = dedup.at(-1) as Pt;
 			if (a[0] === z[0] && a[1] === z[1]) dedup.pop();
 			else break;
 		}
@@ -580,23 +612,7 @@ function snapTo(f: Poly[], over: Poly[]): Poly[] {
 /** Every ring of the faces given each point of any ring that lies on one of its edges (within a unit), then each edge between two of its points cut in pieces
  * no longer than STEP (worked out from its lower end, so both sides of an edge cut it alike), but those on the world's edge. */
 function node(faces: Poly[], world: [number, number, number, number], tile = 0, spacing = STEP_U): void {
-	/** On a tile line (the ground's tiles meeting): along which axis, else -1. Cut at every spacing from 0 on it, the ground's own points' places, not every
-	 * STEP. */
-	const tileLine = (a: Pt, b: Pt): 0 | 1 | -1 => (!tile ? -1 : a[0] === b[0] && a[0] % tile === 0 ? 1 : a[1] === b[1] && a[1] % tile === 0 ? 0 : -1);
-	const all = new PointIndex();
-	const seen = new Set<string>();
-	for (const f of faces)
-		for (const r of rings(f))
-			for (const p of r) {
-				const k = keyOf(p[0], p[1]);
-				if (!seen.has(k)) {
-					seen.add(k);
-					all.add(p);
-				}
-			}
-	const [x0, z0, x1, z1] = world;
-	const onWorld = (a: Pt, b: Pt) =>
-		(a[0] === x0 && b[0] === x0) || (a[0] === x1 && b[0] === x1) || (a[1] === z0 && b[1] === z0) || (a[1] === z1 && b[1] === z1);
+	const all = ringPoints(faces);
 	const cut = (r: Ring): Ring => {
 		const out: Ring = [];
 		for (let i = 0; i < r.length; i++) {
@@ -605,53 +621,16 @@ function node(faces: Poly[], world: [number, number, number, number], tile = 0, 
 			out.push(a);
 			const dx = b[0] - a[0];
 			const dz = b[1] - a[1];
-			const L2 = dx * dx + dz * dz;
-			if (L2 < 1) continue;
-			const L = Math.sqrt(L2);
-			// (the points of the others on it, in order along it)
-			const on = all
-				.near([Math.min(a[0], b[0]) - NODE_OFF, Math.min(a[1], b[1]) - NODE_OFF], [Math.max(a[0], b[0]) + NODE_OFF, Math.max(a[1], b[1]) + NODE_OFF])
-				.map((q) => ({
-					q,
-					t: ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / L2,
-					off: Math.abs((q[0] - a[0]) * dz - (q[1] - a[1]) * dx) / L,
-				}))
-				.filter(({ t, off }) => t > 1e-12 && t < 1 - 1e-12 && off <= NODE_OFF)
-				.sort((u, v) => u.t - v.t)
-				.map(({ q }) => q);
-			const stops = [a, ...on, b];
+			if (dx * dx + dz * dz < 1) continue;
+			const stops = [a, ...pointsOn(all, a, b), b];
 			for (let k = 0; k + 1 < stops.length; k++) {
 				const p = stops[k] as Pt;
 				const q = stops[k + 1] as Pt;
 				if (k) out.push(p);
-				// (the world's edge too: it has nothing the other side, so its points are its own; at the ground's spacing, so the ground follows itself along it, not
-				// a straight line from one corner to the next)
-				const axis = onWorld(p, q) ? (p[0] === q[0] ? 1 : 0) : tileLine(p, q);
-				if (axis !== -1) {
-					const lo = Math.min(p[axis] as number, q[axis] as number);
-					const hi = Math.max(p[axis] as number, q[axis] as number);
-					const mid: Pt[] = [];
-					for (let v = Math.floor(lo / spacing + 1) * spacing; v < hi; v += spacing) mid.push(axis === 0 ? [v, p[1]] : [p[0], v]);
-					if ((q[axis] as number) < (p[axis] as number)) mid.reverse();
-					out.push(...mid);
-					continue;
-				}
-				const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
-				const n = Math.max(1, Math.ceil(len / STEP_U - 1e-9));
-				if (n < 2) continue;
-				// (from the lower end of the two, whichever way the ring goes)
-				const lowFirst = p[0] < q[0] || (p[0] === q[0] && p[1] < q[1]);
-				const [lo, hi] = lowFirst ? [p, q] : [q, p];
-				const mid: Pt[] = [];
-				for (let m = 1; m < n; m++) mid.push([roundEven(lo[0] + ((hi[0] - lo[0]) * m) / n), roundEven(lo[1] + ((hi[1] - lo[1]) * m) / n)]);
-				if (!lowFirst) mid.reverse();
-				out.push(...mid);
+				out.push(...piecePoints(p, q, pieceAxis(p, q, world, tile), spacing));
 			}
 		}
-		return out.filter((p, i) => {
-			const q = out[(i + out.length - 1) % out.length] as Pt;
-			return out.length < 2 || p[0] !== q[0] || p[1] !== q[1];
-		});
+		return noRepeats(out);
 	};
 	for (const f of faces) {
 		f.outer = cut(f.outer);
@@ -661,8 +640,8 @@ function node(faces: Poly[], world: [number, number, number, number], tile = 0, 
 	for (let round = 0; round < 4 && insertAll(faces); round++);
 }
 
-/** Every point of the faces' rings that lies on an edge of one (within NODE_OFF) and is not one of its ends put in it, in order along it: whether any was. */
-function insertAll(faces: Poly[]): boolean {
+/** Every point of the faces' rings, once each, filed for those near a place. */
+function ringPoints(faces: Poly[]): PointIndex {
 	const all = new PointIndex();
 	const seen = new Set<string>();
 	for (const f of faces)
@@ -674,6 +653,81 @@ function insertAll(faces: Poly[]): boolean {
 					all.add(p);
 				}
 			}
+	return all;
+}
+
+/** The points of the others on an edge, in order along it: those within NODE_OFF of it, between its ends. */
+function pointsOn(all: PointIndex, a: Pt, b: Pt): Pt[] {
+	const dx = b[0] - a[0];
+	const dz = b[1] - a[1];
+	const L2 = dx * dx + dz * dz;
+	const L = Math.sqrt(L2);
+	return all
+		.near([Math.min(a[0], b[0]) - NODE_OFF, Math.min(a[1], b[1]) - NODE_OFF], [Math.max(a[0], b[0]) + NODE_OFF, Math.max(a[1], b[1]) + NODE_OFF])
+		.map((q) => ({
+			q,
+			t: ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / L2,
+			off: Math.abs((q[0] - a[0]) * dz - (q[1] - a[1]) * dx) / L,
+		}))
+		.filter(({ t, off }) => t > 1e-12 && t < 1 - 1e-12 && off <= NODE_OFF)
+		.sort((u, v) => u.t - v.t)
+		.map(({ q }) => q);
+}
+
+/** Which axis a piece of an edge lies along (0 or 1), -1 for neither. */
+type Axis = 0 | 1 | -1;
+
+/** On a tile line (the ground's tiles meeting, every tile units from 0; none when 0): along which axis, else -1. Cut at every spacing from 0 on it, the ground's
+ * own points' places, not every STEP. */
+function tileLine(a: Pt, b: Pt, tile: number): Axis {
+	if (!tile) return -1;
+	if (a[0] === b[0] && a[0] % tile === 0) return 1;
+	if (a[1] === b[1] && a[1] % tile === 0) return 0;
+	return -1;
+}
+
+/** The axis a piece of an edge lies along, cut at the ground's spacing, if it is on the world's edge or a tile line; else -1. (The world's edge too: it has
+ * nothing the other side, so its points are its own; at the ground's spacing, so the ground follows itself along it, not a straight line from one corner to the
+ * next.) */
+function pieceAxis(p: Pt, q: Pt, world: [number, number, number, number], tile: number): Axis {
+	const [x0, z0, x1, z1] = world;
+	const onWorld = (p[0] === x0 && q[0] === x0) || (p[0] === x1 && q[0] === x1) || (p[1] === z0 && q[1] === z0) || (p[1] === z1 && q[1] === z1);
+	if (!onWorld) return tileLine(p, q, tile);
+	return p[0] === q[0] ? 1 : 0;
+}
+
+/** The points a piece of an edge is cut at between its ends, in its order: along an axis, at every spacing from 0; else in pieces no longer than STEP, worked
+ * out from the lower end of the two, whichever way the ring goes. */
+function piecePoints(p: Pt, q: Pt, axis: Axis, spacing: number): Pt[] {
+	const mid: Pt[] = [];
+	if (axis !== -1) {
+		const lo = Math.min(p[axis] as number, q[axis] as number);
+		const hi = Math.max(p[axis] as number, q[axis] as number);
+		for (let v = Math.floor(lo / spacing + 1) * spacing; v < hi; v += spacing) mid.push(axis === 0 ? [v, p[1]] : [p[0], v]);
+		if ((q[axis] as number) < (p[axis] as number)) mid.reverse();
+		return mid;
+	}
+	const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+	const n = Math.max(1, Math.ceil(len / STEP_U - 1e-9));
+	if (n < 2) return mid;
+	const lowFirst = p[0] < q[0] || (p[0] === q[0] && p[1] < q[1]);
+	const [lo, hi] = lowFirst ? [p, q] : [q, p];
+	for (let m = 1; m < n; m++) mid.push([roundEven(lo[0] + ((hi[0] - lo[0]) * m) / n), roundEven(lo[1] + ((hi[1] - lo[1]) * m) / n)]);
+	if (!lowFirst) mid.reverse();
+	return mid;
+}
+
+/** A ring without a point repeated next to the one before it (round the ring: the first against the last too). */
+function noRepeats(out: Ring): Ring {
+	return out.filter((p, i) => {
+		const q = out[(i + out.length - 1) % out.length] as Pt;
+		return out.length < 2 || p[0] !== q[0] || p[1] !== q[1];
+	});
+}
+
+/** Every point of the faces' rings that lies on an edge of one (within NODE_OFF) and is not one of its ends put in it, in order along it: whether any was. */
+function insertAll(faces: Poly[]): boolean {
+	const all = ringPoints(faces);
 	let any = false;
 	const put = (r: Ring): Ring => {
 		const out: Ring = [];
@@ -698,10 +752,7 @@ function insertAll(faces: Poly[]): boolean {
 			for (const { q } of on) out.push(q);
 			if (on.length) any = true;
 		}
-		return out.filter((p, i) => {
-			const q = out[(i + out.length - 1) % out.length] as Pt;
-			return out.length < 2 || p[0] !== q[0] || p[1] !== q[1];
-		});
+		return noRepeats(out);
 	};
 	for (const f of faces) {
 		f.outer = put(f.outer);
@@ -855,10 +906,7 @@ function jobOf(face: Poly, reg: Prepared): FillJob {
 		out.spacing = reg.r.ground.spacing;
 		return out;
 	}
-	const b = polysBox([face], 0);
-	const cand = new Set<number>();
-	for (let gx = Math.floor(b.x0 / reg.cell); gx <= Math.floor(b.x1 / reg.cell); gx++)
-		for (let gz = Math.floor(b.z0 / reg.cell); gz <= Math.floor(b.z1 / reg.cell); gz++) for (const t of reg.cells.get(keyOf(gx, gz)) ?? []) cand.add(t);
+	const cand = cellTris(reg, polysBox([face], 0));
 	const ts = [...cand].filter((t) => !reg.folded?.[t]).sort((u, v) => u - v);
 	out.T = new Float64Array(ts.length * 6);
 	ts.forEach((t, i) => {
@@ -877,102 +925,137 @@ function fillFace(face: Poly, reg: Tris, spacing: number, tri: Triangle): { P: n
 		const ring = face.outer;
 		return { P: ring.flat(), F: earClip(ring) };
 	}
-	const pts: number[] = [];
-	const segs: number[] = [];
-	const at = new Map<string, number>();
-	const point = (x: number, z: number) => {
-		const k = keyOf(x, z);
-		let i = at.get(k);
-		if (i === undefined) {
-			i = pts.length / 2;
-			at.set(k, i);
-			pts.push(x, z);
-		}
-		return i;
-	};
-	const seg = (i: number, j: number) => {
-		if (i !== j) segs.push(i, j);
-	};
+	const fp = new FacePoints();
 	for (const r of rings(face)) {
-		const ids = r.map((p) => point(p[0], p[1]));
+		const ids = r.map((p) => fp.point(p[0], p[1]));
 		ids.forEach((id, i) => {
-			seg(id, ids[(i + 1) % ids.length] as number);
+			fp.seg(id, ids[(i + 1) % ids.length] as number);
 		});
 	}
 	const inFace = new PolyIndex(face);
 	// (its region's own triangles wholly inside it, kept)
-	let kept: number[] = [];
-	if (reg.n && !spacing) {
-		let x0 = Infinity;
-		let z0 = Infinity;
-		let x1 = -Infinity;
-		let z1 = -Infinity;
-		for (const p of face.outer) {
-			x0 = Math.min(x0, p[0]);
-			x1 = Math.max(x1, p[0]);
-			z0 = Math.min(z0, p[1]);
-			z1 = Math.max(z1, p[1]);
-		}
-		const E = new SegIndex();
-		for (const r of rings(face))
-			r.forEach((a, i) => {
-				E.add(a, r[(i + 1) % r.length] as Pt);
-			});
-		const cand = new Set<number>();
-		for (let gx = Math.floor(x0 / reg.cell); gx <= Math.floor(x1 / reg.cell); gx++)
-			for (let gz = Math.floor(z0 / reg.cell); gz <= Math.floor(z1 / reg.cell); gz++) for (const t of reg.cells.get(keyOf(gx, gz)) ?? []) cand.add(t);
-		const T = reg.T;
-		for (const t of cand) {
-			const c: Pt[] = [0, 1, 2].map((k) => [T[t * 6 + k * 2] as number, T[t * 6 + k * 2 + 1] as number]);
-			if (c.some(([x, z]) => inFace.pip(x, z) === "out")) continue;
-			// (no edge of the face through it: its corners in, and none of its edges crossing one of the face's)
-			let crosses = false;
-			for (let k = 0; k < 3 && !crosses; k++) {
-				const a = c[k] as Pt;
-				const b = c[(k + 1) % 3] as Pt;
-				const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-				const reach = Math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + 1;
-				for (const i of E.near(mid, reach))
-					if (properCross(a, b, E.a[i] as Pt, E.b[i] as Pt)) {
-						crosses = true;
-						break;
-					}
-				if (!crosses && inFace.pip(mid[0], mid[1]) === "out") crosses = true;
-			}
-			if (!crosses) kept.push(t);
-		}
-		kept = dropTs(kept, reg, face);
-		// (the kept triangles' own edges where the rest meets them: its edges too)
-		for (const [a, b] of borderEdges(kept, reg)) seg(point(a[0], a[1]), point(b[0], b[1]));
-	}
+	const kept = reg.n && !spacing ? keepInside(face, reg, inFace, fp) : [];
 	// (the ground's own points inside it, away from its edges)
-	if (spacing) {
-		const sp = spacing / GRID;
-		let x0 = Infinity;
-		let z0 = Infinity;
-		let x1 = -Infinity;
-		let z1 = -Infinity;
-		for (const p of face.outer) {
-			x0 = Math.min(x0, p[0]);
-			x1 = Math.max(x1, p[0]);
-			z0 = Math.min(z0, p[1]);
-			z1 = Math.max(z1, p[1]);
-		}
-		const E = new SegIndex();
-		for (const r of rings(face))
-			r.forEach((a, i) => {
-				E.add(a, r[(i + 1) % r.length] as Pt);
-			});
-		const away = sp * 0.3;
-		for (let x = Math.ceil(x0 / sp) * sp; x < x1; x += sp)
-			for (let z = Math.ceil(z0 / sp) * sp; z < z1; z += sp) {
-				const p: Pt = [roundEven(x), roundEven(z)];
-				if (inFace.pip(p[0], p[1]) !== "in") continue;
-				if (E.near(p, away).some((i) => toSegment(p, E.a[i] as Pt, E.b[i] as Pt)[0] <= away)) continue;
-				point(p[0], p[1]);
-			}
-	}
+	if (spacing) groundPoints(face, spacing, inFace, fp);
 	// (Triangle on those, what is outside the face by the points in its holes)
+	const { holes, thin } = holeSeeds(face);
+	const out = tri.triangulate(spacing ? `pYYQq25a${AREA / (GRID * GRID)}` : "pYYQ", {
+		points: fp.pts,
+		segments: uniqueSegments(fp.segs),
+		holes,
+	});
+	const TV = Array.from(out.points);
+	TV.splice(0, fp.pts.length, ...fp.pts);
+	// (a pocket of the outside a ring touching itself closes (Clipper's, where shapely gives a hole) has no point in it for Triangle: its triangles, their
+	// middles outside the face, out)
+	let TF = outsideDropped(Array.from(out.triangles), TV, inFace);
+	for (const ring of thin) TF = thinDropped(TF, TV, ring);
+	// (not where a kept triangle is: by where each one's middle falls; the kept triangles then, on the same points)
+	if (kept.length) {
+		TF = keptDropped(TF, TV, kept, reg);
+		for (const t of kept) TF.push(...keptIds(reg.T, t, TV, fp.at));
+	}
+	return { P: TV, F: TF };
+}
+
+/** A face's points for Triangle, each once (by its place), and the segments between them (none from a point to itself). */
+class FacePoints {
+	readonly pts: number[] = [];
+	readonly segs: number[] = [];
+	readonly at = new Map<string, number>();
+
+	point(x: number, z: number): number {
+		const k = keyOf(x, z);
+		let i = this.at.get(k);
+		if (i === undefined) {
+			i = this.pts.length / 2;
+			this.at.set(k, i);
+			this.pts.push(x, z);
+		}
+		return i;
+	}
+
+	seg(i: number, j: number): void {
+		if (i !== j) this.segs.push(i, j);
+	}
+}
+
+/** The box round a face's outer ring, grid units. */
+function outerBox(face: Poly): Box {
+	let x0 = Infinity;
+	let z0 = Infinity;
+	let x1 = -Infinity;
+	let z1 = -Infinity;
+	for (const p of face.outer) {
+		x0 = Math.min(x0, p[0]);
+		x1 = Math.max(x1, p[0]);
+		z0 = Math.min(z0, p[1]);
+		z1 = Math.max(z1, p[1]);
+	}
+	return { x0, z0, x1, z1 };
+}
+
+/** A face's edges, filed for those near a point. */
+function edgeIndex(face: Poly): SegIndex {
+	const E = new SegIndex();
+	for (const r of rings(face))
+		r.forEach((a, i) => {
+			E.add(a, r[(i + 1) % r.length] as Pt);
+		});
+	return E;
+}
+
+/** A region's triangles filed in the cells a box (grid units) crosses, each once, in the order the cells give them. */
+function cellTris(reg: Tris, b: Box): Set<number> {
+	const cand = new Set<number>();
+	for (let gx = Math.floor(b.x0 / reg.cell); gx <= Math.floor(b.x1 / reg.cell); gx++)
+		for (let gz = Math.floor(b.z0 / reg.cell); gz <= Math.floor(b.z1 / reg.cell); gz++) for (const t of reg.cells.get(keyOf(gx, gz)) ?? []) cand.add(t);
+	return cand;
+}
+
+/** A region's own triangles wholly inside a face, kept (but those leaving a T): their own edges where the rest meets them made the face's segments too. */
+function keepInside(face: Poly, reg: Tris, inFace: PolyIndex, fp: FacePoints): number[] {
+	const E = edgeIndex(face);
+	const kept: number[] = [];
+	for (const t of cellTris(reg, outerBox(face))) if (wholeIn(reg.T, t, E, inFace)) kept.push(t);
+	const live = dropTs(kept, reg, face);
+	for (const [a, b] of borderEdges(live, reg)) fp.seg(fp.point(a[0], a[1]), fp.point(b[0], b[1]));
+	return live;
+}
+
+/** Whether a triangle is wholly inside a face, no edge of the face through it: its corners in, and none of its edges crossing one of the face's or with its
+ * middle out. */
+function wholeIn(T: Float64Array | Int32Array, t: number, E: SegIndex, inFace: PolyIndex): boolean {
+	const c: Pt[] = [0, 1, 2].map((k) => [T[t * 6 + k * 2] as number, T[t * 6 + k * 2 + 1] as number]);
+	if (c.some(([x, z]) => inFace.pip(x, z) === "out")) return false;
+	for (let k = 0; k < 3; k++) {
+		const a = c[k] as Pt;
+		const b = c[(k + 1) % 3] as Pt;
+		const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+		const reach = Math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + 1;
+		for (const i of E.near(mid, reach)) if (properCross(a, b, E.a[i] as Pt, E.b[i] as Pt)) return false;
+		if (inFace.pip(mid[0], mid[1]) === "out") return false;
+	}
+	return true;
+}
+
+/** The ground's own points inside a face (every spacing metres), away from its edges, made its points. */
+function groundPoints(face: Poly, spacing: number, inFace: PolyIndex, fp: FacePoints): void {
+	const sp = spacing / GRID;
+	const { x0, z0, x1, z1 } = outerBox(face);
+	const E = edgeIndex(face);
+	const away = sp * 0.3;
+	for (let x = Math.ceil(x0 / sp) * sp; x < x1; x += sp)
+		for (let z = Math.ceil(z0 / sp) * sp; z < z1; z += sp) {
+			const p: Pt = [roundEven(x), roundEven(z)];
+			if (inFace.pip(p[0], p[1]) !== "in") continue;
+			if (E.near(p, away).some((i) => toSegment(p, E.a[i] as Pt, E.b[i] as Pt)[0] <= away)) continue;
+			fp.point(p[0], p[1]);
+		}
+}
+
+/** Segments (two point numbers each) each once, its lower number first, in the order first met. */
+function uniqueSegments(segs: number[]): number[] {
 	const S: number[] = [];
 	const seenSeg = new Set<string>();
 	for (let i = 0; i < segs.length; i += 2) {
@@ -984,8 +1067,13 @@ function fillFace(face: Poly, reg: Tris, spacing: number, tri: Triangle): { P: n
 			S.push(a, b);
 		}
 	}
-	// (what is outside the face told to Triangle: a point in each hole, as the Python's; a hole thinner than the grid allows (its area over its length) not so, a
-	// point in it falling either side of its edge: its triangles, on its own points alone and their middles in it, out after)
+	return S;
+}
+
+/** What is outside a face told to Triangle: a point in each hole, as the Python's; a hole thinner than the grid allows (its area over its length) not so, a
+ * point in it falling either side of its edge: those, turned anticlockwise, for their triangles (on their own points alone and their middles in them) to go
+ * out after. */
+function holeSeeds(face: Poly): { holes: number[]; thin: Ring[] } {
 	const holes: number[] = [];
 	const thin: Ring[] = [];
 	for (const h of face.holes) {
@@ -994,75 +1082,69 @@ function fillFace(face: Poly, reg: Tris, spacing: number, tri: Triangle): { P: n
 		if (Math.abs(area2(ring)) / 2 / Math.max(length, 1e-9) > 20) holes.push(...inside(h));
 		else thin.push(ring);
 	}
-	const out = tri.triangulate(spacing ? `pYYQq25a${AREA / (GRID * GRID)}` : "pYYQ", {
-		points: pts,
-		segments: S,
-		holes,
+	return { holes, thin };
+}
+
+/** Triangles (three point numbers each) but those whose middles are outside a face. */
+function outsideDropped(TF: number[], TV: number[], inFace: PolyIndex): number[] {
+	const keep: number[] = [];
+	for (let i = 0; i < TF.length; i += 3) {
+		const v = [TF[i] as number, TF[i + 1] as number, TF[i + 2] as number];
+		const cx = v.reduce((a, k) => a + (TV[k * 2] as number), 0) / 3;
+		const cz = v.reduce((a, k) => a + (TV[k * 2 + 1] as number), 0) / 3;
+		if (inFace.pip(cx, cz) !== "out") keep.push(...v);
+	}
+	return keep;
+}
+
+/** Triangles but those of a thin hole: on its own points alone, their middles in it. */
+function thinDropped(TF: number[], TV: number[], ring: Ring): number[] {
+	const own = new Set(ring.map((p) => keyOf(p[0], p[1])));
+	const index = new PolyIndex({ outer: ring, holes: [] });
+	const keep: number[] = [];
+	for (let i = 0; i < TF.length; i += 3) {
+		const v = [TF[i] as number, TF[i + 1] as number, TF[i + 2] as number];
+		const mine = v.every((k) => own.has(keyOf(TV[k * 2] as number, TV[k * 2 + 1] as number)));
+		const cx = v.reduce((a, k) => a + (TV[k * 2] as number), 0) / 3;
+		const cz = v.reduce((a, k) => a + (TV[k * 2 + 1] as number), 0) / 3;
+		if (!(mine && index.pip(cx, cz) === "in")) keep.push(...v);
+	}
+	return keep;
+}
+
+/** Triangles but those whose middles fall in one of a region's kept triangles. */
+function keptDropped(TF: number[], TV: number[], kept: number[], reg: Tris): number[] {
+	const keptCells = new Map<string, number[]>();
+	for (const t of kept)
+		for (const gk of cellsOf(reg.T, t, reg.cell)) {
+			const l = keptCells.get(gk);
+			if (l) l.push(t);
+			else keptCells.set(gk, [t]);
+		}
+	const keepTri: number[] = [];
+	for (let i = 0; i < TF.length; i += 3) {
+		const cx = ((TV[(TF[i] as number) * 2] as number) + (TV[(TF[i + 1] as number) * 2] as number) + (TV[(TF[i + 2] as number) * 2] as number)) / 3;
+		const cz = ((TV[(TF[i] as number) * 2 + 1] as number) + (TV[(TF[i + 1] as number) * 2 + 1] as number) + (TV[(TF[i + 2] as number) * 2 + 1] as number)) / 3;
+		const on = (keptCells.get(keyOf(Math.floor(cx / reg.cell), Math.floor(cz / reg.cell))) ?? []).some((t) => inTriangle(reg.T, t, cx, cz));
+		if (!on) keepTri.push(TF[i] as number, TF[i + 1] as number, TF[i + 2] as number);
+	}
+	return keepTri;
+}
+
+/** A kept triangle's corners' point numbers: those the face has at its places, else new points put after the rest. */
+function keptIds(T: Float64Array | Int32Array, t: number, TV: number[], at: Map<string, number>): number[] {
+	return [0, 1, 2].map((k) => {
+		const x = T[t * 6 + k * 2] as number;
+		const z = T[t * 6 + k * 2 + 1] as number;
+		const key = keyOf(x, z);
+		let i = at.get(key);
+		if (i === undefined) {
+			i = TV.length / 2;
+			at.set(key, i);
+			TV.push(x, z);
+		}
+		return i;
 	});
-	const TV = Array.from(out.points);
-	TV.splice(0, pts.length, ...pts);
-	let TF = Array.from(out.triangles);
-	// (a pocket of the outside a ring touching itself closes (Clipper's, where shapely gives a hole) has no point in it for Triangle: its triangles, their
-	// middles outside the face, out)
-	{
-		const keep: number[] = [];
-		for (let i = 0; i < TF.length; i += 3) {
-			const v = [TF[i] as number, TF[i + 1] as number, TF[i + 2] as number];
-			const cx = v.reduce((a, k) => a + (TV[k * 2] as number), 0) / 3;
-			const cz = v.reduce((a, k) => a + (TV[k * 2 + 1] as number), 0) / 3;
-			if (inFace.pip(cx, cz) !== "out") keep.push(...v);
-		}
-		TF = keep;
-	}
-	for (const ring of thin) {
-		const own = new Set(ring.map((p) => keyOf(p[0], p[1])));
-		const index = new PolyIndex({ outer: ring, holes: [] });
-		const keep: number[] = [];
-		for (let i = 0; i < TF.length; i += 3) {
-			const v = [TF[i] as number, TF[i + 1] as number, TF[i + 2] as number];
-			const mine = v.every((k) => own.has(keyOf(TV[k * 2] as number, TV[k * 2 + 1] as number)));
-			const cx = v.reduce((a, k) => a + (TV[k * 2] as number), 0) / 3;
-			const cz = v.reduce((a, k) => a + (TV[k * 2 + 1] as number), 0) / 3;
-			if (!(mine && index.pip(cx, cz) === "in")) keep.push(...v);
-		}
-		TF = keep;
-	}
-	// (not where a kept triangle is: by where each one's middle falls)
-	if (kept.length) {
-		const keptCells = new Map<string, number[]>();
-		for (const t of kept)
-			for (const gk of cellsOf(reg.T, t, reg.cell)) {
-				const l = keptCells.get(gk);
-				if (l) l.push(t);
-				else keptCells.set(gk, [t]);
-			}
-		const keepTri: number[] = [];
-		for (let i = 0; i < TF.length; i += 3) {
-			const cx = ((TV[(TF[i] as number) * 2] as number) + (TV[(TF[i + 1] as number) * 2] as number) + (TV[(TF[i + 2] as number) * 2] as number)) / 3;
-			const cz =
-				((TV[(TF[i] as number) * 2 + 1] as number) + (TV[(TF[i + 1] as number) * 2 + 1] as number) + (TV[(TF[i + 2] as number) * 2 + 1] as number)) / 3;
-			const on = (keptCells.get(keyOf(Math.floor(cx / reg.cell), Math.floor(cz / reg.cell))) ?? []).some((t) => inTriangle(reg.T, t, cx, cz));
-			if (!on) keepTri.push(TF[i] as number, TF[i + 1] as number, TF[i + 2] as number);
-		}
-		TF = keepTri;
-		// (the kept triangles, on the same points)
-		for (const t of kept) {
-			const ids = [0, 1, 2].map((k) => {
-				const x = reg.T[t * 6 + k * 2] as number;
-				const z = reg.T[t * 6 + k * 2 + 1] as number;
-				const key = keyOf(x, z);
-				let i = at.get(key);
-				if (i === undefined) {
-					i = TV.length / 2;
-					at.set(key, i);
-					TV.push(x, z);
-				}
-				return i;
-			});
-			TF.push(...ids);
-		}
-	}
-	return { P: TV, F: TF };
 }
 
 function cellsOf(T: Float64Array | Int32Array, t: number, cell: number): string[] {
@@ -1118,43 +1200,12 @@ function dropTs(kept: number[], reg: Tris, face: Poly): number[] {
 	const ringPts = rings(face).flat();
 	const ringKeys = new Set(ringPts.map((p) => keyOf(p[0], p[1])));
 	for (let round = 0; round < 8; round++) {
-		const border = borderEdges(live, reg);
-		const B = new PointIndex();
-		for (const p of ringPts) B.add(p);
-		for (const [a, b] of border) {
-			B.add(a);
-			B.add(b);
-		}
-		const bad = new Set<string>();
-		for (const [a, b] of border) {
-			const dx = b[0] - a[0];
-			const dz = b[1] - a[1];
-			const L2 = dx * dx + dz * dz;
-			const L = Math.sqrt(L2);
-			const lo: Pt = [Math.min(a[0], b[0]) - 1, Math.min(a[1], b[1]) - 1];
-			const hi: Pt = [Math.max(a[0], b[0]) + 1, Math.max(a[1], b[1]) + 1];
-			for (const q of B.near(lo, hi)) {
-				const t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / L2;
-				const off = Math.abs((q[0] - a[0]) * dz - (q[1] - a[1]) * dx) / L;
-				if (t > 1e-6 && t < 1 - 1e-6 && off < 1) bad.add(`${keyOf(a[0], a[1])}|${keyOf(b[0], b[1])}`);
-			}
-		}
+		const bad = tEdges(borderEdges(live, reg), ringPts);
 		if (!bad.size) break;
-		live = live.filter((t) => {
-			for (let k = 0; k < 3; k++) {
-				const a = keyOf(reg.T[t * 6 + k * 2] as number, reg.T[t * 6 + k * 2 + 1] as number);
-				const b = keyOf(reg.T[t * 6 + ((k + 1) % 3) * 2] as number, reg.T[t * 6 + ((k + 1) % 3) * 2 + 1] as number);
-				if (bad.has(`${a}|${b}`) || bad.has(`${b}|${a}`)) return false;
-			}
-			return true;
-		});
+		live = live.filter((t) => !hasEdgeIn(reg.T, t, bad));
 	}
 	// (a border corner on the face's edge but not one of its points: a T the other way)
-	const E = new SegIndex();
-	for (const r of rings(face))
-		r.forEach((a, i) => {
-			E.add(a, r[(i + 1) % r.length] as Pt);
-		});
+	const E = edgeIndex(face);
 	const stray = new Set<string>();
 	for (const [a, b] of borderEdges(live, reg))
 		for (const p of [a, b]) {
@@ -1164,6 +1215,42 @@ function dropTs(kept: number[], reg: Tris, face: Poly): number[] {
 		}
 	if (stray.size) live = live.filter((t) => ![0, 1, 2].some((k) => stray.has(keyOf(reg.T[t * 6 + k * 2] as number, reg.T[t * 6 + k * 2 + 1] as number))));
 	return live;
+}
+
+/** Of border edges, those with a point of the face's edge or of another border edge inside them (within a unit, not at their ends): each by its two points'
+ * keys, the way it goes. */
+function tEdges(border: [Pt, Pt][], ringPts: Pt[]): Set<string> {
+	const B = new PointIndex();
+	for (const p of ringPts) B.add(p);
+	for (const [a, b] of border) {
+		B.add(a);
+		B.add(b);
+	}
+	const bad = new Set<string>();
+	for (const [a, b] of border) {
+		const dx = b[0] - a[0];
+		const dz = b[1] - a[1];
+		const L2 = dx * dx + dz * dz;
+		const L = Math.sqrt(L2);
+		const lo: Pt = [Math.min(a[0], b[0]) - 1, Math.min(a[1], b[1]) - 1];
+		const hi: Pt = [Math.max(a[0], b[0]) + 1, Math.max(a[1], b[1]) + 1];
+		for (const q of B.near(lo, hi)) {
+			const t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dz) / L2;
+			const off = Math.abs((q[0] - a[0]) * dz - (q[1] - a[1]) * dx) / L;
+			if (t > 1e-6 && t < 1 - 1e-6 && off < 1) bad.add(`${keyOf(a[0], a[1])}|${keyOf(b[0], b[1])}`);
+		}
+	}
+	return bad;
+}
+
+/** Whether one of a triangle's edges is one of some edges (by their two points' keys, either way). */
+function hasEdgeIn(T: Float64Array | Int32Array, t: number, edges: Set<string>): boolean {
+	for (let k = 0; k < 3; k++) {
+		const a = keyOf(T[t * 6 + k * 2] as number, T[t * 6 + k * 2 + 1] as number);
+		const b = keyOf(T[t * 6 + ((k + 1) % 3) * 2] as number, T[t * 6 + ((k + 1) % 3) * 2 + 1] as number);
+		if (edges.has(`${a}|${b}`) || edges.has(`${b}|${a}`)) return true;
+	}
+	return false;
 }
 
 // ---- 4. heights ------------------------------------------------------------------------------------------------
@@ -1200,8 +1287,13 @@ function sample(reg: Prepared, x: number, z: number): [number, number, number] {
 		const v = UV ? (UV[t * 6 + 1] as number) * a + (UV[t * 6 + 3] as number) * b + (UV[t * 6 + 5] as number) * c : 0;
 		return [y, u, v];
 	}
-	// (past its triangles: its nearest own point's, from the cells round it out to where none nearer can be; the first of those as near, as a search of them all
-	// in order finds)
+	const best = nearestOwn(reg, x, z);
+	return [reg.Y[best] as number, (reg.UV?.[best * 2] as number) ?? 0, (reg.UV?.[best * 2 + 1] as number) ?? 0];
+}
+
+/** Past a region's triangles: its nearest own point to (x, z), from the cells round it out to where none nearer can be; the first of those as near, as a
+ * search of them all in order finds. */
+function nearestOwn(reg: Prepared, x: number, z: number): number {
 	let best = 0;
 	let bd = Infinity;
 	const consider = (i: number) => {
@@ -1215,16 +1307,21 @@ function sample(reg: Prepared, x: number, z: number): [number, number, number] {
 	const gz = Math.floor(z / reg.cell);
 	let found = false;
 	for (let k = 0; k <= 8 && !found; k++) {
-		for (let ix = gx - k; ix <= gx + k; ix++)
-			for (let iz = gz - k; iz <= gz + k; iz++) {
-				if (Math.max(Math.abs(ix - gx), Math.abs(iz - gz)) !== k) continue;
-				for (const t of reg.cells.get(keyOf(ix, iz)) ?? []) for (let c = 0; c < 3; c++) consider(t * 3 + c);
-			}
+		cellRing(reg, gx, gz, k, consider);
 		// (a point nearer than k cells out is in the rings looked at)
 		found = bd <= k * reg.cell;
 	}
 	if (!found) for (let i = 0; i < reg.n * 3; i++) consider(i);
-	return [reg.Y[best] as number, (reg.UV?.[best * 2] as number) ?? 0, (reg.UV?.[best * 2 + 1] as number) ?? 0];
+	return best;
+}
+
+/** Each own point of a region's triangles filed in the ring of cells k out from cell (gx, gz), given to consider. */
+function cellRing(reg: Tris, gx: number, gz: number, k: number, consider: (i: number) => void): void {
+	for (let ix = gx - k; ix <= gx + k; ix++)
+		for (let iz = gz - k; iz <= gz + k; iz++) {
+			if (Math.max(Math.abs(ix - gx), Math.abs(iz - gz)) !== k) continue;
+			for (const t of reg.cells.get(keyOf(ix, iz)) ?? []) for (let c = 0; c < 3; c++) consider(t * 3 + c);
+		}
 }
 
 // ---- the whole -------------------------------------------------------------------------------------------------
@@ -1257,9 +1354,9 @@ function hashOf(parts: (Float64Array | Int32Array | number)[]): string {
 		if (typeof p === "number") one[0] = p;
 		const f = typeof p === "number" ? one : p;
 		const u = new Uint32Array(f.buffer, f.byteOffset, f.byteLength / 4);
-		for (let i = 0; i < u.length; i++) {
-			a = Math.imul(a ^ (u[i] as number), 0x01000193) >>> 0;
-			b = Math.imul(b ^ (u[i] as number), 0x01000197) >>> 0;
+		for (const w of u) {
+			a = Math.imul(a ^ w, 0x01000193) >>> 0;
+			b = Math.imul(b ^ w, 0x01000197) >>> 0;
 		}
 		a = Math.imul(a ^ u.length, 0x01000193) >>> 0;
 	}
@@ -1369,11 +1466,10 @@ function groundTiles(
 	near: TileIndex<number>,
 	W: [number, number, number, number],
 	size: number,
-	footKeys: string[] = [],
-	cache?: MergeCache,
-	trace?: (what: string) => void,
-	tileFeet?: (box: Poly, feet: Poly[]) => void,
+	footKeys: string[],
+	opts: Pick<MergeOptions, "cache" | "trace" | "tileFeet">,
 ): Poly[] {
+	const { cache, trace, tileFeet } = opts;
 	const out: Poly[] = [];
 	for (let x = Math.floor(W[0] / size) * size; x < W[2]; x += size)
 		for (let z = Math.floor(W[1] / size) * size; z < W[3]; z += size) {
@@ -1406,7 +1502,7 @@ function groundTiles(
 				pieces = near.length ? geosOp("difference", [box], near) : [box];
 			}
 			cache?.tileUsed(key, pieces);
-			out.push(...pieces.map((p) => ({ outer: p.outer, holes: [...p.holes] })));
+			out.push(...copyPolys(pieces));
 		}
 	return out;
 }
@@ -1436,100 +1532,16 @@ export async function merge(regions: Region[], world: Box, filler: Filler, opts:
 	// 1. outlines, and what of each is seen: each cut by those before it near it (what is over it, as the Python's
 	// union of all before it is there), the ground the world less all of them, in tiles (each on the grid, filed in cells: kept from before where its triangles
 	// are as they were)
-	const keys: string[] = [];
-	const prepared: Prepared[] = regions.map((r) => {
-		const raw = r.tris ? hashOf(r.uvs ? [r.tris, r.uvs] : [r.tris]) : "";
-		let g = raw ? opts.cache?.gridKept(raw) : undefined;
-		if (!g) {
-			const t = r.tris ? gridTris(r) : { T: new Float64Array(0), Y: new Float64Array(0), UV: null };
-			g = { ...trisOf(t.T), Y: t.Y, UV: t.UV, key: r.ground ? "" : hashOf([t.T]) };
-		}
-		if (raw) opts.cache?.gridUsed(raw, g);
-		keys.push(r.ground ? "" : g.key);
-		return { r, T: g.T, n: g.n, cells: g.cells, cell: g.cell, Y: g.Y, UV: g.UV, folded: null };
-	});
+	const { prepared, keys } = prepareRegions(regions, opts.cache);
 	// (each road's outline: kept from before, else made, all of them at once on the workers if there are)
-	const outlines = new Map<string, Outline>();
-	const want: number[] = [];
-	prepared.forEach((reg, i) => {
-		if (reg.r.ground) return;
-		const kept = opts.cache?.outlineKept(keys[i] as string);
-		if (kept) outlines.set(keys[i] as string, kept);
-		else if (!want.some((w) => keys[w] === keys[i])) want.push(i);
-	});
-	const made = opts.outliner
-		? await opts.outliner(want.map((i) => (prepared[i] as Prepared).T))
-		: want.map((i) => outlineOf((prepared[i] as Prepared).T, (prepared[i] as Prepared).n));
-	want.forEach((i, m) => {
-		outlines.set(keys[i] as string, made[m] as Outline);
-	});
-	for (const k of keys) if (k) opts.cache?.outlineUsed(k, outlines.get(k) as Outline);
-	stage(`outlines (${want.length} made)`);
+	const { outlines, made } = await roadOutlines(prepared, keys, opts);
+	stage(`outlines (${made} made)`);
 	// (each road's foot and seen part: cut by those before it near it; kept from before when its outline and theirs, all the way back, are as they were: a chain
 	// of keys)
-	const foot = new Map<string, Poly[]>();
-	const seen = new Map<string, Poly[]>();
-	const near = new TileIndex<number>(TILE / GRID);
-	const feet: Poly[][] = [];
-	const footKeys: string[] = [];
-	const copy = (ps: Poly[]) => ps.map((p) => ({ outer: p.outer, holes: [...p.holes] }));
-	const wKey = W.join(",");
-	prepared.forEach((reg, i) => {
-		const r = reg.r;
-		if (r.ground) {
-			foot.set(r.name, Wpoly);
-			if (opts.tile === 0) {
-				const all = feet.flat();
-				seen.set(r.name, all.length ? geosOp("difference", Wpoly, all) : Wpoly);
-			} else seen.set(r.name, groundTiles(feet, near, W, (opts.tile ?? TILE) / GRID, footKeys, opts.cache, opts.trace, opts.tileFeet));
-			return;
-		}
-		const outline = outlines.get(keys[i] as string) as Outline;
-		reg.folded = outline.folded;
-		opts.trace?.(`seen: ${r.name} (${outline.polys.length} polygons${outline.folded ? ", folded" : ""})`);
-		let f = geosOp("intersection", outline.polys, Wpoly);
-		const box = polysBox(f, NEAR / GRID);
-		const idx = near.find(box).sort((a, b) => a - b);
-		const key = `${keys[i]}|${wKey}|${idx.map((j) => footKeys[j]).join("/")}`;
-		let got = opts.cache?.seenKept(key);
-		if (!got) {
-			const before = idx.flatMap((j) => feet[j] as Poly[]);
-			opts.trace?.(`  the ${before.length} feet before it near it, as one`);
-			const covered = before.length ? geosOp("union", before) : null;
-			opts.trace?.("  its foot snapped to them");
-			if (covered) f = geosOp("intersection", snapTo(f, covered), Wpoly);
-			opts.trace?.("  what of it they leave seen");
-			got = { foot: f, seen: covered ? geosOp("difference", f, covered) : f };
-		}
-		opts.cache?.seenUsed(key, got);
-		opts.seenParts?.(r.name, got.foot, got.seen);
-		foot.set(r.name, got.foot);
-		seen.set(r.name, copy(got.seen));
-		if (got.foot.length) near.add(polysBox(got.foot, 0), feet.length);
-		feet.push(got.foot);
-		footKeys.push(hashOf([Float64Array.from(key, (c) => c.charCodeAt(0))]));
-	});
+	const { foot, seen } = seenParts(prepared, keys, outlines, { W, poly: Wpoly, key: W.join(",") }, opts);
 	stage("seen parts");
 	// 2. the faces' edges noded and cut
-	const faces: { poly: Poly; reg: Prepared }[] = [];
-	for (const reg of prepared) for (const p of seen.get(reg.r.name) ?? []) faces.push({ poly: p, reg });
-	const groundReg0 = prepared.find((p) => p.r.ground);
-	node(
-		faces.map((f) => f.poly),
-		W,
-		opts.tile === 0 ? 0 : (opts.tile ?? TILE) / GRID,
-		(groundReg0?.r.ground?.spacing ?? STEP) / GRID,
-	);
-	// (a ring the noding left of no area, a slit (a sliver given a point of the other side's): no hole there, no face; its copy on the other side goes the same
-	// way, being the same ring) (and a spike the noding left, out to a point and straight back: both sides have it, so both lose it)
-	for (const f of faces) {
-		f.poly.outer = unspike(f.poly.outer);
-		f.poly.holes = f.poly.holes.map(unspike).filter((h) => h.length >= 3);
-	}
-	for (const f of faces) f.poly.holes = f.poly.holes.filter((h) => area2(h) !== 0);
-	const kept = faces.filter((f) => f.poly.outer.length >= 3 && area2(f.poly.outer) !== 0);
-	faces.length = 0;
-	faces.push(...kept);
+	const faces = nodedFaces(prepared, seen, W, opts.tile);
 	stage(`edges noded (${faces.length} faces)`);
 	// 3. each face filled
 	const fillWith = opts.cache ? opts.cache.wrap(filler) : filler;
@@ -1551,216 +1563,474 @@ export async function merge(regions: Region[], world: Box, filler: Filler, opts:
 	stage(opts.cache ? `faces filled (${opts.cache.filled}; ${opts.cache.kept} kept)` : "faces filled");
 	// 4. heights: a region's own points first, by the order; then every other point (each point by a number of its
 	// own: two grid coordinates from the world's middle, exact within HALF of it, past any track; by a string, far slower, in a world bigger)
+	const pk = pointKeys(W);
+	const xyz = regionHeights(prepared, parts, foot, pk);
+	stage("heights of the regions");
+	const groundReg = prepared.find((p) => p.r.ground);
+	if (groundReg?.r.ground) groundHeights(groundReg.r.ground, parts.get(groundReg.r.name) ?? [], W, pk, xyz);
+	stage("heights of the ground");
+	// 5. points closer than WELD made one (a face filled with an edge of a hair's width has no normal of its own, the
+	// game's shading goes wrong round it): each pair at an edge's ends, every region's the same (by the grid point), the one on the world's edge kept, else the
+	// first; a face two of whose corners are then one, gone
+	const welds = new Welds(W, pk);
+	for (const fs of parts.values()) for (const f of fs) welds.face(f);
+	welds.close();
+	const out: Record<string, Mesh> = {};
+	for (const reg of prepared) {
+		const fs = parts.get(reg.r.name);
+		if (fs?.length) out[reg.r.name] = regionMesh(reg, fs, welds, pk, xyz);
+	}
+	stage("meshes");
+	opts.cache?.done();
+	return out;
+}
+
+/** A point's number by its grid coordinates, as the merge's heights and the proof have it: a number of its own from the world's middle, exact within HALF of
+ * it, past any track; a string, far slower, in a world bigger. */
+type PointKey = (x: number, z: number) => number | string;
+
+/** The point numbers of a world (x0, z0, x1, z1, grid units). */
+function pointKeys(W: readonly [number, number, number, number]): PointKey {
 	const cx = Math.round((W[0] + W[2]) / 2);
 	const cz = Math.round((W[1] + W[3]) / 2);
 	const numeric = Math.max(W[2] - W[0], W[3] - W[1]) / 2 + PAST_WORLD < HALF;
-	const pk: (x: number, z: number) => number | string = numeric ? (x, z) => (x - cx) * 2 * HALF + (z - cz) : keyOf;
+	return numeric ? (x, z) => (x - cx) * 2 * HALF + (z - cz) : keyOf;
+}
+
+/** The key of a region's triangles as given (and their mapping); none for the ground's. */
+function trisKey(r: Region): string {
+	if (!r.tris) return "";
+	return hashOf(r.uvs ? [r.tris, r.uvs] : [r.tris]);
+}
+
+/** Each region on the grid and filed in cells (kept from before where its triangles are as they were), and its outline's key (none for the ground). */
+function prepareRegions(regions: Region[], cache: MergeCache | undefined): { prepared: Prepared[]; keys: string[] } {
+	const keys: string[] = [];
+	const prepared: Prepared[] = regions.map((r) => {
+		const raw = trisKey(r);
+		let g = raw ? cache?.gridKept(raw) : undefined;
+		if (!g) {
+			const t = r.tris ? gridTris(r) : { T: new Float64Array(0), Y: new Float64Array(0), UV: null };
+			g = { ...trisOf(t.T), Y: t.Y, UV: t.UV, key: r.ground ? "" : hashOf([t.T]) };
+		}
+		if (raw) cache?.gridUsed(raw, g);
+		keys.push(r.ground ? "" : g.key);
+		return { r, T: g.T, n: g.n, cells: g.cells, cell: g.cell, Y: g.Y, UV: g.UV, folded: null };
+	});
+	return { prepared, keys };
+}
+
+/** Each road's outline by its key: kept from before, else made, all of them at once on the workers if there are; and how many were made. */
+async function roadOutlines(prepared: Prepared[], keys: string[], opts: MergeOptions): Promise<{ outlines: Map<string, Outline>; made: number }> {
+	const outlines = new Map<string, Outline>();
+	const want: number[] = [];
+	prepared.forEach((reg, i) => {
+		if (reg.r.ground) return;
+		const kept = opts.cache?.outlineKept(keys[i] as string);
+		if (kept) outlines.set(keys[i] as string, kept);
+		else if (!want.some((w) => keys[w] === keys[i])) want.push(i);
+	});
+	const made = opts.outliner
+		? await opts.outliner(want.map((i) => (prepared[i] as Prepared).T))
+		: want.map((i) => outlineOf((prepared[i] as Prepared).T, (prepared[i] as Prepared).n));
+	want.forEach((i, m) => {
+		outlines.set(keys[i] as string, made[m] as Outline);
+	});
+	for (const k of keys) if (k) opts.cache?.outlineUsed(k, outlines.get(k) as Outline);
+	return { outlines, made: want.length };
+}
+
+/** The world as the merge has it: its box (grid units), as a polygon, and as a key. */
+interface World {
+	W: [number, number, number, number];
+	poly: Poly[];
+	key: string;
+}
+
+/** The roads' feet as they are made: filed by their boxes (for those near a later one), and each one's key. */
+interface Feet {
+	near: TileIndex<number>;
+	feet: Poly[][];
+	footKeys: string[];
+}
+
+/** Polygons copied, their hole lists their own. */
+const copyPolys = (ps: Poly[]) => ps.map((p) => ({ outer: p.outer, holes: [...p.holes] }));
+
+/** Each region's foot and seen part, by name: each road's cut by those before it near it, the ground the world less all of them. */
+function seenParts(
+	prepared: Prepared[],
+	keys: string[],
+	outlines: Map<string, Outline>,
+	world: World,
+	opts: MergeOptions,
+): { foot: Map<string, Poly[]>; seen: Map<string, Poly[]> } {
+	const foot = new Map<string, Poly[]>();
+	const seen = new Map<string, Poly[]>();
+	const feet: Feet = { near: new TileIndex<number>(TILE / GRID), feet: [], footKeys: [] };
+	prepared.forEach((reg, i) => {
+		const r = reg.r;
+		if (r.ground) {
+			foot.set(r.name, world.poly);
+			seen.set(r.name, groundSeen(feet, world, opts));
+			return;
+		}
+		const got = roadSeen(reg, keys[i] as string, outlines.get(keys[i] as string) as Outline, world, feet, opts);
+		foot.set(r.name, got.foot);
+		seen.set(r.name, copyPolys(got.seen));
+	});
+	return { foot, seen };
+}
+
+/** The ground's seen part: the world less the roads' feet so far, in one or a tile at a time. */
+function groundSeen(feet: Feet, world: World, opts: MergeOptions): Poly[] {
+	if (opts.tile !== 0) return groundTiles(feet.feet, feet.near, world.W, (opts.tile ?? TILE) / GRID, feet.footKeys, opts);
+	const all = feet.feet.flat();
+	return all.length ? geosOp("difference", world.poly, all) : world.poly;
+}
+
+/** A road's foot and seen part: its outline in the world, snapped to and cut by the feet before it near it (kept from before by a chain of keys); its foot
+ * then one of the feet. */
+function roadSeen(reg: Prepared, outlineKey: string, outline: Outline, world: World, feet: Feet, opts: MergeOptions): { foot: Poly[]; seen: Poly[] } {
+	const r = reg.r;
+	reg.folded = outline.folded;
+	opts.trace?.(`seen: ${r.name} (${outline.polys.length} polygons${outline.folded ? ", folded" : ""})`);
+	const f = geosOp("intersection", outline.polys, world.poly);
+	const box = polysBox(f, NEAR / GRID);
+	const idx = feet.near.find(box).sort((a, b) => a - b);
+	const key = `${outlineKey}|${world.key}|${idx.map((j) => feet.footKeys[j]).join("/")}`;
+	let got = opts.cache?.seenKept(key);
+	got ??= cutByBefore(f, idx, feet, world, opts.trace);
+	opts.cache?.seenUsed(key, got);
+	opts.seenParts?.(r.name, got.foot, got.seen);
+	if (got.foot.length) feet.near.add(polysBox(got.foot, 0), feet.feet.length);
+	feet.feet.push(got.foot);
+	feet.footKeys.push(hashOf([Float64Array.from(key, (c) => c.codePointAt(0) as number)]));
+	return got;
+}
+
+/** A road's foot in the world snapped to the feet before it near it (by their numbers), and what of it they leave seen. */
+function cutByBefore(f: Poly[], idx: number[], feet: Feet, world: World, trace?: (what: string) => void): { foot: Poly[]; seen: Poly[] } {
+	const before = idx.flatMap((j) => feet.feet[j] as Poly[]);
+	trace?.(`  the ${before.length} feet before it near it, as one`);
+	const covered = before.length ? geosOp("union", before) : null;
+	trace?.("  its foot snapped to them");
+	const foot = covered ? geosOp("intersection", snapTo(f, covered), world.poly) : f;
+	trace?.("  what of it they leave seen");
+	return { foot, seen: covered ? geosOp("difference", foot, covered) : foot };
+}
+
+/** The faces: every region's seen parts, their edges noded and cut; a ring the noding left of no area, a slit (a sliver given a point of the other side's): no
+ * hole there, no face; its copy on the other side goes the same way, being the same ring (and a spike the noding left, out to a point and straight back: both
+ * sides have it, so both lose it). */
+function nodedFaces(prepared: Prepared[], seen: Map<string, Poly[]>, W: [number, number, number, number], tile?: number): { poly: Poly; reg: Prepared }[] {
+	const faces: { poly: Poly; reg: Prepared }[] = [];
+	for (const reg of prepared) for (const p of seen.get(reg.r.name) ?? []) faces.push({ poly: p, reg });
+	const groundReg0 = prepared.find((p) => p.r.ground);
+	node(
+		faces.map((f) => f.poly),
+		W,
+		tile === 0 ? 0 : (tile ?? TILE) / GRID,
+		(groundReg0?.r.ground?.spacing ?? STEP) / GRID,
+	);
+	for (const f of faces) {
+		f.poly.outer = unspike(f.poly.outer);
+		f.poly.holes = f.poly.holes.map(unspike).filter((h) => h.length >= 3);
+	}
+	for (const f of faces) f.poly.holes = f.poly.holes.filter((h) => area2(h) !== 0);
+	return faces.filter((f) => f.poly.outer.length >= 3 && area2(f.poly.outer) !== 0);
+}
+
+/** Every point's height of the regions' faces but the ground's own: a region's own points first, by the order; a road's other points on the grid its own;
+ * the ground's no region's own the first region's over each. */
+function regionHeights(prepared: Prepared[], parts: Map<string, Filled[]>, foot: Map<string, Poly[]>, pk: PointKey): Map<number | string, number> {
 	const xyz = new Map<number | string, number>();
 	for (const reg of prepared)
 		for (let i = 0; i < reg.n * 3; i++) {
 			const k = pk(reg.T[i * 2] as number, reg.T[i * 2 + 1] as number);
 			if (!xyz.has(k)) xyz.set(k, reg.Y[i] as number);
 		}
-	const isGridPoint = (x: number) => Number.isInteger(x);
-	for (const reg of prepared) {
-		if (reg.r.ground) continue;
-		for (const f of parts.get(reg.r.name) ?? [])
-			for (let i = 0; i < f.P.length; i += 2) {
-				const x = f.P[i] as number;
-				const z = f.P[i + 1] as number;
-				if (!isGridPoint(x) || !isGridPoint(z)) continue;
-				const k = pk(x, z);
-				if (!xyz.has(k)) xyz.set(k, sample(reg, x, z)[0]);
-			}
-	}
+	for (const reg of prepared) if (!reg.r.ground) roadHeights(reg, parts.get(reg.r.name) ?? [], pk, xyz);
 	// (points no region's own: the first region over each, as high as it is there; by the feet near it)
-	const feetAt = new TileIndex<number>(TILE / GRID);
-	const footIn = new Map<number, PolyIndex[]>();
-	prepared.forEach((reg, i) => {
-		const fp = foot.get(reg.r.name);
-		if (!reg.r.ground && fp?.length) feetAt.add(polysBox(fp, 1), i);
-	});
-	for (const reg of prepared) {
-		if (!reg.r.ground) continue;
-		for (const f of parts.get(reg.r.name) ?? [])
-			for (let i = 0; i < f.P.length; i += 2) {
-				const x = f.P[i] as number;
-				const z = f.P[i + 1] as number;
-				const k = pk(x, z);
-				if (xyz.has(k)) continue;
-				const over = feetAt.find({ x0: x, z0: z, x1: x, z1: z }).sort((a, b) => a - b);
-				for (const j of over) {
-					const other = prepared[j] as Prepared;
-					let fp = footIn.get(j);
-					if (!fp) {
-						fp = (foot.get(other.r.name) ?? []).map((p) => new PolyIndex(p));
-						footIn.set(j, fp);
-					}
-					if (fp.some((p) => p.pip(x, z) !== "out")) {
-						xyz.set(k, sample(other, x, z)[0]);
-						break;
-					}
-				}
-			}
+	const over = new FeetAt(prepared, foot);
+	for (const reg of prepared) if (reg.r.ground) overHeights(parts.get(reg.r.name) ?? [], over, pk, xyz);
+	return xyz;
+}
+
+/** A road's faces' points on the grid with no height yet: its own there. */
+function roadHeights(reg: Prepared, fs: Filled[], pk: PointKey, xyz: Map<number | string, number>): void {
+	const isGridPoint = (x: number) => Number.isInteger(x);
+	for (const f of fs)
+		for (let i = 0; i < f.P.length; i += 2) {
+			const x = f.P[i] as number;
+			const z = f.P[i + 1] as number;
+			if (!isGridPoint(x) || !isGridPoint(z)) continue;
+			const k = pk(x, z);
+			if (!xyz.has(k)) xyz.set(k, sample(reg, x, z)[0]);
+		}
+}
+
+/** The ground's faces' points with no height yet: the first region's over each, as high as it is there. */
+function overHeights(fs: Filled[], over: FeetAt, pk: PointKey, xyz: Map<number | string, number>): void {
+	for (const f of fs)
+		for (let i = 0; i < f.P.length; i += 2) {
+			const x = f.P[i] as number;
+			const z = f.P[i + 1] as number;
+			const k = pk(x, z);
+			if (xyz.has(k)) continue;
+			const other = over.first(x, z);
+			if (other) xyz.set(k, sample(other, x, z)[0]);
+		}
+}
+
+/** The roads' feet filed by their boxes, each as polygons to look points up in (made the first time it is wanted). */
+class FeetAt {
+	private readonly at = new TileIndex<number>(TILE / GRID);
+	private readonly polys = new Map<number, PolyIndex[]>();
+	private readonly prepared: Prepared[];
+	private readonly foot: Map<string, Poly[]>;
+
+	constructor(prepared: Prepared[], foot: Map<string, Poly[]>) {
+		this.prepared = prepared;
+		this.foot = foot;
+		prepared.forEach((reg, i) => {
+			const fp = foot.get(reg.r.name);
+			if (!reg.r.ground && fp?.length) this.at.add(polysBox(fp, 1), i);
+		});
 	}
-	stage("heights of the regions");
-	const groundReg = prepared.find((p) => p.r.ground);
-	const out: Record<string, Mesh> = {};
-	if (groundReg?.r.ground) {
-		const g = groundReg.r.ground;
-		const edge = new PointIndex();
-		const edgeY = new Map<number | string, number>();
-		const free: Pt[] = [];
-		const seenK = new Set<number | string>();
-		for (const f of parts.get(groundReg.r.name) ?? [])
-			for (let i = 0; i < f.P.length; i += 2) {
-				const p: Pt = [f.P[i] as number, f.P[i + 1] as number];
-				const k = pk(p[0], p[1]);
-				if (seenK.has(k)) continue;
-				seenK.add(k);
-				const y = xyz.get(k);
-				if (y === undefined) free.push(p);
-				else {
-					edge.add(p);
-					edgeY.set(k, y);
-				}
+
+	/** The first region whose foot holds (x, z) or has it on its edge, by the order; none if none does. */
+	first(x: number, z: number): Prepared | undefined {
+		const over = this.at.find({ x0: x, z0: z, x1: x, z1: z }).sort((a, b) => a - b);
+		for (const j of over) if (this.polysOf(j).some((p) => p.pip(x, z) !== "out")) return this.prepared[j] as Prepared;
+		return undefined;
+	}
+
+	private polysOf(j: number): PolyIndex[] {
+		let fp = this.polys.get(j);
+		if (!fp) {
+			fp = (this.foot.get((this.prepared[j] as Prepared).r.name) ?? []).map((p) => new PolyIndex(p));
+			this.polys.set(j, fp);
+		}
+		return fp;
+	}
+}
+
+/** The ground's points with no height yet: its own, eased from the nearest point that borders it (within RAMP) to its own over RAMP; on the world's edge its
+ * own. */
+function groundHeights(
+	g: NonNullable<Region["ground"]>,
+	fs: Filled[],
+	W: [number, number, number, number],
+	pk: PointKey,
+	xyz: Map<number | string, number>,
+): void {
+	const edge = new PointIndex();
+	const edgeY = new Map<number | string, number>();
+	const free: Pt[] = [];
+	const seenK = new Set<number | string>();
+	for (const f of fs)
+		for (let i = 0; i < f.P.length; i += 2) {
+			const p: Pt = [f.P[i] as number, f.P[i + 1] as number];
+			const k = pk(p[0], p[1]);
+			if (seenK.has(k)) continue;
+			seenK.add(k);
+			const y = xyz.get(k);
+			if (y === undefined) free.push(p);
+			else {
+				edge.add(p);
+				edgeY.set(k, y);
 			}
-		const R = RAMP / GRID;
-		for (const p of free) {
-			const x = metres(p[0]);
-			const z = metres(p[1]);
-			let own = g.height(x, z);
-			const onWorld = Math.min(p[0] - W[0], W[2] - p[0], p[1] - W[1], W[3] - p[1]) < 2;
-			if (!onWorld) {
-				let best: Pt | null = null;
-				let bd = Infinity;
-				for (const q of edge.near([p[0] - R, p[1] - R], [p[0] + R, p[1] + R])) {
-					const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-					if (d < bd) {
-						bd = d;
-						best = q;
-					}
-				}
-				if (best) {
-					const t0_ = Math.min(Math.max((bd * GRID) / RAMP, 0), 1);
-					const t = t0_ * t0_ * (3 - 2 * t0_);
-					const Ey = edgeY.get(pk(best[0], best[1])) as number;
-					own += (Ey - g.height(metres(best[0]), metres(best[1]))) * (1 - t);
-				}
-			}
-			xyz.set(pk(p[0], p[1]), own);
+		}
+	for (const p of free)
+		xyz.set(
+			pk(p[0], p[1]),
+			easedHeight(p, g, W, edge, (q) => edgeY.get(pk(q[0], q[1])) as number),
+		);
+}
+
+/** The ground's height at a point of its own, eased from the nearest point that borders it (within RAMP, its height edgeY's) to its own over RAMP; on the
+ * world's edge its own. */
+function easedHeight(p: Pt, g: NonNullable<Region["ground"]>, W: [number, number, number, number], edge: PointIndex, edgeY: (q: Pt) => number): number {
+	const R = RAMP / GRID;
+	let own = g.height(metres(p[0]), metres(p[1]));
+	const onWorld = Math.min(p[0] - W[0], W[2] - p[0], p[1] - W[1], W[3] - p[1]) < 2;
+	if (onWorld) return own;
+	let best: Pt | null = null;
+	let bd = Infinity;
+	for (const q of edge.near([p[0] - R, p[1] - R], [p[0] + R, p[1] + R])) {
+		const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+		if (d < bd) {
+			bd = d;
+			best = q;
 		}
 	}
-	stage("heights of the ground");
-	// 5. points closer than WELD made one (a face filled with an edge of a hair's width has no normal of its own, the
-	// game's shading goes wrong round it): each pair at an edge's ends, every region's the same (by the grid point), the one on the world's edge kept, else the
-	// first; a face two of whose corners are then one, gone
-	const rep = new Map<number | string, number | string>();
-	const pointOf = new Map<number | string, [number, number]>();
-	const find = (k: number | string): number | string => {
+	if (best) {
+		const t0_ = Math.min(Math.max((bd * GRID) / RAMP, 0), 1);
+		const t = t0_ * t0_ * (3 - 2 * t0_);
+		own += (edgeY(best) - g.height(metres(best[0]), metres(best[1]))) * (1 - t);
+	}
+	return own;
+}
+
+/** Points closer than WELD made one: each pair at an edge's ends, every region's the same (by the grid point), the one on the world's edge kept, else the
+ * first. */
+class Welds {
+	private readonly rep = new Map<number | string, number | string>();
+	private readonly pointOf = new Map<number | string, [number, number]>();
+	/** the points made one, each by the one it is now */
+	private readonly made = new Set<number | string>();
+	private readonly W: [number, number, number, number];
+	private readonly pk: PointKey;
+
+	constructor(W: [number, number, number, number], pk: PointKey) {
+		this.W = W;
+		this.pk = pk;
+	}
+
+	private find(k: number | string): number | string {
 		let r = k;
-		for (let n = rep.get(r); n !== undefined && n !== r; n = rep.get(r)) r = n;
-		if (r !== k) rep.set(k, r);
+		for (let n = this.rep.get(r); n !== undefined && n !== r; n = this.rep.get(r)) r = n;
+		if (r !== k) this.rep.set(k, r);
 		return r;
-	};
-	const onWorld = (x: number, z: number) => x === W[0] || x === W[2] || z === W[1] || z === W[3];
-	const before = (a: number | string, b: number | string) => {
-		const [ax, az] = pointOf.get(a) as [number, number];
-		const [bx, bz] = pointOf.get(b) as [number, number];
-		const wa = onWorld(ax, az);
-		const wb = onWorld(bx, bz);
-		return wa !== wb ? wa : ax !== bx ? ax < bx : az < bz;
-	};
-	for (const fs of parts.values())
-		for (const f of fs)
-			for (let i = 0; i < f.F.length; i += 3)
-				for (let e = 0; e < 3; e++) {
-					const a = f.F[i + e] as number;
-					const b = f.F[i + ((e + 1) % 3)] as number;
-					const dx = (f.P[a * 2] as number) - (f.P[b * 2] as number);
-					const dz = (f.P[a * 2 + 1] as number) - (f.P[b * 2 + 1] as number);
-					if (dx * dx + dz * dz >= WELD_U * WELD_U) continue;
-					const pa: [number, number] = [f.P[a * 2] as number, f.P[a * 2 + 1] as number];
-					const pb: [number, number] = [f.P[b * 2] as number, f.P[b * 2 + 1] as number];
-					const ka = pk(pa[0], pa[1]);
-					const kb = pk(pb[0], pb[1]);
-					pointOf.set(ka, pa);
-					pointOf.set(kb, pb);
-					const ra = find(ka);
-					const rb = find(kb);
-					if (ra === rb) continue;
-					if (before(ra, rb)) rep.set(rb, ra);
-					else rep.set(ra, rb);
-				}
-	// (the points made one, each by the one it is now)
-	const welds = new Set<number | string>();
-	for (const k of rep.keys()) {
-		welds.add(k);
-		welds.add(find(k));
 	}
-	const welded = (gx: number, gz: number): [number, number] => {
-		if (!rep.size) return [gx, gz];
-		const k = pk(gx, gz);
-		return rep.has(k) ? (pointOf.get(find(k)) as [number, number]) : [gx, gz];
-	};
-	for (const reg of prepared) {
-		const fs = parts.get(reg.r.name);
-		if (!fs?.length) continue;
-		const P: number[] = [];
-		const UV: number[] = [];
-		const F: number[] = [];
-		for (const f of fs) {
-			const at: (number | string)[] = [];
-			// (each point's index in the mesh: one made one with another of the part's, that one's)
-			const idx: number[] = [];
-			const local = new Map<number | string, number>();
-			for (let i = 0; i < f.P.length; i += 2) {
-				const [gx, gz] = welded(f.P[i] as number, f.P[i + 1] as number);
-				const k = pk(gx, gz);
-				at.push(k);
-				if (welds.has(k)) {
-					const had = local.get(k);
-					if (had !== undefined) {
-						idx.push(had);
-						continue;
-					}
-					local.set(k, P.length / 3);
-				}
-				idx.push(P.length / 3);
-				const x = metres(gx);
-				const z = metres(gz);
-				let y = xyz.get(k);
-				let uv: [number, number];
-				if (reg.r.ground) {
-					y ??= reg.r.ground.height(x, z);
-					uv = reg.r.ground.uv(x, z);
-				} else {
-					const s = sample(reg, gx, gz);
-					y ??= s[0];
-					uv = [s[1], s[2]];
-				}
-				P.push(x, y, z);
-				UV.push(...uv);
+
+	private onWorld(x: number, z: number): boolean {
+		const W = this.W;
+		return x === W[0] || x === W[2] || z === W[1] || z === W[3];
+	}
+
+	/** Whether point a is kept over point b: the one on the world's edge, else the first (by x, then z). */
+	private before(a: number | string, b: number | string): boolean {
+		const [ax, az] = this.pointOf.get(a) as [number, number];
+		const [bx, bz] = this.pointOf.get(b) as [number, number];
+		const wa = this.onWorld(ax, az);
+		const wb = this.onWorld(bx, bz);
+		if (wa !== wb) return wa;
+		if (ax !== bx) return ax < bx;
+		return az < bz;
+	}
+
+	/** A filled face's edges shorter than WELD: their ends made one. */
+	face(f: Filled): void {
+		for (let i = 0; i < f.F.length; i += 3)
+			for (let e = 0; e < 3; e++) {
+				const a = f.F[i + e] as number;
+				const b = f.F[i + ((e + 1) % 3)] as number;
+				const dx = (f.P[a * 2] as number) - (f.P[b * 2] as number);
+				const dz = (f.P[a * 2 + 1] as number) - (f.P[b * 2 + 1] as number);
+				if (dx * dx + dz * dz >= WELD_U * WELD_U) continue;
+				const pa: [number, number] = [f.P[a * 2] as number, f.P[a * 2 + 1] as number];
+				const pb: [number, number] = [f.P[b * 2] as number, f.P[b * 2 + 1] as number];
+				const ka = this.pk(pa[0], pa[1]);
+				const kb = this.pk(pb[0], pb[1]);
+				this.pointOf.set(ka, pa);
+				this.pointOf.set(kb, pb);
+				const ra = this.find(ka);
+				const rb = this.find(kb);
+				if (ra === rb) continue;
+				if (this.before(ra, rb)) this.rep.set(rb, ra);
+				else this.rep.set(ra, rb);
 			}
-			for (let i = 0; i < f.F.length; i += 3) {
-				const [ka, kb, kc] = [at[f.F[i] as number], at[f.F[i + 1] as number], at[f.F[i + 2] as number]];
-				if (ka === kb || kb === kc || kc === ka) continue;
-				const a = idx[f.F[i] as number] as number;
-				const b = idx[f.F[i + 1] as number] as number;
-				const c = idx[f.F[i + 2] as number] as number;
-				// (facing up)
-				const up =
-					((P[b * 3] as number) - (P[a * 3] as number)) * ((P[c * 3 + 2] as number) - (P[a * 3 + 2] as number)) -
-					((P[c * 3] as number) - (P[a * 3] as number)) * ((P[b * 3 + 2] as number) - (P[a * 3 + 2] as number));
-				if (up > 0) F.push(c, b, a);
-				else F.push(a, b, c);
-			}
+	}
+
+	/** Every face's edges done: the points made one, each by the one it is now. */
+	close(): void {
+		for (const k of this.rep.keys()) {
+			this.made.add(k);
+			this.made.add(this.find(k));
 		}
-		out[reg.r.name] = { P: Float64Array.from(P), UV: Float64Array.from(UV), F: Int32Array.from(F) };
 	}
-	stage("meshes");
-	opts.cache?.done();
-	return out;
+
+	/** Whether a point (by its number) is one made one with another. */
+	has(k: number | string): boolean {
+		return this.made.has(k);
+	}
+
+	/** A grid point, or the one it is made one with. */
+	welded(gx: number, gz: number): [number, number] {
+		if (!this.rep.size) return [gx, gz];
+		const k = this.pk(gx, gz);
+		return this.rep.has(k) ? (this.pointOf.get(this.find(k)) as [number, number]) : [gx, gz];
+	}
+}
+
+/** A mesh as it is put together: its points (x, y, z), their mapping (u, v), its faces. */
+interface MeshParts {
+	P: number[];
+	UV: number[];
+	F: number[];
+}
+
+/** A region's mesh from its filled faces: its points welded, each at its height; a face two of whose corners are one gone, the rest facing up. */
+function regionMesh(reg: Prepared, fs: Filled[], welds: Welds, pk: PointKey, xyz: Map<number | string, number>): Mesh {
+	const m: MeshParts = { P: [], UV: [], F: [] };
+	for (const f of fs) {
+		const { at, idx } = partPoints(reg, f, welds, pk, xyz, m);
+		partFaces(f, at, idx, m);
+	}
+	return { P: Float64Array.from(m.P), UV: Float64Array.from(m.UV), F: Int32Array.from(m.F) };
+}
+
+/** A filled face's points put in a mesh: each point's number (welded) and its index in the mesh (one made one with another of the part's, that one's). */
+function partPoints(
+	reg: Prepared,
+	f: Filled,
+	welds: Welds,
+	pk: PointKey,
+	xyz: Map<number | string, number>,
+	m: MeshParts,
+): { at: (number | string)[]; idx: number[] } {
+	const at: (number | string)[] = [];
+	const idx: number[] = [];
+	const local = new Map<number | string, number>();
+	for (let i = 0; i < f.P.length; i += 2) {
+		const [gx, gz] = welds.welded(f.P[i] as number, f.P[i + 1] as number);
+		const k = pk(gx, gz);
+		at.push(k);
+		if (welds.has(k)) {
+			const had = local.get(k);
+			if (had !== undefined) {
+				idx.push(had);
+				continue;
+			}
+			local.set(k, m.P.length / 3);
+		}
+		idx.push(m.P.length / 3);
+		const x = metres(gx);
+		const z = metres(gz);
+		let y = xyz.get(k);
+		let uv: [number, number];
+		if (reg.r.ground) {
+			y ??= reg.r.ground.height(x, z);
+			uv = reg.r.ground.uv(x, z);
+		} else {
+			const s = sample(reg, gx, gz);
+			y ??= s[0];
+			uv = [s[1], s[2]];
+		}
+		m.P.push(x, y, z);
+		m.UV.push(...uv);
+	}
+	return { at, idx };
+}
+
+/** A filled face's triangles put in a mesh: those two of whose corners are one gone, the rest facing up. */
+function partFaces(f: Filled, at: (number | string)[], idx: number[], m: MeshParts): void {
+	const P = m.P;
+	for (let i = 0; i < f.F.length; i += 3) {
+		const [ka, kb, kc] = [at[f.F[i] as number], at[f.F[i + 1] as number], at[f.F[i + 2] as number]];
+		if (ka === kb || kb === kc || kc === ka) continue;
+		const a = idx[f.F[i] as number] as number;
+		const b = idx[f.F[i + 1] as number] as number;
+		const c = idx[f.F[i + 2] as number] as number;
+		// (facing up)
+		const up =
+			((P[b * 3] as number) - (P[a * 3] as number)) * ((P[c * 3 + 2] as number) - (P[a * 3 + 2] as number)) -
+			((P[c * 3] as number) - (P[a * 3] as number)) * ((P[b * 3 + 2] as number) - (P[a * 3 + 2] as number));
+		if (up > 0) m.F.push(c, b, a);
+		else m.F.push(a, b, c);
+	}
 }
 
 // ---- the proof ---------------------------------------------------------------------------------------------------
@@ -1777,42 +2047,40 @@ export function check(meshes: Record<string, Mesh>, world: Box): Issue[] {
 	// (each point by a number of its own, as the merge's heights have them; each edge by its two points' numbers in one, the edges sorted and counted: no string
 	// a point or edge, millions of them over a whole map)
 	const W = [unit(world.x0), unit(world.z0), unit(world.x1), unit(world.z1)] as const;
-	const cx = Math.round((W[0] + W[2]) / 2);
-	const cz = Math.round((W[1] + W[3]) / 2);
-	const numeric = Math.max(W[2] - W[0], W[3] - W[1]) / 2 + PAST_WORLD < HALF;
-	const pk: (x: number, z: number) => number | string = numeric ? (x, z) => (x - cx) * 2 * HALF + (z - cz) : keyOf;
-	const id = new Map<number | string, number>();
-	const lo: number[] = [];
-	const hi: number[] = [];
-	const X: number[] = [];
-	const Z: number[] = [];
-	const issues: Issue[] = [];
 	let nEdges = 0;
 	for (const m of Object.values(meshes)) nEdges += m.F.length;
-	const edges = new Float64Array(nEdges);
-	let ne = 0;
-	let total = 0;
-	for (const m of Object.values(meshes)) {
-		const ids = new Int32Array(m.P.length / 3);
-		for (let i = 0; i < m.P.length; i += 3) {
-			const x = m.P[i] as number;
-			const y = m.P[i + 1] as number;
-			const z = m.P[i + 2] as number;
-			const k = pk(unit(x), unit(z));
-			let j = id.get(k);
-			if (j === undefined) {
-				j = lo.length;
-				id.set(k, j);
-				lo.push(y);
-				hi.push(y);
-				X.push(x);
-				Z.push(z);
-			} else {
-				if (y < (lo[j] as number)) lo[j] = y;
-				if (y > (hi[j] as number)) hi[j] = y;
-			}
-			ids[i / 3] = j;
-		}
+	const proof = new Proof(pointKeys(W), nEdges);
+	for (const m of Object.values(meshes)) proof.add(m);
+	const issues: Issue[] = proof.heightIssues();
+	if (proof.lo.length >= EDGE_KEY) throw new Error(`the proof takes ${EDGE_KEY} points at most: ${proof.lo.length} given`);
+	issues.push(...proof.edgeIssues(world));
+	const want = (world.x1 - world.x0) * (world.z1 - world.z0);
+	if (Math.abs(proof.total - want) > Math.max(1e-3, want * 1e-6))
+		issues.push({ what: "cover", x: (world.x0 + world.x1) / 2, z: (world.z0 + world.z1) / 2, much: proof.total - want });
+	return issues;
+}
+
+/** What the proof gathers of the meshes: each point once (its lowest and highest height, where it is), every face's edges by their points' numbers, and the
+ * area the faces cover. */
+class Proof {
+	private readonly id = new Map<number | string, number>();
+	readonly lo: number[] = [];
+	private readonly hi: number[] = [];
+	private readonly X: number[] = [];
+	private readonly Z: number[] = [];
+	private readonly edges: Float64Array;
+	private ne = 0;
+	total = 0;
+	private readonly pk: PointKey;
+
+	constructor(pk: PointKey, nEdges: number) {
+		this.pk = pk;
+		this.edges = new Float64Array(nEdges);
+	}
+
+	/** A mesh's points and faces. */
+	add(m: Mesh): void {
+		const ids = this.points(m);
 		for (let f = 0; f < m.F.length; f += 3) {
 			const va = m.F[f] as number;
 			const vb = m.F[f + 1] as number;
@@ -1821,48 +2089,83 @@ export function check(meshes: Record<string, Mesh>, world: Box): Issue[] {
 			for (let k = 0; k < 3; k++) {
 				const a = g[k] as number;
 				const b = g[(k + 1) % 3] as number;
-				edges[ne++] = a < b ? a * EDGE_KEY + b : b * EDGE_KEY + a;
+				this.edges[this.ne++] = a < b ? a * EDGE_KEY + b : b * EDGE_KEY + a;
 			}
 			const ax = m.P[va * 3] as number;
 			const az = m.P[va * 3 + 2] as number;
-			total +=
+			this.total +=
 				Math.abs(((m.P[vb * 3] as number) - ax) * ((m.P[vc * 3 + 2] as number) - az) - ((m.P[vc * 3] as number) - ax) * ((m.P[vb * 3 + 2] as number) - az)) / 2;
 		}
 	}
-	for (let j = 0; j < lo.length; j++)
-		if ((hi[j] as number) - (lo[j] as number) > 1e-6)
-			issues.push({
-				what: "heights differ",
-				x: X[j] as number,
-				z: Z[j] as number,
-				much: (hi[j] as number) - (lo[j] as number),
-			});
-	const onWorld = (x: number, z: number) =>
-		Math.min(Math.abs(x - world.x0), Math.abs(x - world.x1), Math.abs(z - world.z0), Math.abs(z - world.z1)) < GRID * 10;
-	if (lo.length >= EDGE_KEY) throw new Error(`the proof takes ${EDGE_KEY} points at most: ${lo.length} given`);
-	edges.sort();
-	for (let i = 0; i < edges.length; ) {
-		let j = i + 1;
-		while (j < edges.length && edges[j] === edges[i]) j++;
-		const n = j - i;
-		if (n !== 2) {
-			const e = edges[i] as number;
-			const a = Math.floor(e / EDGE_KEY);
-			const b = e - a * EDGE_KEY;
-			const mx = ((X[a] as number) + (X[b] as number)) / 2;
-			const mz = ((Z[a] as number) + (Z[b] as number)) / 2;
-			if (!(n === 1 && onWorld(mx, mz)))
-				issues.push({
-					what: n === 1 ? "open edge" : `edge of ${n} faces`,
-					x: mx,
-					z: mz,
-					much: Math.hypot((X[a] as number) - (X[b] as number), (Z[a] as number) - (Z[b] as number)),
-				});
+
+	/** A mesh's points' numbers, each point taken in (or its heights widened). */
+	private points(m: Mesh): Int32Array {
+		const ids = new Int32Array(m.P.length / 3);
+		for (let i = 0; i < m.P.length; i += 3) {
+			const x = m.P[i] as number;
+			const y = m.P[i + 1] as number;
+			const z = m.P[i + 2] as number;
+			const k = this.pk(unit(x), unit(z));
+			let j = this.id.get(k);
+			if (j === undefined) {
+				j = this.lo.length;
+				this.id.set(k, j);
+				this.lo.push(y);
+				this.hi.push(y);
+				this.X.push(x);
+				this.Z.push(z);
+			} else {
+				if (y < (this.lo[j] as number)) this.lo[j] = y;
+				if (y > (this.hi[j] as number)) this.hi[j] = y;
+			}
+			ids[i / 3] = j;
 		}
-		i = j;
+		return ids;
 	}
-	const want = (world.x1 - world.x0) * (world.z1 - world.z0);
-	if (Math.abs(total - want) > Math.max(1e-3, want * 1e-6))
-		issues.push({ what: "cover", x: (world.x0 + world.x1) / 2, z: (world.z0 + world.z1) / 2, much: total - want });
-	return issues;
+
+	/** The points of more than one height. */
+	heightIssues(): Issue[] {
+		const issues: Issue[] = [];
+		for (let j = 0; j < this.lo.length; j++)
+			if ((this.hi[j] as number) - (this.lo[j] as number) > 1e-6)
+				issues.push({
+					what: "heights differ",
+					x: this.X[j] as number,
+					z: this.Z[j] as number,
+					much: (this.hi[j] as number) - (this.lo[j] as number),
+				});
+		return issues;
+	}
+
+	/** The edges not of two faces (but those of one on the world's edge), the edges sorted and counted. */
+	edgeIssues(world: Box): Issue[] {
+		const issues: Issue[] = [];
+		const edges = this.edges;
+		edges.sort();
+		for (let i = 0; i < edges.length; ) {
+			let j = i + 1;
+			while (j < edges.length && edges[j] === edges[i]) j++;
+			const issue = this.edgeIssue(edges[i] as number, j - i, world);
+			if (issue) issues.push(issue);
+			i = j;
+		}
+		return issues;
+	}
+
+	/** An edge of n faces, if that is wrong: not two, and not one on the world's edge. */
+	private edgeIssue(e: number, n: number, world: Box): Issue | null {
+		if (n === 2) return null;
+		const a = Math.floor(e / EDGE_KEY);
+		const b = e - a * EDGE_KEY;
+		const mx = ((this.X[a] as number) + (this.X[b] as number)) / 2;
+		const mz = ((this.Z[a] as number) + (this.Z[b] as number)) / 2;
+		const onWorld = Math.min(Math.abs(mx - world.x0), Math.abs(mx - world.x1), Math.abs(mz - world.z0), Math.abs(mz - world.z1)) < GRID * 10;
+		if (n === 1 && onWorld) return null;
+		return {
+			what: n === 1 ? "open edge" : `edge of ${n} faces`,
+			x: mx,
+			z: mz,
+			much: Math.hypot((this.X[a] as number) - (this.X[b] as number), (this.Z[a] as number) - (this.Z[b] as number)),
+		};
+	}
 }

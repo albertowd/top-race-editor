@@ -30,6 +30,7 @@ const ALL_KINDS: readonly ObjectKind[] = [
 	"grid",
 	"pits",
 	"hotlap",
+	"safety_car",
 	"timing",
 	"cones",
 	"boards",
@@ -97,8 +98,8 @@ export const CATEGORIES: Record<Category, CategoryInfo> = {
 		id: "race",
 		label: "Grid, timing & lines",
 		group: "Objects",
-		what: "Each layout’s grid slots, pit boxes, hotlap start, timing gates, start line and racing lines (the fast line, the pit lane); the start gantries.",
-		kinds: ["grid", "pits", "hotlap", "timing", "gantries", "fast", "pit"],
+		what: "Each layout’s grid slots, pit boxes, hotlap start, safety car start (rFactor 2), timing gates, start line and racing lines (the fast line, the pit lane); the start gantries.",
+		kinds: ["grid", "pits", "hotlap", "safety_car", "timing", "gantries", "fast", "pit"],
 		roads: "none",
 		lines: false,
 		kerbs: false,
@@ -163,7 +164,7 @@ export const CATEGORIES: Record<Category, CategoryInfo> = {
 		id: "statics",
 		label: "Static objects",
 		group: "Objects",
-		what: "Things standing as they are that are not buildings (shelters, tables, banners, bins, gates) and parked karts.",
+		what: "Things standing as they are that are not buildings (shelters, tables, banners, bins, gates) and parked cars.",
 		kinds: ["statics", "karts"],
 		roads: "none",
 		lines: false,
@@ -230,8 +231,11 @@ export function countIn(c: Category, roads: readonly Road[], o: TrackObjects | n
 			return sum(roads.map((r) => r.kerbs?.length ?? 0));
 		case "paint":
 			return sum(roads.map((r) => r.lines?.length ?? 0)) + (o?.marks.length ?? 0) + (o?.rubber?.length ?? 0);
-		case "race":
-			return (lay ? lay.grid.length + lay.pits.length + (lay.hotlap ? 1 : 0) + lay.timing.length : 0) + (o ? countOf(o, layout, "gantries") : 0);
+		case "race": {
+			const singles = (lay?.hotlap ? 1 : 0) + (lay?.safety_car ? 1 : 0);
+			const own = lay ? lay.grid.length + lay.pits.length + singles + lay.timing.length : 0;
+			return own + (o ? countOf(o, layout, "gantries") : 0);
+		}
 		case "poles":
 		case "tyres":
 		case "props":

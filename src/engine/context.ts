@@ -3,6 +3,7 @@
 // of themselves), a tyre wall's as a circle a stack. Kept until the models change.
 import type { MaterialLibrary } from "./gltf";
 import { loadKn5 } from "./gltf";
+import type { Kn5 } from "./kn5tree";
 import { meshes, triangles } from "./mesh";
 import type { HostFiles } from "./placehost";
 
@@ -108,9 +109,9 @@ export function chains(edges: [number, number][]): number[][] {
 	return out;
 }
 
-/** A mesh seen from above (its triangles x z, six numbers each): a tyre wall's a circle a stack, else its outline. */
-export function contextItem(name: string, kind: string, material: string, T: number[]): ContextItem | null {
-	// (points closer than WELD one point: the last of them stands for them, as numpy's)
+/** A mesh's triangles (x z, six numbers each) as points P (x z each) and faces F (three points each), points closer than WELD one point: the last of them
+ * stands for them, as numpy's. */
+function welded(T: number[]): { P: number[]; F: number[] } {
 	const ids = new Map<string, number>();
 	const P: number[] = [];
 	const F: number[] = [];
@@ -129,42 +130,46 @@ export function contextItem(name: string, kind: string, material: string, T: num
 		}
 		F.push(j);
 	}
-	const item: ContextItem = { name, kind, material };
-	if (kind === "tyre") {
-		// (each stack: the points its faces join; its middle and its farthest point from it)
-		const parent = Array.from({ length: P.length / 2 }, (_, i) => i);
-		const find = (i: number): number => {
-			while (parent[i] !== i) {
-				parent[i] = parent[parent[i] as number] as number;
-				i = parent[i] as number;
-			}
-			return i;
-		};
-		for (let f = 0; f < F.length; f += 3) {
-			const a = find(F[f] as number);
-			parent[find(F[f + 1] as number)] = a;
-			parent[find(F[f + 2] as number)] = a;
+	return { P, F };
+}
+
+/** A tyre wall's stacks as circles (x, z, radius each): each stack the points its faces join, its middle and its farthest point from it. */
+function tyreRings(P: number[], F: number[]): number[] {
+	const parent = Array.from({ length: P.length / 2 }, (_, i) => i);
+	const find = (i: number): number => {
+		while (parent[i] !== i) {
+			parent[i] = parent[parent[i] as number] as number;
+			i = parent[i] as number;
 		}
-		const groups = new Map<number, number[]>();
-		for (let i = 0; i < P.length / 2; i++) {
-			const g = find(i);
-			const l = groups.get(g);
-			if (l) l.push(i);
-			else groups.set(g, [i]);
-		}
-		const rings: number[] = [];
-		for (const g of [...groups.keys()].sort((a, b) => a - b)) {
-			const pts = groups.get(g) as number[];
-			const xs = pts.map((i) => P[i * 2] as number);
-			const zs = pts.map((i) => P[i * 2 + 1] as number);
-			const mx = (Math.min(...xs) + Math.max(...xs)) / 2;
-			const mz = (Math.min(...zs) + Math.max(...zs)) / 2;
-			const r = Math.max(...pts.map((i) => Math.hypot((P[i * 2] as number) - mx, (P[i * 2 + 1] as number) - mz)));
-			rings.push(r2(mx), r2(mz), r2(r));
-		}
-		item.rings = rings;
-		return item;
+		return i;
+	};
+	for (let f = 0; f < F.length; f += 3) {
+		const a = find(F[f] as number);
+		parent[find(F[f + 1] as number)] = a;
+		parent[find(F[f + 2] as number)] = a;
 	}
+	const groups = new Map<number, number[]>();
+	for (let i = 0; i < P.length / 2; i++) {
+		const g = find(i);
+		const l = groups.get(g);
+		if (l) l.push(i);
+		else groups.set(g, [i]);
+	}
+	const rings: number[] = [];
+	for (const g of [...groups.keys()].sort((a, b) => a - b)) {
+		const pts = groups.get(g) as number[];
+		const xs = pts.map((i) => P[i * 2] as number);
+		const zs = pts.map((i) => P[i * 2 + 1] as number);
+		const mx = (Math.min(...xs) + Math.max(...xs)) / 2;
+		const mz = (Math.min(...zs) + Math.max(...zs)) / 2;
+		const r = Math.max(...pts.map((i) => Math.hypot((P[i * 2] as number) - mx, (P[i * 2 + 1] as number) - mz)));
+		rings.push(r2(mx), r2(mz), r2(r));
+	}
+	return rings;
+}
+
+/** The edges of faces F (three points each) that only one face has: the mesh's outline. */
+function outlineEdges(F: number[]): [number, number][] {
 	const count = new Map<string, number>();
 	for (let f = 0; f < F.length; f += 3)
 		for (let e = 0; e < 3; e++) {
@@ -175,6 +180,18 @@ export function contextItem(name: string, kind: string, material: string, T: num
 		}
 	const edges: [number, number][] = [];
 	for (const [k, n] of count) if (n === 1) edges.push(k.split(",").map(Number) as [number, number]);
+	return edges;
+}
+
+/** A mesh seen from above (its triangles x z, six numbers each): a tyre wall's a circle a stack, else its outline. */
+export function contextItem(name: string, kind: string, material: string, T: number[]): ContextItem | null {
+	const { P, F } = welded(T);
+	const item: ContextItem = { name, kind, material };
+	if (kind === "tyre") {
+		item.rings = tyreRings(P, F);
+		return item;
+	}
+	const edges = outlineEdges(F);
 	if (!edges.length) return null;
 	item.lines = chains(edges)
 		.map((line) => line.flatMap((i) => [P[i * 2] as number, P[i * 2 + 1] as number]))
@@ -185,6 +202,33 @@ export function contextItem(name: string, kind: string, material: string, T: num
 		})
 		.map((L) => simplify(L, SIMPLE).map(r2));
 	return item;
+}
+
+/** A mesh's triangles (x y z, nine numbers each) seen from above (x z, six each): no wall faces. */
+function fromAbove(tris: Float64Array): number[] {
+	const T: number[] = [];
+	for (let t = 0; t < tris.length; t += 9) {
+		const ax = tris[t] as number;
+		const az = tris[t + 2] as number;
+		const bx = tris[t + 3] as number;
+		const bz = tris[t + 5] as number;
+		const cx = tris[t + 6] as number;
+		const cz = tris[t + 8] as number;
+		if (Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2 > 1e-5) T.push(ax, az, bx, bz, cx, cz);
+	}
+	return T;
+}
+
+/** A context model's items (kind each): its meshes with faces whose names start with one of prefixes, seen from above. */
+function modelItems(k: Kn5, prefixes: string[], kind: string): ContextItem[] {
+	const items: ContextItem[] = [];
+	for (const [n, m] of meshes(k)) {
+		if (!n.faces.length || !prefixes.some((p) => n.name.startsWith(p))) continue;
+		const T = fromAbove(triangles(n, m));
+		const it = T.length ? contextItem(n.name, kind, k.materials[n.material]?.name ?? "", T) : null;
+		if (it) items.push(it);
+	}
+	return items;
 }
 
 const cached = new Map<string, { key: string; items: ContextItem[] }>();
@@ -214,29 +258,12 @@ export async function trackContext(
 	const paths = list.map(([f]) => `${models}/${f}`);
 	const key = await keyOf(files, paths);
 	const kept = cached.get(models);
-	if (kept && kept.key === key) return { version: CONTEXT_VERSION, items: kept.items };
+	if (kept?.key === key) return { version: CONTEXT_VERSION, items: kept.items };
 	const items: ContextItem[] = [];
 	for (const [i, [, prefixes, kind]] of list.entries()) {
 		const path = paths[i] as string;
 		if (!(await files.exists(path))) continue;
-		const k = await loadKn5(files, path, library);
-		for (const [n, m] of meshes(k)) {
-			if (!n.faces.length || !prefixes.some((p) => n.name.startsWith(p))) continue;
-			const tris = triangles(n, m);
-			// (seen from above: no wall faces)
-			const T: number[] = [];
-			for (let t = 0; t < tris.length; t += 9) {
-				const ax = tris[t] as number;
-				const az = tris[t + 2] as number;
-				const bx = tris[t + 3] as number;
-				const bz = tris[t + 5] as number;
-				const cx = tris[t + 6] as number;
-				const cz = tris[t + 8] as number;
-				if (Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2 > 1e-5) T.push(ax, az, bx, bz, cx, cz);
-			}
-			const it = T.length ? contextItem(n.name, kind, k.materials[n.material]?.name ?? "", T) : null;
-			if (it) items.push(it);
-		}
+		for (const it of modelItems(await loadKn5(files, path, library), prefixes, kind)) items.push(it);
 	}
 	cached.set(models, { key, items });
 	return { version: CONTEXT_VERSION, items };

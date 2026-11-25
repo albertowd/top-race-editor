@@ -25,6 +25,24 @@ export interface GrassConfig {
 	occluding: string[];
 }
 
+/** A line of an ini with its comment out: from the first ; that no line break follows. */
+function uncommented(l: string): string {
+	const from = Math.max(l.lastIndexOf("\r"), l.lastIndexOf("\u2028"), l.lastIndexOf("\u2029")) + 1;
+	const at = l.indexOf(";", from);
+	return at < 0 ? l : l.slice(0, at);
+}
+
+/** A line of an ini as its key (capitals and _, before its =) and its value (trimmed, all on one line), or null. */
+function keyValue(l: string): [string, string] | null {
+	const t = l.trimStart();
+	const key = /^[A-Z_]+/.exec(t)?.[0];
+	if (!key) return null;
+	const after = t.slice(key.length).trimStart();
+	if (!after.startsWith("=")) return null;
+	const value = after.slice(1).trim();
+	return /[\n\r\u2028\u2029]/.test(value) ? null : [key, value];
+}
+
 /** [GRASS_FX]'s meshes and occluding materials, out an ext_config.ini (none: null). */
 export function grassConfig(ini: string): GrassConfig | null {
 	const lines = ini.split(/\r?\n/);
@@ -34,8 +52,8 @@ export function grassConfig(ini: string): GrassConfig | null {
 	const end = body.findIndex((l) => /^\s*\[/.test(l));
 	const keys = new Map<string, string>();
 	for (const l of end < 0 ? body : body.slice(0, end)) {
-		const m = /^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/.exec(l.replace(/;.*$/, ""));
-		if (m) keys.set(m[1] as string, m[2] as string);
+		const m = keyValue(uncommented(l));
+		if (m) keys.set(m[0], m[1]);
 	}
 	const list = (k: string) =>
 		(keys.get(k) ?? "")
@@ -68,48 +86,72 @@ export function grassAround(
 	// (the highest of what keeps grass off, each cell)
 	const top = new Float32Array(n * n).fill(-Infinity);
 	for (const t of over) rasterise(t.P, x0, z0, n, top);
-	const r = seeded(11);
-	const verts: number[] = [];
-	const faces: number[] = [];
+	const f: Field = { cx, cz, radius, x0, z0, n, top, r: seeded(11), verts: [], faces: [] };
 	let clumps = 0;
 	for (const { tris, colourAt } of ground) {
 		const { P, UV } = tris;
 		if (!UV) continue;
-		for (let i = 0; i + 8 < P.length; i += 9) {
-			const ax = P[i] as number;
-			const az = P[i + 2] as number;
-			const bx = P[i + 3] as number;
-			const bz = P[i + 5] as number;
-			const qx = P[i + 6] as number;
-			const qz = P[i + 8] as number;
-			if (Math.max(ax, bx, qx) < x0 || Math.min(ax, bx, qx) > x0 + 2 * radius) continue;
-			if (Math.max(az, bz, qz) < z0 || Math.min(az, bz, qz) > z0 + 2 * radius) continue;
-			const area = Math.abs((bx - ax) * (qz - az) - (qx - ax) * (bz - az)) / 2;
-			const want = area * density;
-			let k = Math.floor(want) + (r() < want - Math.floor(want) ? 1 : 0);
-			for (; k > 0; k--) {
-				let s = r();
-				let w = r();
-				if (s + w > 1) [s, w] = [1 - s, 1 - w];
-				const at = (o: number) =>
-					(P[i + o] as number) + s * ((P[i + 3 + o] as number) - (P[i + o] as number)) + w * ((P[i + 6 + o] as number) - (P[i + o] as number));
-				const x = at(0);
-				const y = at(1);
-				const z = at(2);
-				if (Math.hypot(x - cx, z - cz) > radius) continue;
-				const cell = Math.floor((x - x0) / CELL) + Math.floor((z - z0) / CELL) * n;
-				if ((top[cell] as number) > y - 0.12) continue;
-				const j = (i / 9) * 6;
-				const u = (UV[j] as number) + s * ((UV[j + 2] as number) - (UV[j] as number)) + w * ((UV[j + 4] as number) - (UV[j] as number));
-				const v = (UV[j + 1] as number) + s * ((UV[j + 3] as number) - (UV[j + 1] as number)) + w * ((UV[j + 5] as number) - (UV[j + 1] as number));
-				const c = colourAt(u, v);
-				if (!isGreen(c)) continue;
-				clump(verts, faces, [x, y, z], c, r);
-				clumps++;
-			}
-		}
+		for (let i = 0; i + 8 < P.length; i += 9) clumps += growOn(f, P, UV, i, density, colourAt);
 	}
-	return { verts: new Float32Array(verts), faces: new Uint32Array(faces), clumps };
+	return { verts: new Float32Array(f.verts), faces: new Uint32Array(f.faces), clumps };
+}
+
+/** Where grass grows round a centre: the centre and the radius, the square's corner and its cells a side, the highest of what lies over each cell, the random
+ * draws, and the clumps' vertices and faces so far. */
+interface Field {
+	cx: number;
+	cz: number;
+	radius: number;
+	x0: number;
+	z0: number;
+	n: number;
+	top: Float32Array;
+	r: () => number;
+	verts: number[];
+	faces: number[];
+}
+
+/** The clumps on a ground's triangle (at i in P, its uv at i / 9 * 6 in UV): as many as its area at density, by chance, of those the ones that grow; how many
+ * did (none off the square round the centre). */
+function growOn(f: Field, P: Float32Array, UV: Float32Array, i: number, density: number, colourAt: (u: number, v: number) => V3): number {
+	const { x0, z0, radius, r } = f;
+	const ax = P[i] as number;
+	const az = P[i + 2] as number;
+	const bx = P[i + 3] as number;
+	const bz = P[i + 5] as number;
+	const qx = P[i + 6] as number;
+	const qz = P[i + 8] as number;
+	if (Math.max(ax, bx, qx) < x0 || Math.min(ax, bx, qx) > x0 + 2 * radius) return 0;
+	if (Math.max(az, bz, qz) < z0 || Math.min(az, bz, qz) > z0 + 2 * radius) return 0;
+	const area = Math.abs((bx - ax) * (qz - az) - (qx - ax) * (bz - az)) / 2;
+	const want = area * density;
+	let k = Math.floor(want) + (r() < want - Math.floor(want) ? 1 : 0);
+	let grown = 0;
+	for (; k > 0; k--) if (clumpOn(f, P, UV, i, colourAt)) grown++;
+	return grown;
+}
+
+/** A clump at a point at random on a ground's triangle, where it grows: within the radius, nothing over it, the ground green there. Whether it grew. */
+function clumpOn(f: Field, P: Float32Array, UV: Float32Array, i: number, colourAt: (u: number, v: number) => V3): boolean {
+	const { cx, cz, radius, x0, z0, n, top, r } = f;
+	let s = r();
+	let w = r();
+	if (s + w > 1) [s, w] = [1 - s, 1 - w];
+	const at = (o: number) =>
+		(P[i + o] as number) + s * ((P[i + 3 + o] as number) - (P[i + o] as number)) + w * ((P[i + 6 + o] as number) - (P[i + o] as number));
+	const x = at(0);
+	const y = at(1);
+	const z = at(2);
+	if (Math.hypot(x - cx, z - cz) > radius) return false;
+	const cell = Math.floor((x - x0) / CELL) + Math.floor((z - z0) / CELL) * n;
+	if ((top[cell] as number) > y - 0.12) return false;
+	const j = (i / 9) * 6;
+	const u = (UV[j] as number) + s * ((UV[j + 2] as number) - (UV[j] as number)) + w * ((UV[j + 4] as number) - (UV[j] as number));
+	const v = (UV[j + 1] as number) + s * ((UV[j + 3] as number) - (UV[j + 1] as number)) + w * ((UV[j + 5] as number) - (UV[j + 1] as number));
+	const c = colourAt(u, v);
+	if (!isGreen(c)) return false;
+	clump(f.verts, f.faces, [x, y, z], c, r);
+	return true;
 }
 
 /** A clump's two quads (the texture's v down from its top, as a kn5's). */
@@ -138,37 +180,40 @@ function clump(verts: number[], faces: number[], p: V3, c: V3, r: () => number):
 
 /** The highest point of each cell a triangle covers (its centre inside it), into top. */
 function rasterise(P: Float32Array, x0: number, z0: number, n: number, top: Float32Array): void {
-	for (let i = 0; i + 8 < P.length; i += 9) {
-		const ax = P[i] as number;
-		const ay = P[i + 1] as number;
-		const az = P[i + 2] as number;
-		const bx = P[i + 3] as number;
-		const by = P[i + 4] as number;
-		const bz = P[i + 5] as number;
-		const qx = P[i + 6] as number;
-		const qy = P[i + 7] as number;
-		const qz = P[i + 8] as number;
-		const i0 = Math.max(0, Math.floor((Math.min(ax, bx, qx) - x0) / CELL));
-		const i1 = Math.min(n - 1, Math.floor((Math.max(ax, bx, qx) - x0) / CELL));
-		const k0 = Math.max(0, Math.floor((Math.min(az, bz, qz) - z0) / CELL));
-		const k1 = Math.min(n - 1, Math.floor((Math.max(az, bz, qz) - z0) / CELL));
-		if (i0 > i1 || k0 > k1) continue;
-		const d = (bz - qz) * (ax - qx) + (qx - bx) * (az - qz);
-		// (on edge from above, a wall's: covering nothing)
-		if (Math.abs(d) < 1e-6) continue;
-		// (a cell its centre within half a cell of it: no seam of grass between two triangles)
-		const e = -0.5 * (CELL / Math.max(Math.sqrt(Math.abs(d)), CELL));
-		for (let k = k0; k <= k1; k++)
-			for (let j = i0; j <= i1; j++) {
-				const x = x0 + (j + 0.5) * CELL;
-				const z = z0 + (k + 0.5) * CELL;
-				const l1 = ((bz - qz) * (x - qx) + (qx - bx) * (z - qz)) / d;
-				const l2 = ((qz - az) * (x - qx) + (ax - qx) * (z - qz)) / d;
-				const l3 = 1 - l1 - l2;
-				if (l1 < e || l2 < e || l3 < e) continue;
-				const y = l1 * ay + l2 * by + l3 * qy;
-				const c = j + k * n;
-				if (y > (top[c] as number)) top[c] = y;
-			}
-	}
+	for (let i = 0; i + 8 < P.length; i += 9) rasteriseOne(P, i, x0, z0, n, top);
+}
+
+/** The highest point of each cell one triangle (at i in P) covers, into top. */
+function rasteriseOne(P: Float32Array, i: number, x0: number, z0: number, n: number, top: Float32Array): void {
+	const ax = P[i] as number;
+	const ay = P[i + 1] as number;
+	const az = P[i + 2] as number;
+	const bx = P[i + 3] as number;
+	const by = P[i + 4] as number;
+	const bz = P[i + 5] as number;
+	const qx = P[i + 6] as number;
+	const qy = P[i + 7] as number;
+	const qz = P[i + 8] as number;
+	const i0 = Math.max(0, Math.floor((Math.min(ax, bx, qx) - x0) / CELL));
+	const i1 = Math.min(n - 1, Math.floor((Math.max(ax, bx, qx) - x0) / CELL));
+	const k0 = Math.max(0, Math.floor((Math.min(az, bz, qz) - z0) / CELL));
+	const k1 = Math.min(n - 1, Math.floor((Math.max(az, bz, qz) - z0) / CELL));
+	if (i0 > i1 || k0 > k1) return;
+	const d = (bz - qz) * (ax - qx) + (qx - bx) * (az - qz);
+	// (on edge from above, a wall's: covering nothing)
+	if (Math.abs(d) < 1e-6) return;
+	// (a cell its centre within half a cell of it: no seam of grass between two triangles)
+	const e = -0.5 * (CELL / Math.max(Math.sqrt(Math.abs(d)), CELL));
+	for (let k = k0; k <= k1; k++)
+		for (let j = i0; j <= i1; j++) {
+			const x = x0 + (j + 0.5) * CELL;
+			const z = z0 + (k + 0.5) * CELL;
+			const l1 = ((bz - qz) * (x - qx) + (qx - bx) * (z - qz)) / d;
+			const l2 = ((qz - az) * (x - qx) + (ax - qx) * (z - qz)) / d;
+			const l3 = 1 - l1 - l2;
+			if (l1 < e || l2 < e || l3 < e) continue;
+			const y = l1 * ay + l2 * by + l3 * qy;
+			const c = j + k * n;
+			if (y > (top[c] as number)) top[c] = y;
+		}
 }

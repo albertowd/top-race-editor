@@ -56,7 +56,7 @@ describe("the track’s parts in the track file", () => {
 		const text = readFileSync(at("tools/reference/track.json"), "utf-8");
 		expect(text).toContain('"satellite_span": 1060.0');
 		expect(text).toContain("\n    1.50\r\n");
-		expect(readdirSync(backups()).filter((f) => f.startsWith("track-")).length).toBe(1);
+		expect(readdirSync(backups()).filter((f) => f.startsWith("track-"))).toHaveLength(1);
 	});
 
 	it("keeps two saves at once", async () => {
@@ -68,7 +68,7 @@ describe("the track’s parts in the track file", () => {
 		]);
 		const t = track();
 		expect((plain(t.roads as never) as { name: string }[]).map((r) => r.name)).toEqual(["1ROAD_3", "1ROAD_1"]);
-		expect((plain(t.trees as never) as unknown[]).length).toBe(1);
+		expect(plain(t.trees as never) as unknown[]).toHaveLength(1);
 		expect(plain(t.objects as never)).toEqual({ layouts: {}, objects: [], marks: [] });
 	});
 

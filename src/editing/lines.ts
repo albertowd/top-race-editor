@@ -46,7 +46,7 @@ export function along(line: RacingLine, x: number, z: number): { s: number; d: n
 export function forkAndMerge(lines: RacingLines | undefined): { fork: Vec2; merge: Vec2 } | null {
 	const fast = lines?.fast;
 	const pit = lines?.pit;
-	if (!fast || fast.curve.length < 3 || !pit || pit.leaves == null || pit.joins == null) return null;
+	if (!fast || fast.curve.length < 3 || pit?.leaves == null || pit.joins == null) return null;
 	return { fork: pointAlong(fast, pit.leaves).p, merge: pointAlong(fast, pit.joins).p };
 }
 
@@ -63,7 +63,7 @@ export function lineFromRoads(paths: { X: number[]; Z: number[] }[], closed: boo
 		const first = pts[0] as Vec2;
 		const last = pts.at(-1) as Vec2;
 		const next = paths[i + 1];
-		if (!P.length && next && next.X.length) {
+		if (!P.length && next?.X.length) {
 			// (the first road: its end the one nearer the next road's ends)
 			const ends: Vec2[] = [
 				[next.X[0] as number, next.Z[0] as number],
@@ -112,7 +112,7 @@ export function keepPitOn(lines: RacingLines | undefined): void {
 	const a = pointAlong(fast, pit.leaves);
 	const b = pointAlong(fast, pit.joins);
 	const first = pit.curve[0] as WallNode;
-	const last = pit.curve[pit.curve.length - 1] as WallNode;
+	const last = pit.curve.at(-1) as WallNode;
 	first.p = a.p;
 	first.in = [0, 0];
 	if (Math.hypot(first.out[0], first.out[1]) < 1e-6) first.out = [a.t[0] * END_HANDLE, a.t[1] * END_HANDLE];

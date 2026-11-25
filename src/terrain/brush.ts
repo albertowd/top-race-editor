@@ -109,41 +109,62 @@ function boxBlur(v: Float64Array, w: number, h: number, k: number): Float64Array
 	return pass(pass(v, true), false);
 }
 
+/** The middle of a raster's column i, in metres. */
+const cellX = (r: Raster, i: number) => r.x0 + i * r.cell;
+/** The middle of a raster's row j, in metres. */
+const cellZ = (r: Raster, j: number) => r.z0 + j * r.cell;
+
+/** A dab raising (or lowering) the ground by metres at its middle, less out to its reach. */
+function raiseDab(r: Raster, x: number, z: number, radius: number, by: number, { i0, i1, j0, j1 }: CellBox): void {
+	for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) r.v[j * r.nx + i] += by * falloff(Math.hypot(cellX(r, i) - x, cellZ(r, j) - z), radius);
+}
+
+/** A dab bringing the ground its share of the way to the brush's height. */
+function flattenDab(r: Raster, x: number, z: number, b: Brush, share: number, { i0, i1, j0, j1 }: CellBox, height: (x: number, z: number) => number): void {
+	for (let j = j0; j <= j1; j++)
+		for (let i = i0; i <= i1; i++) {
+			const f = falloff(Math.hypot(cellX(r, i) - x, cellZ(r, j) - z), b.radius);
+			if (f > 0) r.v[j * r.nx + i] += (b.target - height(cellX(r, i), cellZ(r, j))) * share * f;
+		}
+}
+
+/** A dab bringing the ground its share of the way to the mean of the ground within half the brush's reach, worked out on a patch that far wider. */
+function smoothDab(
+	r: Raster,
+	x: number,
+	z: number,
+	radius: number,
+	share: number,
+	{ i0, i1, j0, j1 }: CellBox,
+	height: (x: number, z: number) => number,
+): void {
+	const k = Math.max(1, Math.round(radius / 2 / r.cell));
+	const w = i1 - i0 + 1 + 2 * k;
+	const h = j1 - j0 + 1 + 2 * k;
+	const y = new Float64Array(w * h);
+	for (let q = 0; q < h; q++) for (let p = 0; p < w; p++) y[q * w + p] = height(cellX(r, i0 - k + p), cellZ(r, j0 - k + q));
+	const mean = boxBlur(y, w, h, k);
+	for (let j = j0; j <= j1; j++)
+		for (let i = i0; i <= i1; i++) {
+			const f = falloff(Math.hypot(cellX(r, i) - x, cellZ(r, j) - z), radius);
+			const at = (j - j0 + k) * w + (i - i0 + k);
+			if (f > 0) r.v[j * r.nx + i] += (mean[at] - y[at]) * share * f;
+		}
+}
+
 /** One dab at (x, z), painted into the raster (it must cover the dab: see covering); height(x, z) is the ground as it is now. The cells it changed. */
 export function dab(r: Raster, x: number, z: number, b: Brush, height: (x: number, z: number) => number): CellBox | null {
 	const box = cellsNear(r, x, z, b.radius);
 	if (!box) return null;
-	const { i0, i1, j0, j1 } = box;
-	const cx = (i: number) => r.x0 + i * r.cell;
-	const cz = (j: number) => r.z0 + j * r.cell;
 	const s = Math.min(1, Math.max(0, b.strength));
 	if (b.mode === "raise" || b.mode === "lower") {
-		const by = (b.mode === "raise" ? 1 : -1) * RAISE_A_DAB * s;
-		for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) r.v[j * r.nx + i] += by * falloff(Math.hypot(cx(i) - x, cz(j) - z), b.radius);
+		raiseDab(r, x, z, b.radius, (b.mode === "raise" ? 1 : -1) * RAISE_A_DAB * s, box);
 		return box;
 	}
 	const share = SHARE_A_DAB * s;
-	if (b.mode === "flatten") {
-		for (let j = j0; j <= j1; j++)
-			for (let i = i0; i <= i1; i++) {
-				const f = falloff(Math.hypot(cx(i) - x, cz(j) - z), b.radius);
-				if (f > 0) r.v[j * r.nx + i] += (b.target - height(cx(i), cz(j))) * share * f;
-			}
-		return box;
-	}
+	if (b.mode === "flatten") flattenDab(r, x, z, b, share, box, height);
 	// (smooth: towards the mean of the ground within half the brush's reach, worked out on a patch that far wider)
-	const k = Math.max(1, Math.round(b.radius / 2 / r.cell));
-	const w = i1 - i0 + 1 + 2 * k;
-	const h = j1 - j0 + 1 + 2 * k;
-	const y = new Float64Array(w * h);
-	for (let q = 0; q < h; q++) for (let p = 0; p < w; p++) y[q * w + p] = height(cx(i0 - k + p), cz(j0 - k + q));
-	const mean = boxBlur(y, w, h, k);
-	for (let j = j0; j <= j1; j++)
-		for (let i = i0; i <= i1; i++) {
-			const f = falloff(Math.hypot(cx(i) - x, cz(j) - z), b.radius);
-			const at = (j - j0 + k) * w + (i - i0 + k);
-			if (f > 0) r.v[j * r.nx + i] += (mean[at] - y[at]) * share * f;
-		}
+	else smoothDab(r, x, z, b.radius, share, box, height);
 	return box;
 }
 

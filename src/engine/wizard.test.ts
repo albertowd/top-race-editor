@@ -280,7 +280,7 @@ describe("the providers", () => {
 			],
 			20,
 		);
-		expect(x.length).toBe(25);
+		expect(x).toHaveLength(25);
 		let [h, res] = await heights(PROVIDERS.terrarium as never, "", PLACE, x, z, host);
 		expect(h.every((v) => Math.abs(v - 123.5) < 0.01) && (res[0] as number) > 0).toBe(true);
 		[h, res] = await heights(PROVIDERS["google-elevation"] as never, "k", PLACE, x, z, host);

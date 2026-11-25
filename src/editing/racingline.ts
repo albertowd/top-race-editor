@@ -30,35 +30,8 @@ const drivable = (k: Road["kerbs"] extends (infer K)[] | undefined ? K : never) 
 function corridor(p: Vec2, n: Vec2, roads: readonly Road[], find: Lookup, keep: number): [number, number] {
 	const spans: [number, number][] = [];
 	for (const road of roads) {
-		if (road.along) continue;
-		const o = geo(road, find);
-		if (!o || !inBox(o.box, p[0], p[1], REACH)) continue;
-		const near = nearestOn(o, p[0], p[1]);
-		if (near.i === 0 || near.i === o.X.length - 1) {
-			// (past an end of it: not this road's, unless right at it)
-			const q0 = pointAt(o, near.s);
-			if (Math.hypot(q0.x - p[0], q0.z - p[1]) > Math.max(q0.l, q0.r) + 1) continue;
-		}
-		const q = pointAt(o, near.s);
-		// (the road's left as the line's: the same way or the other)
-		const same = q.nx * n[0] + q.nz * n[1] >= 0 ? 1 : -1;
-		const c = (q.x - p[0]) * n[0] + (q.z - p[1]) * n[1];
-		// (its low ramps where they are at s: each side's widened by the ramp's width)
-		let extraL = 0;
-		let extraR = 0;
-		for (const k of road.kerbs ?? []) {
-			if (!drivable(k)) continue;
-			const [s0, s1] = span(o, k.from, k.to);
-			if (near.s < s0 || near.s > s1) continue;
-			const w = Math.max(0, (k.width ?? KERB_WIDTH) - (k.inset ?? 0));
-			if (k.side === "left") extraL = Math.max(extraL, w);
-			else extraR = Math.max(extraR, w);
-		}
-		const left = q.l + extraL;
-		const right = q.r + extraR;
-		const a = same > 0 ? c - right : c - left;
-		const b = same > 0 ? c + left : c + right;
-		if (a <= 0.5 && b >= -0.5) spans.push([a, b]);
+		const sp = roadSpan(road, p, n, find);
+		if (sp) spans.push(sp);
 	}
 	if (!spans.length) return [0, 0];
 	// (the spans joined where they meet, the one round the line kept)
@@ -71,6 +44,45 @@ function corridor(p: Vec2, n: Vec2, roads: readonly Road[], find: Lookup, keep: 
 	lo += keep;
 	hi -= keep;
 	return lo <= hi ? [lo, hi] : [(lo + hi) / 2, (lo + hi) / 2];
+}
+
+/** A road's span across the line at a point (p, its left n), from lo to hi metres to its left, widened by its low ramps there; none where the road is off the
+ * point (a run-off, too far, past an end of it unless right at it) or does not reach across it. */
+function roadSpan(road: Road, p: Vec2, n: Vec2, find: Lookup): [number, number] | null {
+	if (road.along) return null;
+	const o = geo(road, find);
+	if (!o || !inBox(o.box, p[0], p[1], REACH)) return null;
+	const near = nearestOn(o, p[0], p[1]);
+	if (near.i === 0 || near.i === o.X.length - 1) {
+		// (past an end of it: not this road's, unless right at it)
+		const q0 = pointAt(o, near.s);
+		if (Math.hypot(q0.x - p[0], q0.z - p[1]) > Math.max(q0.l, q0.r) + 1) return null;
+	}
+	const q = pointAt(o, near.s);
+	// (the road's left as the line's: the same way or the other)
+	const same = q.nx * n[0] + q.nz * n[1] >= 0 ? 1 : -1;
+	const c = (q.x - p[0]) * n[0] + (q.z - p[1]) * n[1];
+	const [extraL, extraR] = rampsAt(road, o, near.s);
+	const left = q.l + extraL;
+	const right = q.r + extraR;
+	const a = same > 0 ? c - right : c - left;
+	const b = same > 0 ? c + left : c + right;
+	return a <= 0.5 && b >= -0.5 ? [a, b] : null;
+}
+
+/** How far a road's low ramps widen its left and right sides where they are at s (metres along it): the widest ramp's width each side. */
+function rampsAt(road: Road, o: NonNullable<ReturnType<typeof geo>>, s: number): [number, number] {
+	let extraL = 0;
+	let extraR = 0;
+	for (const k of road.kerbs ?? []) {
+		if (!drivable(k)) continue;
+		const [s0, s1] = span(o, k.from, k.to);
+		if (s < s0 || s > s1) continue;
+		const w = Math.max(0, (k.width ?? KERB_WIDTH) - (k.inset ?? 0));
+		if (k.side === "left") extraL = Math.max(extraL, w);
+		else extraR = Math.max(extraR, w);
+	}
+	return [extraL, extraR];
 }
 
 /** Points along a closed or open run of points, step metres apart (the first kept; a closed one round to it). */

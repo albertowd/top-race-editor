@@ -19,8 +19,8 @@ export interface Pooled {
 /** A quick hash of a picture's bytes (FNV-1a, with its length): pictures of the same hash are compared whole. */
 function hashOf(d: Uint8Array): string {
 	let h = 0x811c9dc5;
-	for (let i = 0; i < d.length; i++) {
-		h ^= d[i] as number;
+	for (const v of d) {
+		h ^= v;
 		h = Math.imul(h, 0x01000193);
 	}
 	return `${(h >>> 0).toString(16)}:${d.length}`;
@@ -28,12 +28,8 @@ function hashOf(d: Uint8Array): string {
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-/** The models' pictures into shared (by its name in models), once (see the module's note). Changes the models. */
-export function poolTextures(models: Map<string, Kn5>, shared: string): Pooled {
-	const first = models.get(shared);
-	if (!first) return { pooled: 0, moved: 0, renamed: 0, clashes: [] };
-	// (the shared model's first, then the rest in their order: a picture's name is the first one it had)
-	const order = [shared, ...[...models.keys()].filter((s) => s !== shared)];
+/** Each picture's name to the picture it first names (the models in order), and the names two models give different pictures. */
+function firstByName(models: Map<string, Kn5>, order: string[]) {
 	const byName = new Map<string, Kn5Texture>();
 	const clashes = new Set<string>();
 	for (const s of order)
@@ -42,7 +38,11 @@ export function poolTextures(models: Map<string, Kn5>, shared: string): Pooled {
 			if (!had) byName.set(t.name, t);
 			else if (!sameBytes(had.data, t.data)) clashes.add(t.name);
 		}
-	// (one picture under several names: the first name it had)
+	return { byName, clashes };
+}
+
+/** One picture under several names: each name but the first it had, to that first. */
+function keptNames(byName: Map<string, Kn5Texture>, clashes: Set<string>): Map<string, string> {
 	const keptName = new Map<string, string>();
 	const byHash = new Map<string, Kn5Texture[]>();
 	for (const [name, t] of byName) {
@@ -55,24 +55,25 @@ export function poolTextures(models: Map<string, Kn5>, shared: string): Pooled {
 			byHash.set(hashOf(t.data), list);
 		}
 	}
+	return keptName;
+}
+
+/** A model's material slots renamed to the names kept: how many. */
+function renameSlots(k: Kn5, keptName: Map<string, string>): number {
 	let renamed = 0;
-	let moved = 0;
-	for (const s of order) {
-		const k = models.get(s) as Kn5;
-		for (const m of k.materials)
-			for (const slot of m.textures) {
-				const to = keptName.get(slot.name);
-				if (to) {
-					slot.name = to;
-					renamed++;
-				}
+	for (const m of k.materials)
+		for (const slot of m.textures) {
+			const to = keptName.get(slot.name);
+			if (to) {
+				slot.name = to;
+				renamed++;
 			}
-		if (s === shared) continue;
-		const before = k.textures.length;
-		k.textures = k.textures.filter((t) => clashes.has(t.name));
-		moved += before - k.textures.length;
-	}
-	// (the shared model: every picture once, its own first, a clash's as it had it)
+		}
+	return renamed;
+}
+
+/** The shared model's pictures: every picture once, its own first, a clash's as it had it. */
+function sharedPool(first: Kn5, byName: Map<string, Kn5Texture>, keptName: Map<string, string>, clashes: Set<string>): Kn5Texture[] {
 	const pool: Kn5Texture[] = [];
 	const have = new Set<string>();
 	for (const t of first.textures)
@@ -85,6 +86,28 @@ export function poolTextures(models: Map<string, Kn5>, shared: string): Pooled {
 			pool.push(t);
 			have.add(name);
 		}
+	return pool;
+}
+
+/** The models' pictures into shared (by its name in models), once (see the module's note). Changes the models. */
+export function poolTextures(models: Map<string, Kn5>, shared: string): Pooled {
+	const first = models.get(shared);
+	if (!first) return { pooled: 0, moved: 0, renamed: 0, clashes: [] };
+	// (the shared model's first, then the rest in their order: a picture's name is the first one it had)
+	const order = [shared, ...[...models.keys()].filter((s) => s !== shared)];
+	const { byName, clashes } = firstByName(models, order);
+	const keptName = keptNames(byName, clashes);
+	let renamed = 0;
+	let moved = 0;
+	for (const s of order) {
+		const k = models.get(s) as Kn5;
+		renamed += renameSlots(k, keptName);
+		if (s === shared) continue;
+		const before = k.textures.length;
+		k.textures = k.textures.filter((t) => clashes.has(t.name));
+		moved += before - k.textures.length;
+	}
+	const pool = sharedPool(first, byName, keptName, clashes);
 	first.textures = pool;
 	return { pooled: pool.length, moved, renamed, clashes: [...clashes] };
 }

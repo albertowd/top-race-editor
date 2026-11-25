@@ -3,6 +3,9 @@
 import { crc32, deflate } from "../bin";
 import { readPng } from "../dds";
 
+/** The PNG colour type of each channel count: grey, RGB, RGBA. */
+const COLOUR_TYPE: Record<1 | 3 | 4, number> = { 1: 0, 3: 2, 4: 6 };
+
 /** An 8-bit PNG: rows of width pixels of channels bytes (1 grey, 3 RGB, 4 RGBA), row after row. */
 export async function writePng(data: Uint8Array, width: number, height: number, channels: 1 | 3 | 4): Promise<Uint8Array> {
 	const stride = width * channels;
@@ -24,7 +27,7 @@ export async function writePng(data: Uint8Array, width: number, height: number, 
 	hv.setUint32(0, width);
 	hv.setUint32(4, height);
 	head[8] = 8;
-	head[9] = channels === 1 ? 0 : channels === 3 ? 2 : 6;
+	head[9] = COLOUR_TYPE[channels];
 	const parts = [
 		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
 		chunk("IHDR", head),

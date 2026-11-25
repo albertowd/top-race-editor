@@ -7,7 +7,6 @@ import initGeosJs from "geos-wasm";
 import type { Poly, Pt } from "./merge";
 
 type Geos = Awaited<ReturnType<typeof initGeosJs>>;
-type G = number;
 
 let geos: Geos | null = null;
 let loading: Promise<Geos> | null = null;
@@ -38,7 +37,7 @@ const area2 = (r: Pt[]) => {
 };
 
 /** A ring as GEOS's (closed). */
-function ringOf(g: Geos, r: Pt[]): G {
+function ringOf(g: Geos, r: Pt[]): number {
 	const n = r.length + 1;
 	const buf = g.Module._malloc(n * 16);
 	const f = new Float64Array(g.Module.HEAPF64.buffer, buf, n * 2);
@@ -54,8 +53,8 @@ function ringOf(g: Geos, r: Pt[]): G {
 }
 
 /** Polygons as one GEOS geometry (a collection of them), each first through fix where given (made valid). */
-function geomOf(g: Geos, polys: Poly[], fix?: (p: G) => G): G {
-	const parts: G[] = [];
+function geomOf(g: Geos, polys: Poly[], fix?: (p: number) => number): number {
+	const parts: number[] = [];
 	for (const p of polys) {
 		if (p.outer.length < 3) continue;
 		const shell = ringOf(g, p.outer);
@@ -85,7 +84,7 @@ function geomOf(g: Geos, polys: Poly[], fix?: (p: G) => G): G {
 }
 
 /** A GEOS ring's points (its last, the first again, left out): on the grid (whole numbers), or as they are. */
-function pointsOf(g: Geos, ring: G, round = true): Pt[] {
+function pointsOf(g: Geos, ring: number, round = true): Pt[] {
 	const seq = g.GEOSGeom_getCoordSeq(ring);
 	const sp = g.Module._malloc(4);
 	g.GEOSCoordSeq_getSize(seq, sp);
@@ -102,22 +101,27 @@ function pointsOf(g: Geos, ring: G, round = true): Pt[] {
 	return out;
 }
 
+/** A GEOS polygon's holes, clockwise (on the grid, or as they are), those with no area left out. */
+function holesOf(g: Geos, geom: number, round: boolean): Pt[][] {
+	const holes: Pt[][] = [];
+	const nh = g.GEOSGetNumInteriorRings(geom);
+	for (let i = 0; i < nh; i++) {
+		const h = pointsOf(g, g.GEOSGetInteriorRingN(geom, i), round);
+		if (h.length < 3 || area2(h) === 0) continue;
+		if (area2(h) > 0) h.reverse();
+		holes.push(h);
+	}
+	return holes;
+}
+
 /** A GEOS geometry's polygons: outer rings anticlockwise, holes clockwise (on the grid, or as they are). */
-function polysOfGeom(g: Geos, geom: G, out: Poly[] = [], round = true): Poly[] {
+function polysOfGeom(g: Geos, geom: number, out: Poly[] = [], round = true): Poly[] {
 	const type = g.GEOSGeomTypeId(geom);
 	if (type === 3) {
 		const outer = pointsOf(g, g.GEOSGetExteriorRing(geom), round);
 		if (outer.length < 3 || area2(outer) === 0) return out;
 		if (area2(outer) < 0) outer.reverse();
-		const holes: Pt[][] = [];
-		const nh = g.GEOSGetNumInteriorRings(geom);
-		for (let i = 0; i < nh; i++) {
-			const h = pointsOf(g, g.GEOSGetInteriorRingN(geom, i), round);
-			if (h.length < 3 || area2(h) === 0) continue;
-			if (area2(h) > 0) h.reverse();
-			holes.push(h);
-		}
-		out.push({ outer, holes });
+		out.push({ outer, holes: holesOf(g, geom, round) });
 	} else if (type === 6 || type === 7) {
 		const n = g.GEOSGetNumGeometries(geom);
 		for (let i = 0; i < n; i++) polysOfGeom(g, g.GEOSGetGeometryN(geom, i), out, round);
@@ -127,11 +131,18 @@ function polysOfGeom(g: Geos, geom: G, out: Poly[] = [], round = true): Poly[] {
 
 export type GeosOp = "union" | "intersection" | "difference";
 
+/** a with b by op, a new GEOS geometry (or none where it failed) */
+function binaryOp(g: Geos, op: GeosOp, a: number, b: number): number {
+	if (op === "union") return g.GEOSUnion(a, b);
+	if (op === "intersection") return g.GEOSIntersection(a, b);
+	return g.GEOSDifference(a, b);
+}
+
 /** a, made one, then with b (made one) by op; on the grid (whole numbers), as polygons. */
 export function geosOp(op: GeosOp, a: Poly[], b: Poly[] | null = null): Poly[] {
 	const g = ready();
-	const made: G[] = [];
-	const keep = (x: G) => {
+	const made: number[] = [];
+	const keep = (x: number) => {
 		if (!x) throw new Error(`GEOS: the ${op} failed`);
 		made.push(x);
 		return x;
@@ -141,11 +152,11 @@ export function geosOp(op: GeosOp, a: Poly[], b: Poly[] | null = null): Poly[] {
 		// round, none); then all made one)
 		const one = (ps: Poly[]) => keep(g.GEOSUnaryUnion(keep(geomOf(g, ps, (p) => g.GEOSBuffer(p, 0, 8)))));
 		const A = one(a);
-		let R: G;
+		let R: number;
 		if (b === null) R = A;
 		else {
 			const B = one(b);
-			R = keep(op === "union" ? g.GEOSUnion(A, B) : op === "intersection" ? g.GEOSIntersection(A, B) : g.GEOSDifference(A, B));
+			R = keep(binaryOp(g, op, A, B));
 		}
 		// (then on the grid, as the Python's set_precision(GRID) puts it: whole numbers, valid, what is thinner than the grid (a channel a unit wide between two
 		// edges almost meeting) collapsed)
@@ -198,7 +209,7 @@ export interface PaintShape {
 type Box4 = [number, number, number, number];
 
 /** A line as GEOS's (closed: its first point again at its end, a ring: GEOS widens it both sides, no ends). */
-function lineOf(g: Geos, pts: Pt[], closed: boolean): G {
+function lineOf(g: Geos, pts: Pt[], closed: boolean): number {
 	const all = closed ? [...pts, pts[0] as Pt] : pts;
 	const buf = g.Module._malloc(all.length * 16);
 	const f = new Float64Array(g.Module.HEAPF64.buffer, buf, all.length * 2);
@@ -212,7 +223,7 @@ function lineOf(g: Geos, pts: Pt[], closed: boolean): G {
 }
 
 /** Geometries as one GEOS collection (it owns them after). */
-function collectionOf(g: Geos, parts: G[]): G {
+function collectionOf(g: Geos, parts: number[]): number {
 	const ptr = g.Module._malloc(Math.max(1, parts.length) * 4);
 	parts.forEach((p, i) => {
 		g.Module.HEAP32[(ptr >> 2) + i] = p;
@@ -237,143 +248,180 @@ function strokeBox(st: PaintStroke): Box4 {
 
 const boxesMeet = (a: Box4, b: Box4) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
 
+/** What a geometry made is handed to: kept to be let go at the end (none made: the step named failed). */
+type Keep = (x: number, what: string) => number;
+
+/** A stroke's paint: its lines widened and made one, then (where it meets paint of another kind end to end) only its side of each seam; none: null. */
+function strokePaint(g: Geos, st: PaintStroke, keep: Keep): number | null {
+	const parts: number[] = [];
+	for (const l of st.lines) {
+		if (l.points.length < 2) continue;
+		const line = lineOf(g, l.points, l.closed && l.points.length > 2);
+		const wide = g.GEOSBufferWithStyle(line, st.half, 8, 2, 2, MITRE_LIMIT);
+		g.GEOSGeom_destroy(line);
+		if (wide) parts.push(wide);
+	}
+	let one = parts.length ? keep(g.GEOSUnaryUnion(keep(collectionOf(g, parts), "collection")), "union") : null;
+	for (const cut of st.cuts ?? []) {
+		if (!one) break;
+		const off = keep(g.GEOSGeom_createPolygon(ringOf(g, cut), 0, 0), "seam");
+		one = keep(g.GEOSDifference(one, off), "seam");
+		if (g.GEOSisEmpty(one) === 1) one = null;
+	}
+	return one;
+}
+
+/** Each stroke's paint under a later stroke of another colour cut away (none left: null). */
+function cutUnder(g: Geos, geo: (number | null)[], colour: (i: number) => string, meets: (a: number, b: number) => boolean, keep: Keep): void {
+	for (let a = 0; a < geo.length; a++)
+		for (let b = a + 1; b < geo.length && geo[a]; b++) {
+			if (!geo[b] || colour(b) === colour(a) || !meets(a, b)) continue;
+			geo[a] = keep(g.GEOSDifference(geo[a] as number, geo[b] as number), "difference");
+			if (g.GEOSisEmpty(geo[a] as number) === 1) geo[a] = null;
+		}
+}
+
+/** The strokes with paint grouped, each colour's that meet one group (its first stroke's place, its strokes in order). */
+function strokeGroups(geo: (number | null)[], colour: (i: number) => string, meets: (a: number, b: number) => boolean): Map<number, number[]> {
+	const root = geo.map((_, i) => i);
+	const find = (i: number): number => {
+		let r = i;
+		while (root[r] !== r) r = root[r] as number;
+		return r;
+	};
+	for (let a = 0; a < geo.length; a++)
+		for (let b = a + 1; b < geo.length; b++) {
+			if (!geo[a] || !geo[b] || colour(a) !== colour(b)) continue;
+			if (find(a) !== find(b) && meets(a, b)) root[find(b)] = find(a);
+		}
+	const groups = new Map<number, number[]>();
+	geo.forEach((_, i) => {
+		if (!geo[i]) return;
+		const r = find(i);
+		groups.set(r, [...(groups.get(r) ?? []), i]);
+	});
+	return groups;
+}
+
+/** A group's shape: its one stroke's paint, or (more than one) their union, of copies of them (the collection owns what it holds). */
+function groupShape(g: Geos, members: number[], geo: (number | null)[], keep: Keep): number {
+	if (members.length === 1) return geo[members[0] as number] as number;
+	return keep(
+		g.GEOSUnaryUnion(
+			keep(
+				collectionOf(
+					g,
+					members.map((i) => g.GEOSGeom_clone(geo[i] as number)),
+				),
+				"collection",
+			),
+		),
+		"union",
+	);
+}
+
+/** The box round strokes' boxes. */
+function membersBox(members: number[], boxes: Box4[]): Box4 {
+	const box: Box4 = [Infinity, Infinity, -Infinity, -Infinity];
+	for (const i of members) {
+		const b = boxes[i] as Box4;
+		box[0] = Math.min(box[0], b[0]);
+		box[1] = Math.min(box[1], b[1]);
+		box[2] = Math.max(box[2], b[2]);
+		box[3] = Math.max(box[3], b[3]);
+	}
+	return box;
+}
+
+/** A shape being cut on the grid of cells: GEOS, the cells' size and the pieces cut so far. */
+interface Cutting {
+	g: Geos;
+	cell: number;
+	pieces: Pt[][];
+}
+
+/** A cell's piece of a shape: its polygons; one with a hole, the cell cut in four again (CELL_SPLITS times at most). */
+function cutCell(c: Cutting, geom: number, cx: number, cz: number, size: number, depth: number): void {
+	const { g } = c;
+	const part = g.GEOSClipByRect(geom, cx, cz, cx + size, cz + size);
+	if (!part) return;
+	try {
+		if (g.GEOSisEmpty(part) === 1) return;
+		const polys = polysOfGeom(g, part, [], false);
+		if (polys.some((p) => p.holes.length) && depth < CELL_SPLITS) {
+			const h = size / 2;
+			for (const [dx, dz] of [
+				[0, 0],
+				[h, 0],
+				[0, h],
+				[h, h],
+			] as const)
+				cutCell(c, part, cx + dx, cz + dz, h, depth + 1);
+			return;
+		}
+		for (const p of polys) c.pieces.push(p.outer);
+	} finally {
+		g.GEOSGeom_destroy(part);
+	}
+}
+
+/** A part of a shape's box (ni by nj cells from cell i0, j0) cut in two again and again, the halves of whole cells, till each part is a cell: each cut only of
+ * what is in the part it halves. */
+function halveCells(c: Cutting, geom: number, i0: number, j0: number, ni: number, nj: number): void {
+	const { g, cell } = c;
+	if (ni <= 1 && nj <= 1) {
+		cutCell(c, geom, i0 * cell, j0 * cell, cell, 0);
+		return;
+	}
+	const across = ni >= nj;
+	const h = Math.floor((across ? ni : nj) / 2);
+	for (const [a, n] of [
+		[0, h],
+		[h, (across ? ni : nj) - h],
+	] as const) {
+		const [ia, ja, na, ma] = across ? [i0 + a, j0, n, nj] : [i0, j0 + a, ni, n];
+		const part = g.GEOSClipByRect(geom, ia * cell, ja * cell, (ia + na) * cell, (ja + ma) * cell);
+		if (!part) continue;
+		try {
+			if (g.GEOSisEmpty(part) !== 1) halveCells(c, part, ia, ja, na, ma);
+		} finally {
+			g.GEOSGeom_destroy(part);
+		}
+	}
+}
+
+/** A shape's pieces on a grid of cells cell metres square, its box's. */
+function shapePieces(g: Geos, shape: number, box: Box4, cell: number): Pt[][] {
+	const c: Cutting = { g, cell, pieces: [] };
+	const i0 = Math.floor(box[0] / cell);
+	const j0 = Math.floor(box[1] / cell);
+	halveCells(c, shape, i0, j0, Math.max(1, Math.ceil(box[2] / cell) - i0), Math.max(1, Math.ceil(box[3] / cell) - j0));
+	return c.pieces;
+}
+
 /** The paint laid along lines: each stroke's lines widened (flat ends, corners mitred), a stroke's paint under any later stroke of another colour over it cut
  * away (the later on top), then each colour's strokes that meet made one shape (where they overlap, one paint); each shape cut on a grid of cells cell metres
  * square (its pieces each on the ground under it), a piece with a hole cut smaller. The shapes in the order of their first stroke. */
 export function geosPaint(strokes: PaintStroke[], cell: number): PaintShape[] {
 	const g = ready();
-	const made: G[] = [];
-	const keep = (x: G, what: string) => {
+	const made: number[] = [];
+	const keep = (x: number, what: string) => {
 		if (!x) throw new Error(`GEOS: the paint's ${what} failed`);
 		made.push(x);
 		return x;
 	};
 	try {
 		// (each stroke's paint, and its box)
-		const geo: (G | null)[] = [];
+		const geo: (number | null)[] = [];
 		const boxes = strokes.map(strokeBox);
-		for (const st of strokes) {
-			const parts: G[] = [];
-			for (const l of st.lines) {
-				if (l.points.length < 2) continue;
-				const line = lineOf(g, l.points, l.closed && l.points.length > 2);
-				const wide = g.GEOSBufferWithStyle(line, st.half, 8, 2, 2, MITRE_LIMIT);
-				g.GEOSGeom_destroy(line);
-				if (wide) parts.push(wide);
-			}
-			let one = parts.length ? keep(g.GEOSUnaryUnion(keep(collectionOf(g, parts), "collection")), "union") : null;
-			// (where it meets paint of another kind end to end: only its side of the seam)
-			for (const cut of st.cuts ?? []) {
-				if (!one) break;
-				const off = keep(g.GEOSGeom_createPolygon(ringOf(g, cut), 0, 0), "seam");
-				one = keep(g.GEOSDifference(one, off), "seam");
-				if (g.GEOSisEmpty(one) === 1) one = null;
-			}
-			geo.push(one);
-		}
-		const meets = (a: number, b: number) => boxesMeet(boxes[a] as Box4, boxes[b] as Box4) && g.GEOSIntersects(geo[a] as G, geo[b] as G) === 1;
+		for (const st of strokes) geo.push(strokePaint(g, st, keep));
+		const meets = (a: number, b: number) => boxesMeet(boxes[a] as Box4, boxes[b] as Box4) && g.GEOSIntersects(geo[a] as number, geo[b] as number) === 1;
 		const colour = (i: number) => (strokes[i] as PaintStroke).colour;
-		// (under a later stroke of another colour: cut away)
-		for (let a = 0; a < strokes.length; a++)
-			for (let b = a + 1; b < strokes.length && geo[a]; b++) {
-				if (!geo[b] || colour(b) === colour(a) || !meets(a, b)) continue;
-				geo[a] = keep(g.GEOSDifference(geo[a] as G, geo[b] as G), "difference");
-				if (g.GEOSisEmpty(geo[a] as G) === 1) geo[a] = null;
-			}
-		// (each colour's strokes that meet: one shape)
-		const root = strokes.map((_, i) => i);
-		const find = (i: number): number => {
-			let r = i;
-			while (root[r] !== r) r = root[r] as number;
-			return r;
-		};
-		for (let a = 0; a < strokes.length; a++)
-			for (let b = a + 1; b < strokes.length; b++) {
-				if (!geo[a] || !geo[b] || colour(a) !== colour(b)) continue;
-				if (find(a) !== find(b) && meets(a, b)) root[find(b)] = find(a);
-			}
-		const groups = new Map<number, number[]>();
-		strokes.forEach((_, i) => {
-			if (!geo[i]) return;
-			const r = find(i);
-			groups.set(r, [...(groups.get(r) ?? []), i]);
-		});
+		cutUnder(g, geo, colour, meets, keep);
 		const out: PaintShape[] = [];
-		for (const members of groups.values()) {
-			// (more than one: their union, of copies of them (the collection owns what it holds))
-			const shape =
-				members.length === 1
-					? (geo[members[0] as number] as G)
-					: keep(
-							g.GEOSUnaryUnion(
-								keep(
-									collectionOf(
-										g,
-										members.map((i) => g.GEOSGeom_clone(geo[i] as G)),
-									),
-									"collection",
-								),
-							),
-							"union",
-						);
-			const box: Box4 = [Infinity, Infinity, -Infinity, -Infinity];
-			for (const i of members) {
-				const b = boxes[i] as Box4;
-				box[0] = Math.min(box[0], b[0]);
-				box[1] = Math.min(box[1], b[1]);
-				box[2] = Math.max(box[2], b[2]);
-				box[3] = Math.max(box[3], b[3]);
-			}
-			const pieces: Pt[][] = [];
-			// (a cell's piece of it: its polygons; one with a hole, the cell cut in four again)
-			const cut = (geom: G, cx: number, cz: number, size: number, depth: number) => {
-				const part = g.GEOSClipByRect(geom, cx, cz, cx + size, cz + size);
-				if (!part) return;
-				try {
-					if (g.GEOSisEmpty(part) === 1) return;
-					const polys = polysOfGeom(g, part, [], false);
-					if (polys.some((p) => p.holes.length) && depth < CELL_SPLITS) {
-						const h = size / 2;
-						for (const [dx, dz] of [
-							[0, 0],
-							[h, 0],
-							[0, h],
-							[h, h],
-						] as const)
-							cut(part, cx + dx, cz + dz, h, depth + 1);
-						return;
-					}
-					for (const p of polys) pieces.push(p.outer);
-				} finally {
-					g.GEOSGeom_destroy(part);
-				}
-			};
-			// (its box cut in two again and again, the halves of whole cells, till each part is a cell: each cut only of what is in the part it halves)
-			const halve = (geom: G, i0: number, j0: number, ni: number, nj: number) => {
-				if (ni <= 1 && nj <= 1) {
-					cut(geom, i0 * cell, j0 * cell, cell, 0);
-					return;
-				}
-				const across = ni >= nj;
-				const h = Math.floor((across ? ni : nj) / 2);
-				for (const [a, n] of [
-					[0, h],
-					[h, (across ? ni : nj) - h],
-				] as const) {
-					const [ia, ja, na, ma] = across ? [i0 + a, j0, n, nj] : [i0, j0 + a, ni, n];
-					const part = g.GEOSClipByRect(geom, ia * cell, ja * cell, (ia + na) * cell, (ja + ma) * cell);
-					if (!part) continue;
-					try {
-						if (g.GEOSisEmpty(part) !== 1) halve(part, ia, ja, na, ma);
-					} finally {
-						g.GEOSGeom_destroy(part);
-					}
-				}
-			};
-			const i0 = Math.floor(box[0] / cell);
-			const j0 = Math.floor(box[1] / cell);
-			halve(shape, i0, j0, Math.max(1, Math.ceil(box[2] / cell) - i0), Math.max(1, Math.ceil(box[3] / cell) - j0));
-			out.push({ strokes: members, pieces });
+		for (const members of strokeGroups(geo, colour, meets).values()) {
+			const shape = groupShape(g, members, geo, keep);
+			out.push({ strokes: members, pieces: shapePieces(g, shape, membersBox(members, boxes), cell) });
 		}
 		return out.sort((a, b) => Math.min(...a.strokes) - Math.min(...b.strokes));
 	} finally {

@@ -14,7 +14,7 @@ const LEVELS: readonly (readonly [Level, string])[] = [
 const PARTS: readonly (readonly [keyof Omit<SurfaceRoughness, "seed" | "map">, string, string])[] = [
 	["waves", "Waves (mm)", "long waves, 8 to 20 m"],
 	["bumps", "Bumps (mm)", "bumps, 1.5 to 4 m"],
-	["ripple", "Ripple (mm)", "a ripple the kart trembles on"],
+	["ripple", "Ripple (mm)", "a ripple the cars tremble on"],
 	["camber", "Bends (mm)", "a tight bend's inside lower by"],
 ];
 

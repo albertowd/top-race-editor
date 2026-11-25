@@ -60,8 +60,9 @@ function mapOf(points: [number, number, number][] | undefined): (x: number, z: n
 
 /** A hash of a lattice point (and a seed) to 0..1. */
 function hash(i: number, j: number, seed: number): number {
-	let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(seed, 2147483647)) | 0;
-	h = Math.imul(h ^ (h >>> 13), 1274126177);
+	// (the sum made 32 bits by the ^ and >>> on it)
+	const s = Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(seed, 2147483647);
+	let h = Math.imul(s ^ (s >>> 13), 1274126177);
 	h ^= h >>> 16;
 	return (h >>> 0) / 4294967296;
 }
@@ -96,6 +97,12 @@ interface Row {
 	wr: number;
 	k: number;
 	end: -1 | 0 | 1;
+}
+
+/** Which open end of its road the k-th of its rows is at (last: the last row's k): -1 its first, unless joined there; 1 its last, unless joined there; else 0. */
+function endOf(k: number, last: number, joins: (string | null)[]): Row["end"] {
+	if (k === 0 && !joins[0]) return -1;
+	return k === last && !joins[1] ? 1 : 0;
 }
 
 function rowsOf(road: RoadDesc): Row[] {
@@ -136,9 +143,25 @@ function rowsOf(road: RoadDesc): Row[] {
 			wr: f.wr[i] as number,
 			// (the turn from a to b over the way between: its cross product's sine over the length)
 			k: ds > 1e-6 ? (ta[0] * tb[1] - ta[1] * tb[0]) / ds : 0,
-			end: k === 0 && !joins[0] ? -1 : k === pick.length - 1 && !joins[1] ? 1 : 0,
+			end: endOf(k, pick.length - 1, joins),
 		} satisfies Row;
 	});
+}
+
+/** The nearest of the rows to (x, z) in the cells within three of its own (cells: the rows in each, by its key), or -1 for none. */
+function nearestRow(rows: Row[], cells: Map<string, number[]>, x: number, z: number): number {
+	const ci = Math.floor(x / CELL);
+	const cj = Math.floor(z / CELL);
+	let best = -1;
+	let bd = Infinity;
+	for (let di = -3; di <= 3; di++)
+		for (let dj = -3; dj <= 3; dj++)
+			for (const i of cells.get(`${ci + di},${cj + dj}`) ?? []) {
+				const r = rows[i] as Row;
+				const d = (r.x - x) ** 2 + (r.z - z) ** 2;
+				if (d < bd) [bd, best] = [d, i];
+			}
+	return best;
 }
 
 /** The roughness of the roads described (run-offs left out: they go with their road), in metres at (x, z); null where the track has none. */
@@ -160,17 +183,7 @@ export function roughnessOf(roads: RoadDesc[], s: SurfaceRoughness | undefined):
 	});
 	return (x, z) => {
 		// (the road under it: the nearest row within reach, and where across and along it the point is)
-		const ci = Math.floor(x / CELL);
-		const cj = Math.floor(z / CELL);
-		let best = -1;
-		let bd = Infinity;
-		for (let di = -3; di <= 3; di++)
-			for (let dj = -3; dj <= 3; dj++)
-				for (const i of cells.get(`${ci + di},${cj + dj}`) ?? []) {
-					const r = rows[i] as Row;
-					const d = (r.x - x) ** 2 + (r.z - z) ** 2;
-					if (d < bd) [bd, best] = [d, i];
-				}
+		const best = nearestRow(rows, cells, x, z);
 		if (best < 0) return 0;
 		const r = rows[best] as Row;
 		const dx = x - r.x;

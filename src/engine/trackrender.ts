@@ -69,16 +69,16 @@ function projected(p: V3, eye: V3, fwd: V3, right: V3, up: V3, t: number, aspect
 	return [dot(d, right) / (z * t * aspect), dot(d, up) / (z * t)];
 }
 
-/** AC's preview of a layout: its lap (its line, AC's axes) seen from above at a slant (pitch degrees down) across its length, from its south, as near as has
- * all of it in the picture (margin its share left round it). */
-export function overview(line: V3[], o: { size: [number, number]; fov?: number; pitch?: number; margin?: number }): View {
-	const fov = o.fov ?? 36;
-	const pitch = rad(o.pitch ?? 45);
-	const margin = o.margin ?? 0.1;
+/** A line's middle: the mean of its points (none: the origin). */
+function middleOf(line: V3[]): V3 {
 	const n = line.length || 1;
 	const c: V3 = [0, 0, 0];
 	for (const p of line) for (let k = 0; k < 3; k++) c[k] = (c[k] as number) + (p[k] as number) / n;
-	// (its length's way: the line's points' main axis, flat)
+	return c;
+}
+
+/** The way a line's points lie longest, flat (its main axis about c, an angle from x towards z). */
+function mainAxis(line: V3[], c: V3): number {
 	let xx = 0;
 	let zz = 0;
 	let xz = 0;
@@ -89,7 +89,18 @@ export function overview(line: V3[], o: { size: [number, number]; fov?: number; 
 		zz += dz * dz;
 		xz += dx * dz;
 	}
-	const along = 0.5 * Math.atan2(2 * xz, xx - zz);
+	return 0.5 * Math.atan2(2 * xz, xx - zz);
+}
+
+/** AC's preview of a layout: its lap (its line, AC's axes) seen from above at a slant (pitch degrees down) across its length, from its south, as near as has
+ * all of it in the picture (margin its share left round it). */
+export function overview(line: V3[], o: { size: [number, number]; fov?: number; pitch?: number; margin?: number }): View {
+	const fov = o.fov ?? 36;
+	const pitch = rad(o.pitch ?? 45);
+	const margin = o.margin ?? 0.1;
+	const c = middleOf(line);
+	// (its length's way: the line's points' main axis, flat)
+	const along = mainAxis(line, c);
 	// (looked at across its length, from the south side: the eye's way north-ish)
 	let d: V3 = [-Math.sin(along), 0, Math.cos(along)];
 	if (d[2] > 0) d = [-d[0], 0, -d[2]];
@@ -233,12 +244,26 @@ export function layoutView(line: V3[], gantries: [V3, V3][], size: [number, numb
 	return overview(line, { size });
 }
 
+/** The file a models list's FILE line names (FILE = name, the spaces round it off); one with only spaces after its = to the list's end names the last of
+ * them on a line (as the list has always been read), one with none of those names nothing. */
+function listedFile(m: RegExpMatchArray): string | null {
+	if (m[1] !== undefined) return m[1].trimEnd();
+	const after = m[0].slice(m[0].lastIndexOf("=") + 1);
+	return [...after].findLast((c) => /./.test(c)) ?? null;
+}
+
+/** The files a models list (models.ini, models_<layout>.ini) names, in its order. */
+const listedFiles = (text: string): string[] =>
+	[...text.matchAll(/^[\t\v\f \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]*FILE\s*=\s*(\S.*)?/gim)].flatMap((m) => {
+		const f = listedFile(m);
+		return f === null ? [] : [f];
+	});
+
 /** The models each layout draws (its models_<layout>.ini's files, else models.ini's) and the scene of all of them, out the AC build's track; a layout with
  * none: left out. */
 export async function trackScene(files: HostFiles, out: string, layouts: string[]): Promise<{ scene: TrackScene; drawn: Record<string, string[]> }> {
 	const dec = (b: Uint8Array) => new TextDecoder().decode(b);
-	const listed = async (p: string) =>
-		(await files.exists(p)) ? [...dec(await files.read(p)).matchAll(/^\s*FILE\s*=\s*(.+?)\s*$/gim)].map((m) => m[1] as string) : null;
+	const listed = async (p: string) => ((await files.exists(p)) ? listedFiles(dec(await files.read(p))) : null);
 	const drawn: Record<string, string[]> = {};
 	const all = await listed(`${out}/models.ini`);
 	for (const lay of layouts) {

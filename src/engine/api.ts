@@ -58,7 +58,7 @@ export interface ApiHost {
 	/** a triangulator on the engine's own thread (the far ground's) */
 	triangle?: () => Promise<Triangle>;
 	/** what makes the merge's outlines (the engine window's workers) */
-	outliner?: MergeOptions["outliner"];
+	outliner?: NonNullable<MergeOptions["outliner"]>;
 	/** the BeamNG level's: pictures read and made, a start's map drawn (Chromium's) */
 	beamng?: BeamngHost;
 	/** the rFactor 2 location's pictures drawn, the track rendered under some (Chromium's) */
@@ -71,22 +71,27 @@ function needs<T>(had: T | undefined, what: string): T {
 	return had;
 }
 
+/** A path without the slashes (either way) it ends with. */
+function trimSlashes(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
+}
+
+/** A value read from the track's files or sent by the page, as text as String makes it (a number's digits, an object's own toString). */
+const asText: (v: unknown) => string = String;
+
 const wizards = new Map<string, Wizard>();
 
 /** The new-track wizard of the track open (its tracks made next to it, with its tools), kept while the engine runs. */
 function wizardOf(files: HostFiles, s: TrackSettings, host: ApiHost): Wizard {
 	const wizard = needs(host.wizard, "new-track wizard");
 	const place = needs(host.place, "disk");
-	const root = s.project
-		.replace(/[\\/]+$/, "")
-		.replace(/\\/g, "/")
-		.split("/")
-		.slice(0, -1)
-		.join("/");
+	const root = trimSlashes(s.project).replaceAll("\\", "/").split("/").slice(0, -1).join("/");
 	const tools = toolsOf(s);
 	const key = `${root}|${tools}|${wizard.keys}`;
 	let w = wizards.get(key);
-	if (!w || w.files !== files) {
+	if (w?.files !== files) {
 		w = new Wizard(root, tools, new Keys(files, wizard.keys), wizard.host, files, terrainHere(place));
 		wizards.set(key, w);
 	}
@@ -143,7 +148,7 @@ const bringSettings = (files: HostFiles, s: TrackSettings): BringSettings => ({
 	project: s.project,
 	models: settingsPaths(s).models,
 	roads: settingsPaths(s).roads,
-	described: async () => (await trackRoads(files, s)).map((r) => ({ name: String(r.name), mesh: r.mesh as string })),
+	described: async () => (await trackRoads(files, s)).map((r) => ({ name: asText(r.name), mesh: r.mesh as string })),
 	meshesFrom: typeof s.track.meshes_from === "string" ? `${s.project}/${s.track.meshes_from}` : `${s.project}/build/cache/floors_before_merge`,
 	roadModels: Array.isArray(s.track.road_models) ? (s.track.road_models as string[]) : undefined,
 });
@@ -184,19 +189,38 @@ async function trackOf(files: HostFiles, folder: string) {
 	if (!(await files.exists(f))) return null;
 	try {
 		const t = JSON.parse(new TextDecoder().decode(await files.read(f))) as { name?: string };
-		return { name: String(t.name || folder.split(/[\\/]/).filter(Boolean).pop()), folder };
+		return { name: String(t.name || folder.split(/[\\/]/).findLast(Boolean)), folder };
 	} catch {
 		return null;
 	}
 }
 
 /** A folder as one compared with another: its separators one way, no trailing one, its case as Windows takes it. */
-const folderKey = (a: string) =>
-	a
-		.replace(/[\\/]+$/, "")
-		.replace(/\\/g, "/")
-		.toLowerCase();
+const folderKey = (a: string) => trimSlashes(a).replaceAll("\\", "/").toLowerCase();
 const same = (a: string, b: string) => folderKey(a) === folderKey(b);
+
+/** The folders of the tracks opened before, as the host's file of them (recent) lists them: none where it has none or it cannot be read. */
+async function recentFolders(files: HostFiles, recent: string | undefined): Promise<string[]> {
+	const out: string[] = [];
+	if (recent && (await files.exists(recent)))
+		try {
+			const d = JSON.parse(new TextDecoder().decode(await files.read(recent)));
+			if (Array.isArray(d)) for (const f of d) if (typeof f === "string") out.push(f);
+		} catch {
+			// (the list is a help, not a need)
+		}
+	return out;
+}
+
+/** The folders next to a track's (in the folder it is in), in order: none where that cannot be listed. */
+async function foldersNextTo(files: HostFiles, here: string): Promise<string[]> {
+	const parent = here.split(/[\\/]/).slice(0, -1).join("/");
+	try {
+		return (await files.list(parent)).sort(byCodePoint).map((n) => `${parent}/${n}`);
+	} catch {
+		return [];
+	}
+}
 
 const GET: Record<string, Route> = {
 	"/api/track": (files, s) => trackInfo(files, s),
@@ -227,21 +251,8 @@ const GET: Record<string, Route> = {
 	// (the track open, and the others found: those opened before first, then the folders next to it (tracks.py))
 	"/api/tracks": async (files, s, _q, _b, host) => {
 		const here = s.project;
-		const recent: string[] = [];
-		if (host.recent && (await files.exists(host.recent)))
-			try {
-				const d = JSON.parse(new TextDecoder().decode(await files.read(host.recent)));
-				if (Array.isArray(d)) for (const f of d) if (typeof f === "string") recent.push(f);
-			} catch {
-				// (the list is a help, not a need)
-			}
-		const parent = here.split(/[\\/]/).slice(0, -1).join("/");
-		let next: string[] = [];
-		try {
-			next = (await files.list(parent)).sort(byCodePoint).map((n) => `${parent}/${n}`);
-		} catch {
-			next = [];
-		}
+		const recent = await recentFolders(files, host.recent);
+		const next = await foldersNextTo(files, here);
 		const out: { name: string; folder: string; open: boolean }[] = [];
 		for (const folder of [here, ...recent, ...next]) {
 			const t = await trackOf(files, folder);
@@ -337,7 +348,7 @@ const POST: Record<string, Route> = {
 	// (another track opened: the engine keeps it open from now on (tracks.py's open, without starting it again))
 	"/api/open": async (files, _s, _q, body, host) => {
 		const open = needs(host.open, "way to open another track");
-		const given = String((body as { folder?: unknown } | undefined)?.folder ?? "").trim();
+		const given = asText((body as { folder?: unknown } | undefined)?.folder ?? "").trim();
 		if (!given || !absolute(given)) throw new Error("a track is opened by its whole folder");
 		const folder = normalPath(given);
 		const t = await trackOf(files, folder);
@@ -349,12 +360,12 @@ const POST: Record<string, Route> = {
 	// (the wizard's: a key kept or forgotten, a plan estimated, made, stopped)
 	"/api/wizard/keys": async (files, s, _q, body, host) => {
 		const b = (body ?? {}) as { name?: unknown; value?: unknown };
-		const v = b.value === undefined || b.value === null ? null : String(b.value);
-		return wizardOf(files, s, host).setKey(String(b.name ?? ""), v);
+		const v = b.value === undefined || b.value === null ? null : asText(b.value);
+		return wizardOf(files, s, host).setKey(asText(b.name ?? ""), v);
 	},
 	"/api/wizard/estimate": async (files, s, _q, body, host) => wizardOf(files, s, host).estimate((body as { plan?: unknown } | undefined)?.plan),
 	"/api/wizard/start": async (files, s, _q, body, host) => wizardOf(files, s, host).start((body as { plan?: unknown } | undefined)?.plan),
-	"/api/wizard/cancel": async (files, s, _q, body, host) => wizardOf(files, s, host).cancel(String((body as { id?: unknown } | undefined)?.id ?? "")),
+	"/api/wizard/cancel": async (files, s, _q, body, host) => wizardOf(files, s, host).cancel(asText((body as { id?: unknown } | undefined)?.id ?? "")),
 	// (a build begun: the games, installed in AC, every step made again; a build stopped)
 	"/api/build": async (files, s, _q, body, host) => {
 		const b = (body ?? {}) as {
@@ -371,7 +382,7 @@ const POST: Record<string, Route> = {
 			packAc: b.packAc !== false,
 		});
 	},
-	"/api/build/cancel": async (files, s, _q, body, host) => builder(files, s, host).cancel(String((body as { id?: unknown } | undefined)?.id ?? "")),
+	"/api/build/cancel": async (files, s, _q, body, host) => builder(files, s, host).cancel(asText((body as { id?: unknown } | undefined)?.id ?? "")),
 	// (the looks at the roads as built, level: a road's mesh cut under those above it; the surface in a window)
 	"/api/mesh": async (_files, _s, _q, body) => {
 		const b = (body ?? {}) as { road?: RoadDesc; roads?: RoadDesc[] };

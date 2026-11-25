@@ -21,9 +21,16 @@ async function inflate(raw: Uint8Array): Promise<Uint8Array> {
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/** A zipped file's bytes by its method: stored (0) as they are, deflated (8) inflated; any other: null. */
+async function unzipped(method: number, raw: Uint8Array): Promise<Uint8Array | null> {
+	if (method === 0) return raw;
+	if (method === 8) return inflate(raw);
+	return null;
+}
+
 /** A .npy file's array. */
 export function readNpy(b: Uint8Array): NpyArray {
-	if (b[0] !== 0x93 || String.fromCharCode(...b.subarray(1, 6)) !== "NUMPY") throw new Error("not a .npy");
+	if (b[0] !== 0x93 || String.fromCodePoint(...b.subarray(1, 6)) !== "NUMPY") throw new Error("not a .npy");
 	const major = b[6] as number;
 	const headLen = major === 1 ? le(b, 8, 2) : le(b, 8, 4);
 	const start = (major === 1 ? 10 : 12) + headLen;
@@ -86,7 +93,7 @@ export async function readNpz(b: Uint8Array): Promise<Record<string, NpyArray>> 
 		const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nameLen));
 		const dataAt = local + 30 + le(b, local + 26, 2) + le(b, local + 28, 2);
 		const raw = b.subarray(dataAt, dataAt + size);
-		const file = method === 0 ? raw : method === 8 ? await inflate(raw) : null;
+		const file = await unzipped(method, raw);
 		if (!file) throw new Error(`${name}: zipped in a way not read (${method})`);
 		out[name.replace(/\.npy$/, "")] = readNpy(file);
 		p += 46 + nameLen + extraLen + commentLen;

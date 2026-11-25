@@ -108,7 +108,7 @@ describe("rFactor 2's pictures", () => {
 		// (the shortcut across, from the square's side to its other side, a point into each)
 		const ys = new Set<number>();
 		for (let i = 1; i < run.length; i += 2) ys.add(run[i] as number);
-		expect([...ys].filter((y) => y === 50).length).toBe(1);
+		expect([...ys].filter((y) => y === 50)).toHaveLength(1);
 		expect(Math.max(...run.filter((_, i) => i % 2 === 0))).toBeGreaterThanOrEqual(94);
 		expect(Math.min(...run.filter((_, i) => i % 2 === 0))).toBeLessThanOrEqual(6);
 	});

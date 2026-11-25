@@ -28,7 +28,7 @@ export function WearPanel({ part }: Readonly<{ part: "paint" | "rubber" | "lines
 	const wear = objects.wear ?? {};
 	const set = (k: "paint" | "rubber", v: Wear) =>
 		ed.changeObjects((d) => {
-			d.wear = { ...(d.wear ?? {}), [k]: v };
+			d.wear = { ...d.wear, [k]: v };
 		});
 	if (part === "paint")
 		return (

@@ -25,7 +25,7 @@ declare global {
 			system: SystemHost;
 			fetch: WizardHost["fetch"];
 			keysFile: string;
-			project?: HostEnv["project"];
+			project?: NonNullable<HostEnv["project"]>;
 		};
 	}
 }

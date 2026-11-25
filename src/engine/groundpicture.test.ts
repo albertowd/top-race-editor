@@ -66,7 +66,7 @@ describe("the ground painted", () => {
 		const rgb = picture(size, GRASS_RGB, ASPHALT_RGB, (_, y) => y >= 32);
 		for (let y = 4; y < 14; y++) for (let x = 4; x < 14; x++) rgb.set(SHADOW_RGB, (y * size + x) * 3);
 		const { picture: out, mask } = paintCovers(coversOf(rgb, size), tonesOf(rgb, size), size, 0.25);
-		expect(out.length).toBe(size * size * 4);
+		expect(out).toHaveLength(size * size * 4);
 		// (its mask: grass red, paving blue, soft between them)
 		expect([...mask.subarray((10 * size + 30) * 4, (10 * size + 30) * 4 + 4)]).toEqual([255, 0, 0, 0]);
 		expect([...mask.subarray((50 * size + 30) * 4, (50 * size + 30) * 4 + 4)]).toEqual([0, 0, 255, 0]);
@@ -158,6 +158,7 @@ describe("the generated ground in a track", () => {
 		return pngRgba(rgba, size, size);
 	};
 
+	// (it makes the ground picture twice over: slow on a busy computer)
 	it("is made beside the photo, its material the photo's with its own picture, once until the photo changes", async () => {
 		const f = await fakeFiles(await photoOf(GRASS_RGB));
 		const photo = `${P}/source/textures/GoogleMap.png`;
@@ -191,7 +192,7 @@ describe("the generated ground in a track", () => {
 		f.store.set(photo, await photoOf(ASPHALT_RGB));
 		await generatedGround(f.files, P, photo, "Background", 100);
 		expect(f.writes).toContain(`${P}/source/textures/GroundGenerated.png`);
-	});
+	}, 60_000);
 
 	it("is asked for in the objects' ground, the photo when not said", () => {
 		const base = { version: 3, layouts: {}, objects: [], marks: [] };

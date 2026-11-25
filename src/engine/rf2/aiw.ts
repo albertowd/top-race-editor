@@ -98,7 +98,7 @@ const NORMAL = 9;
 const WAY = 13;
 
 export interface AiwInput {
-	layout: Pick<LayoutObjects, "grid" | "pits" | "timing">;
+	layout: Pick<LayoutObjects, "grid" | "pits" | "timing" | "safety_car">;
 	/** aiLineOf of the layout's fast line (closed) and of its pit line (none: no pit lane) */
 	fast: AiLine;
 	pit?: AiLine | null;
@@ -362,13 +362,230 @@ function waypointOf(s: Sample, lane: boolean): Waypoint {
 	};
 }
 
+/** A lane's waypoints, the main loop's or the pit lane's: the first's index, how many, whether it goes round, how far along it each is, and its length. */
+interface Lane {
+	first: number;
+	count: number;
+	closed: boolean;
+	at: (i: number) => number;
+	total: number;
+}
+
+/** The main loop as the pit lane made after it goes by: its waypoints (the pit lane's pushed on), the lap's length, a place's lap distance, a score's sector,
+ * and the last main waypoint at or before a place and the first at or after. */
+interface MainLoop {
+	wps: Waypoint[];
+	lap: number;
+	scoreAt: (q: V3) => number;
+	sectorOf: (score: number) => number;
+	before: (q: V3) => number;
+	after: (q: V3) => number;
+}
+
+/** The pit lane's waypoints (how far along it each is), its boxes' stretch (from xpitin to xpitout) and the lap distance beside a place s metres along it. */
+interface PitLane {
+	s: number[];
+	pitIn: number;
+	pitOut: number;
+	score: (s: number) => number;
+}
+
+const NO_PIT_LANE: PitLane = { s: [], pitIn: 0, pitOut: 0, score: (_s: number) => 0 };
+
+/** The layout as rFactor takes it: a fast line to make waypoints of, no more grid slots and pit boxes than [Features] has. */
+function checkInput(input: AiwInput): void {
+	const { grid, pits } = input.layout;
+	if (input.fast.along.length < 3) throw new Error("the layout has no fast line to make waypoints of");
+	if (grid.length > STARTING_GRID) throw new Error(`${grid.length} grid slots: rFactor takes ${STARTING_GRID}`);
+	if (pits.length > PIT_SPOTS) throw new Error(`${pits.length} pit boxes: rFactor takes ${PIT_SPOTS}`);
+}
+
+/** The sectors' ends, metres into the lap (`lapAt` a gate's): the gates' other than the finish's, two at most in the lap's order, none within two spacings of
+ * the start or of each other; a third and two thirds of the way round where there are none, and where there is one alone, halfway between it and the start
+ * on its longer side. */
+function sectorEndsOf(timing: Gate[], finishGate: Gate | null, lapAt: (g: Gate) => number, L: number, spacing: number): { gate: Gate | null; u: number }[] {
+	const ends = timing
+		.filter((g) => g !== finishGate)
+		.map((g) => ({ gate: g, u: lapAt(g) }))
+		.filter((e) => e.u > 2 * spacing && e.u < L - 2 * spacing)
+		.sort((a, b) => a.u - b.u)
+		.filter((e, i, all) => i === 0 || e.u - (all[i - 1] as { u: number }).u > 2 * spacing)
+		.slice(0, 2);
+	const sectorEnds: { gate: Gate | null; u: number }[] = [...ends];
+	if (!sectorEnds.length) sectorEnds.push({ gate: null, u: L / 3 }, { gate: null, u: (2 * L) / 3 });
+	else if (sectorEnds.length === 1) {
+		const u = (sectorEnds[0] as { u: number }).u;
+		if (u < L / 2) sectorEnds.push({ gate: null, u: (u + L) / 2 });
+		else sectorEnds.unshift({ gate: null, u: u / 2 });
+	}
+	return sectorEnds;
+}
+
+/** The main loop's waypoints, a lap of the fast line from `start`: between each two of `bounds` (its sectors' ends) evenly, about `spacing` apart, each with
+ * how far into the lap it is; linked round, each scored the length of the chords from the first; and the lap's length. */
+function mainLoopOf(fast: Dense, start: number, bounds: number[], spacing: number): { wps: Waypoint[]; mainU: number[]; lap: number } {
+	const wps: Waypoint[] = [];
+	const mainU: number[] = [];
+	for (let k = 0; k < 3; k++) {
+		const a = bounds[k] as number;
+		const len = (bounds[k + 1] as number) - a;
+		const m = Math.max(1, Math.round(len / spacing));
+		for (let j = 0; j < m; j++) {
+			const u = a + (len * j) / m;
+			const w = waypointOf(sampleAt(fast, start + u), true);
+			w.sector = k;
+			wps.push(w);
+			mainU.push(u);
+		}
+	}
+	const M = wps.length;
+	let lap = 0;
+	wps.forEach((w, i) => {
+		w.prev = (i - 1 + M) % M;
+		w.next = (i + 1) % M;
+		w.score = lap;
+		lap += dist(w.pos, (wps[(i + 1) % M] as Waypoint).pos);
+	});
+	return { wps, mainU, lap };
+}
+
+/** The pit lane's waypoints (pushed on the main loop's), between its fork and its merge, which are the main loop's: about `spacing` apart, closer where its
+ * boxes (`boxes` metres along it, `spread` metres from the first to the last) are; scored from the fork's lap distance to the merge's, evenly. Its boxes'
+ * stretch: from PIT_BEAM before the first box to PIT_BEAM after the last. */
+function pitLaneOf(pitDense: Dense, boxes: number[], spread: number, spacing: number, main: MainLoop): PitLane {
+	const { wps, lap } = main;
+	const pitStart = wps.length;
+	const pitS: number[] = [];
+	const Lp = pitDense.total;
+	const m = Math.max(2, Math.round(Lp / spacingFor(spacing, spread, boxes.length)));
+	const first = pitDense.P[0] as V3;
+	const last = pitDense.P.at(-1) as V3;
+	const fork = main.before(first);
+	const merge = main.after(last);
+	const from = main.scoreAt(first);
+	const gap = mod(main.scoreAt(last) - from, lap) || lap;
+	const pitScore = (s: number) => mod(from + (gap * s) / Lp, lap);
+	for (let j = 1; j < m; j++) {
+		const s = (Lp * j) / m;
+		const w = waypointOf(sampleAt(pitDense, s), true);
+		w.branch = 1;
+		w.score = pitScore(s);
+		w.sector = main.sectorOf(w.score);
+		w.speed = 0;
+		wps.push(w);
+		pitS.push(s);
+	}
+	for (let j = 0; j < pitS.length; j++) {
+		const w = wps[pitStart + j] as Waypoint;
+		w.prev = j ? pitStart + j - 1 : fork;
+		w.next = j + 1 < pitS.length ? pitStart + j + 1 : merge;
+	}
+	(wps[fork] as Waypoint).link = pitStart;
+	const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+	const pitIn = clamp(boxes.length ? Math.min(...boxes) - PIT_BEAM : 0.1 * Lp, 0.05 * Lp, 0.9 * Lp);
+	const pitOut = clamp(boxes.length ? Math.max(...boxes) + PIT_BEAM : 0.9 * Lp, pitIn + 0.05 * Lp, 0.95 * Lp);
+	return { s: pitS, pitIn, pitOut, score: pitScore };
+}
+
+/** How far behind u a lane's waypoint i is (round a closed lane). */
+const backOf = (lane: Lane, u: number, i: number) => (lane.closed ? mod(u - lane.at(i), lane.total) : u - lane.at(i));
+
+/** Of a lane's waypoints LINK_BACK or more behind u, the nearest (none: its first), counted from the lane's first. */
+function behindOf(lane: Lane, u: number): number {
+	let k = -1;
+	for (let i = 0; i < lane.count; i++) if (backOf(lane, u, i) >= LINK_BACK && (k < 0 || backOf(lane, u, i) < backOf(lane, u, k))) k = i;
+	return Math.max(k, 0);
+}
+
+/** the lane's free waypoint LINK_BACK or more behind u (back further while taken; else on towards u) */
+function linkBehind(wps: Waypoint[], lane: Lane, u: number): number {
+	if (!lane.count) return -1;
+	const k = behindOf(lane, u);
+	const free = (i: number) => (wps[lane.first + i] as Waypoint).link < 0;
+	for (let tries = 0; tries < lane.count; tries++) {
+		const i = lane.closed ? mod(k - tries, lane.count) : k - tries;
+		if (i < 0) break;
+		if (free(i)) return lane.first + i;
+	}
+	for (let i = k + 1; i < lane.count && (lane.closed || lane.at(i) < u); i++) if (free(i)) return lane.first + i;
+	return lane.first + k;
+}
+
+/** the lane's first waypoint on from u (none: -1) */
+function nextOn(lane: Lane, u: number): number {
+	for (let i = 0; i < lane.count; i++) if (lane.at(i) > u) return lane.first + i;
+	return lane.closed ? lane.first : -1;
+}
+
+/** The lane's waypoint nearest q. */
+function nearest(wps: Waypoint[], lane: Lane, q: V3): number {
+	let best = lane.first;
+	for (let i = 0; i < lane.count; i++) if (dist((wps[lane.first + i] as Waypoint).pos, q) < dist((wps[best] as Waypoint).pos, q)) best = lane.first + i;
+	return best;
+}
+
+/** The pit lane's waypoints outside the boxes' stretch with no branch yet: the main waypoint beside each, going its way. */
+function linkBeside(wps: Waypoint[], pitLane: Lane, mainLane: Lane, pit: PitLane): void {
+	for (let j = 0; j < pitLane.count; j++) {
+		const w = wps[pitLane.first + j] as Waypoint;
+		const s = pit.s[j] as number;
+		if (w.link >= 0 || (s >= pit.pitIn && s <= pit.pitOut)) continue;
+		const i = nearest(wps, mainLane, w.pos);
+		const m = wps[i] as Waypoint;
+		if (dist(m.pos, w.pos) <= BESIDE && dot(m.way, w.way) > 0.5) w.link = i;
+	}
+}
+
+/** The ends of a beam across a line at a point of it, margin metres beyond its road's edges. */
+function across(s: Sample, margin: number): [V3, V3] {
+	const f = orientation(s.w, s.n);
+	return [add(s.p, mul(f.perp, -(s.left + margin))), add(s.p, mul(f.perp, s.right + margin))];
+}
+
+/** xpitin and xpitout: across the pit lane at either end of the boxes' stretch. */
+function pitBeamsOf(pitDense: Dense, pit: PitLane): Beam[] {
+	const beams: Beam[] = [];
+	for (const [name, s] of [
+		["xpitin", pit.pitIn],
+		["xpitout", pit.pitOut],
+	] as const) {
+		const [left, right] = across(sampleAt(pitDense, s), LANE_EDGE);
+		beams.push({ name, left, right, score: pit.score(s), gate: null });
+	}
+	return beams;
+}
+
+/** The AUX places: on the pit lane before xpitout; with no pit lane, the pole's (no grid either: the first waypoint's). */
+function auxOf(pitDense: Dense | null, pit: PitLane, spacing: number, pole: { pos: V3; ori: V3 } | undefined, first: Waypoint): { pos: V3; ori: V3 } {
+	const auxAt = pitDense ? sampleAt(pitDense, Math.max(pit.pitIn, pit.pitOut - spacing)) : null;
+	return auxAt ? { pos: auxAt.p, ori: orientation(auxAt.w, auxAt.n).ori } : (pole ?? { pos: first.pos, ori: first.ori });
+}
+
+/** Whether the boxes are on the left of the lane they are led in from (as many to the right as to the left: left). */
+function leftPitsOf(wps: Waypoint[], boxes: { pos: V3 }[], lane: Lane): boolean {
+	let side = 0;
+	for (const b of boxes) {
+		const W = wps[nearest(wps, lane, b.pos)] as Waypoint;
+		side += Math.sign(dot(sub(b.pos, W.pos), W.perp));
+	}
+	return side <= 0;
+}
+
+/** The fastest path's lap time: the main loop's chords, each at its first waypoint's speed (1 m/s at least). */
+function pathTimeOf(wps: Waypoint[], M: number): number {
+	let pathTime = 0;
+	for (let i = 0; i < M; i++) {
+		const w = wps[i] as Waypoint;
+		pathTime += dist(w.pos, (wps[w.next] as Waypoint).pos) / Math.max(1, w.speed);
+	}
+	return pathTime;
+}
+
 function build(input: AiwInput): Built {
 	const axes = input.axes ?? TRACK_TO_RF2;
 	const spacing = input.spacing ?? SPACING;
 	const { grid, pits, timing } = input.layout;
-	if (input.fast.along.length < 3) throw new Error("the layout has no fast line to make waypoints of");
-	if (grid.length > STARTING_GRID) throw new Error(`${grid.length} grid slots: rFactor takes ${STARTING_GRID}`);
-	if (pits.length > PIT_SPOTS) throw new Error(`${pits.length} pit boxes: rFactor takes ${PIT_SPOTS}`);
+	checkInput(input);
 	const fast = denseOf(input.fast, true, axes);
 	const pitDense = input.pit && input.pit.along.length >= 2 ? denseOf(input.pit, false, axes) : null;
 	// (a place of the track's on the floor, in rFactor's axes; its normal: the floor's there, else the nearer line's)
@@ -405,20 +622,7 @@ function build(input: AiwInput): Built {
 	const finishGate = timing.find((g) => g.name === "AC_TIME_0") ?? timing[0] ?? null;
 	const start = finishGate ? along(finishGate) : 0;
 	const L = fast.total;
-	const ends = timing
-		.filter((g) => g !== finishGate)
-		.map((g) => ({ gate: g, u: mod(along(g) - start, L) }))
-		.filter((e) => e.u > 2 * spacing && e.u < L - 2 * spacing)
-		.sort((a, b) => a.u - b.u)
-		.filter((e, i, all) => i === 0 || e.u - (all[i - 1] as { u: number }).u > 2 * spacing)
-		.slice(0, 2);
-	const sectorEnds: { gate: Gate | null; u: number }[] = [...ends];
-	if (!sectorEnds.length) sectorEnds.push({ gate: null, u: L / 3 }, { gate: null, u: (2 * L) / 3 });
-	else if (sectorEnds.length === 1) {
-		const u = (sectorEnds[0] as { u: number }).u;
-		if (u < L / 2) sectorEnds.push({ gate: null, u: (u + L) / 2 });
-		else sectorEnds.unshift({ gate: null, u: u / 2 });
-	}
+	const sectorEnds = sectorEndsOf(timing, finishGate, (g) => mod(along(g) - start, L), L, spacing);
 	const bounds = [0, (sectorEnds[0] as { u: number }).u, (sectorEnds[1] as { u: number }).u, L];
 
 	// (the pit boxes led in from the pit lane where they are beside it, else from the main loop (a layout's boxes may be somewhere else than its pit line))
@@ -439,32 +643,15 @@ function build(input: AiwInput): Built {
 		spacingFor(spacing, spreadOn(fast, slotAt), grid.length),
 		boxesOnPit ? spacing : spacingFor(spacing, spreadOn(fast, boxAt), pits.length),
 	);
-	const wps: Waypoint[] = [];
-	const mainU: number[] = [];
-	for (let k = 0; k < 3; k++) {
-		const a = bounds[k] as number;
-		const len = (bounds[k + 1] as number) - a;
-		const m = Math.max(1, Math.round(len / mainSpacing));
-		for (let j = 0; j < m; j++) {
-			const u = a + (len * j) / m;
-			const w = waypointOf(sampleAt(fast, start + u), true);
-			w.sector = k;
-			wps.push(w);
-			mainU.push(u);
-		}
-	}
+	const { wps, mainU, lap } = mainLoopOf(fast, start, bounds, mainSpacing);
 	const M = wps.length;
-	let lap = 0;
-	wps.forEach((w, i) => {
-		w.prev = (i - 1 + M) % M;
-		w.next = (i + 1) % M;
-		w.score = lap;
-		lap += dist(w.pos, (wps[(i + 1) % M] as Waypoint).pos);
-	});
 	const firstOf = (k: number) => wps.find((w) => w.sector === k) as Waypoint;
 	const sector1 = firstOf(1).score;
 	const sector2 = firstOf(2).score;
-	const sectorOf = (score: number) => (score < sector1 ? 0 : score < sector2 ? 1 : 2);
+	const sectorOf = (score: number) => {
+		if (score < sector1) return 0;
+		return score < sector2 ? 1 : 2;
+	};
 	// (a place's lap distance: its nearest on the fast line, between the waypoints' scores there)
 	const scoreAt = (q: V3) => {
 		const u = mod(project(fast, q) - start, L);
@@ -493,80 +680,23 @@ function build(input: AiwInput): Built {
 
 	// (the pit lane: its points between its fork and its merge, which are the fast line's)
 	const pitStart = M;
-	const pitS: number[] = [];
-	let pitIn = 0;
-	let pitOut = 0;
-	let pitScore = (_s: number) => 0;
-	if (pitDense) {
-		const Lp = pitDense.total;
-		const boxes = boxesOnPit ? boxAt.map((q) => project(pitDense, q)) : [];
-		const m = Math.max(2, Math.round(Lp / spacingFor(spacing, spreadOn(pitDense, boxAt), boxes.length)));
-		const first = pitDense.P[0] as V3;
-		const last = pitDense.P.at(-1) as V3;
-		const fork = mainBefore(first);
-		const merge = mainAfter(last);
-		const from = scoreAt(first);
-		const gap = mod(scoreAt(last) - from, lap) || lap;
-		pitScore = (s: number) => mod(from + (gap * s) / Lp, lap);
-		for (let j = 1; j < m; j++) {
-			const s = (Lp * j) / m;
-			const w = waypointOf(sampleAt(pitDense, s), true);
-			w.branch = 1;
-			w.score = pitScore(s);
-			w.sector = sectorOf(w.score);
-			w.speed = 0;
-			wps.push(w);
-			pitS.push(s);
-		}
-		for (let j = 0; j < pitS.length; j++) {
-			const w = wps[pitStart + j] as Waypoint;
-			w.prev = j ? pitStart + j - 1 : fork;
-			w.next = j + 1 < pitS.length ? pitStart + j + 1 : merge;
-		}
-		(wps[fork] as Waypoint).link = pitStart;
-		// (the boxes' stretch: from PIT_BEAM before the first box to PIT_BEAM after the last)
-		const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-		pitIn = clamp(boxes.length ? Math.min(...boxes) - PIT_BEAM : 0.1 * Lp, 0.05 * Lp, 0.9 * Lp);
-		pitOut = clamp(boxes.length ? Math.max(...boxes) + PIT_BEAM : 0.9 * Lp, pitIn + 0.05 * Lp, 0.95 * Lp);
-	}
+	const main: MainLoop = { wps, lap, scoreAt, sectorOf, before: mainBefore, after: mainAfter };
+	const pitBoxes = pitDense && boxesOnPit ? boxAt.map((q) => project(pitDense, q)) : [];
+	const pit = pitDense ? pitLaneOf(pitDense, pitBoxes, spreadOn(pitDense, boxAt), spacing, main) : NO_PIT_LANE;
+	const pitS = pit.s;
+	const pitScore = pit.score;
 	const P = pitS.length;
 
 	// (a lane's waypoints, the main loop's or the pit lane's, and how far along it each is)
-	const mainLane = { first: 0, count: M, closed: true, at: (i: number) => mainU[i] as number, total: L };
-	const pitLane = {
+	const mainLane: Lane = { first: 0, count: M, closed: true, at: (i: number) => mainU[i] as number, total: L };
+	const pitLane: Lane = {
 		first: pitStart,
 		count: P,
 		closed: false,
 		at: (j: number) => pitS[j] as number,
 		total: pitDense?.total ?? 0,
 	};
-	type Lane = typeof mainLane;
 	const laneU = (lane: Lane, q: V3) => (lane === mainLane ? mod(project(fast, q) - start, L) : project(pitDense as Dense, q));
-	/** the lane's free waypoint LINK_BACK or more behind u (back further while taken; else on towards u) */
-	const linkBehind = (lane: Lane, u: number): number => {
-		if (!lane.count) return -1;
-		const back = (k: number) => (lane.closed ? mod(u - lane.at(k), lane.total) : u - lane.at(k));
-		let k = -1;
-		for (let i = 0; i < lane.count; i++) if (back(i) >= LINK_BACK && (k < 0 || back(i) < back(k))) k = i;
-		if (k < 0) k = 0;
-		for (let tries = 0; tries < lane.count; tries++) {
-			const i = lane.closed ? mod(k - tries, lane.count) : k - tries;
-			if (i < 0) break;
-			if ((wps[lane.first + i] as Waypoint).link < 0) return lane.first + i;
-		}
-		for (let i = k + 1; i < lane.count && (lane.closed || lane.at(i) < u); i++) if ((wps[lane.first + i] as Waypoint).link < 0) return lane.first + i;
-		return lane.first + k;
-	};
-	/** the lane's first waypoint on from u (none: -1) */
-	const nextOn = (lane: Lane, u: number) => {
-		for (let i = 0; i < lane.count; i++) if (lane.at(i) > u) return lane.first + i;
-		return lane.closed ? lane.first : -1;
-	};
-	const nearest = (lane: Lane, q: V3) => {
-		let best = lane.first;
-		for (let i = 0; i < lane.count; i++) if (dist((wps[lane.first + i] as Waypoint).pos, q) < dist((wps[best] as Waypoint).pos, q)) best = lane.first + i;
-		return best;
-	};
 
 	// (the grid's slots and the pit boxes: two waypoints each, the spot and its lead-in)
 	const spots = (list: Spot[], lane: Lane, near: Dense, lead: number, firstBranch: number, box: boolean) =>
@@ -578,7 +708,7 @@ function build(input: AiwInput): Built {
 			const made = [at, back].map((place) => {
 				const o = orientation(f.way, place.n);
 				const pos = add(place.p, [0, LIFT, 0]);
-				const W = wps[nearest(lane, pos)] as Waypoint;
+				const W = wps[nearest(wps, lane, pos)] as Waypoint;
 				const off = dot(sub(pos, W.pos), W.perp);
 				const left = Math.max(0.1, W.width[0] + off);
 				const right = Math.max(0.1, W.width[1] - off);
@@ -607,31 +737,24 @@ function build(input: AiwInput): Built {
 			});
 			const [S, B] = made as [{ w: Waypoint; u: number }, { w: Waypoint; u: number }];
 			S.w.prev = iS + 1;
-			const from = linkBehind(lane, B.u);
+			const from = linkBehind(wps, lane, B.u);
 			B.w.prev = from;
 			if (from >= 0 && (wps[from] as Waypoint).link < 0) (wps[from] as Waypoint).link = iS + 1;
 			return { pos: at.p, ori: f.ori };
 		});
 	const gridSpots = spots(grid, mainLane, fast, GRID_LEAD, 2, false);
+	// (the safety car's start where the layout has one: on the floor, facing its way)
+	const sc = input.layout.safety_car;
+	const scAt = sc ? onFloor(sc.x, sc.z, pitDense ?? fast) : null;
+	const safetyCar = sc && scAt ? { pos: scAt.p, ori: orientation(headingWay(sc), scAt.n).ori } : null;
 	const pitSpots = boxesOnPit
 		? spots(pits, pitLane, pitDense as Dense, PIT_LEAD, 2 + STARTING_GRID, true)
 		: spots(pits, mainLane, fast, PIT_LEAD, 2 + STARTING_GRID, true);
 
 	// (the pit lane's waypoints outside the boxes' stretch: the main waypoint beside each, going its way)
-	for (let j = 0; j < P; j++) {
-		const w = wps[pitStart + j] as Waypoint;
-		const s = pitS[j] as number;
-		if (w.link >= 0 || (s >= pitIn && s <= pitOut)) continue;
-		const i = nearest(mainLane, w.pos);
-		const m = wps[i] as Waypoint;
-		if (dist(m.pos, w.pos) <= BESIDE && dot(m.way, w.way) > 0.5) w.link = i;
-	}
+	linkBeside(wps, pitLane, mainLane, pit);
 
 	// (the beams: the gates', else across the line; xpitin and xpitout across the pit lane at the boxes' stretch)
-	const across = (s: Sample, margin: number): [V3, V3] => {
-		const f = orientation(s.w, s.n);
-		return [add(s.p, mul(f.perp, -(s.left + margin))), add(s.p, mul(f.perp, s.right + margin))];
-	};
 	const beam = (name: BeamName, gate: Gate | null, u: number, score: number): Beam => {
 		const [left, right] = gate ? gateEnds(gate) : across(sampleAt(fast, start + u), RUNOFF);
 		return { name, left, right, score, gate: gate?.name ?? null };
@@ -641,31 +764,8 @@ function build(input: AiwInput): Built {
 		beam("xsector1", (sectorEnds[0] as { gate: Gate | null }).gate, bounds[1] as number, sector1),
 		beam("xsector2", (sectorEnds[1] as { gate: Gate | null }).gate, bounds[2] as number, sector2),
 	];
-	if (pitDense)
-		for (const [name, s] of [
-			["xpitin", pitIn],
-			["xpitout", pitOut],
-		] as const) {
-			const [left, right] = across(sampleAt(pitDense, s), LANE_EDGE);
-			beams.push({ name, left, right, score: pitScore(s), gate: null });
-		}
+	if (pitDense) beams.push(...pitBeamsOf(pitDense, pit));
 
-	// (the AUX places: on the pit lane before xpitout; with no pit lane, the pole's)
-	const auxAt = pitDense ? sampleAt(pitDense, Math.max(pitIn, pitOut - spacing)) : null;
-	const aux = auxAt
-		? { pos: auxAt.p, ori: orientation(auxAt.w, auxAt.n).ori }
-		: (gridSpots[0] ?? { pos: (wps[0] as Waypoint).pos, ori: (wps[0] as Waypoint).ori });
-	// (the boxes' side of the lane they are led in from)
-	let side = 0;
-	for (const b of pitSpots) {
-		const W = wps[nearest(boxesOnPit ? pitLane : mainLane, b.pos)] as Waypoint;
-		side += Math.sign(dot(sub(b.pos, W.pos), W.perp));
-	}
-	let pathTime = 0;
-	for (let i = 0; i < M; i++) {
-		const w = wps[i] as Waypoint;
-		pathTime += dist(w.pos, (wps[w.next] as Waypoint).pos) / Math.max(1, w.speed);
-	}
 	return {
 		wps,
 		main: M,
@@ -674,10 +774,11 @@ function build(input: AiwInput): Built {
 		sector2,
 		grid: gridSpots,
 		pits: pitSpots,
-		aux,
+		aux: safetyCar ?? auxOf(pitDense, pit, spacing, gridSpots[0], wps[0] as Waypoint),
 		teleport: gridSpots[0] ? mainBefore(gridSpots[0].pos) : 0,
-		leftPits: side <= 0,
-		pathTime,
+		// (the boxes' side of the lane they are led in from)
+		leftPits: leftPitsOf(wps, pitSpots, boxesOnPit ? pitLane : mainLane),
+		pathTime: pathTimeOf(wps, M),
 		pitLane: P > 0,
 		beams,
 	};

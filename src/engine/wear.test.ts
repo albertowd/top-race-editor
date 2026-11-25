@@ -107,7 +107,7 @@ describe("the rubber along a rubber mark", () => {
 		for (const t of UV) expect(t >= 0 && t <= 1).toBe(true);
 		const pg = laid.pages[0] as Page;
 		expect(Math.log2(pg.width) % 1).toBe(0);
-		expect(pg.rgba.length).toBe(pg.width * pg.height * 4);
+		expect(pg.rgba).toHaveLength(pg.width * pg.height * 4);
 		for (let f = 0; f < F.length; f += 3) {
 			const [i, j, l] = [F[f] as number, F[f + 1] as number, F[f + 2] as number];
 			const up =

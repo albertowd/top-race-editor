@@ -31,7 +31,7 @@ describe("the renders' grass", () => {
 		// (about half the 400 m², two a square metre)
 		expect(clumps).toBeGreaterThan(300);
 		expect(clumps).toBeLessThan(500);
-		expect(faces.length).toBe(clumps * 12);
+		expect(faces).toHaveLength(clumps * 12);
 		for (let i = 0; i < verts.length; i += 11) expect(verts[i] as number).toBeLessThan(0.8);
 		// (the same each time)
 		expect(grassAround(ground, [], [0, 0], 30, 2).verts).toEqual(verts);

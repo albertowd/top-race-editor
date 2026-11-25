@@ -21,7 +21,12 @@ export interface TreePlacement {
 }
 
 type J = { [k: string]: unknown };
-const num = (v: unknown): number | null => (v instanceof PyNumber ? v.value : typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A number given (as read, or plain and finite), else null. */
+function num(v: unknown): number | null {
+	if (v instanceof PyNumber) return v.value;
+	return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
 
 function _num(v: unknown, where: string): number {
 	const n = num(v);
@@ -39,7 +44,7 @@ export function cleanTrees(given: unknown): J[] {
 		const o = t as J;
 		if (typeof o.model !== "string" || !o.model) throw new ObjectsError(`${w}.model: its model's name, please`);
 		const scale = o.scale === undefined || o.scale === null ? 1 : _num(o.scale, `${w}.scale`);
-		if (!(scale > 0)) throw new ObjectsError(`${w}.scale: more than 0, please`);
+		if (scale <= 0 || Number.isNaN(scale)) throw new ObjectsError(`${w}.scale: more than 0, please`);
 		return {
 			model: o.model,
 			x: f(pyRound(_num(o.x, `${w}.x`), ROUND)),

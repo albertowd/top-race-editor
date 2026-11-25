@@ -33,8 +33,8 @@ export interface WizardHost {
 /** A URL as it may be shown: its key out. */
 export function quiet(url: string): string {
 	const u = new URL(url);
-	for (const k of [...u.searchParams.keys()]) if (["key", "access_token", "token", "apikey"].includes(k.toLowerCase())) u.searchParams.set(k, "…");
-	return u.toString().replace(/%E2%80%A6/g, "…");
+	for (const k of u.searchParams.keys()) if (["key", "access_token", "token", "apikey"].includes(k.toLowerCase())) u.searchParams.set(k, "…");
+	return u.toString().replaceAll("%E2%80%A6", "…");
 }
 
 // ---------------------------------------------------------------- the keys, kept on this computer
@@ -196,72 +196,81 @@ export interface Provider {
 	decode?: "terrarium" | "terrain-rgb";
 }
 
-const P = (
-	id: string,
-	kind: Provider["kind"],
-	label: string,
-	about: string,
-	attribution: string,
-	key: string | null,
-	top: number,
-	url = "",
-	decode?: Provider["decode"],
-): Provider => ({ id, kind, label, about, attribution, key, top, url, decode });
+/** A provider from its fields: its tiles' URL "" where it has none, and its fields in this order (decode among them, though not given). */
+const P = ({ id, kind, label, about, attribution, key, top, url = "", decode }: Omit<Provider, "url"> & { url?: string }): Provider => ({
+	id,
+	kind,
+	label,
+	about,
+	attribution,
+	key,
+	top,
+	url,
+	decode,
+});
 
 export const PROVIDERS: Record<string, Provider> = Object.fromEntries(
 	[
-		P(
-			"esri",
-			"image",
-			"Esri World Imagery",
-			"Satellite and aerial pictures; no key needed.",
-			"Esri, Maxar, Earthstar Geographics",
-			null,
-			19,
-			"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-		),
-		P(
-			"mapbox",
-			"image",
-			"Mapbox Satellite",
-			"Satellite pictures; needs a Mapbox access token.",
-			"© Mapbox, © Maxar",
-			"mapbox",
-			19,
-			"https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}.jpg90?access_token={key}",
-		),
-		P("google", "image", "Google Maps", "Google's satellite pictures (the Maps Static API); needs a Google Maps API key.", "Imagery © Google", "google", 20),
-		P(
-			"terrarium",
-			"heights",
-			"AWS Terrain Tiles",
-			"Heights of the ground from SRTM and other surveys, some 5 to 30 m apart; no key needed.",
-			"Mapzen, AWS Open Data",
-			null,
-			15,
-			"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
-			"terrarium",
-		),
-		P(
-			"mapbox-dem",
-			"heights",
-			"Mapbox Terrain",
-			"Heights in Mapbox Terrain-RGB tiles; needs a Mapbox access token.",
-			"© Mapbox",
-			"mapbox",
-			15,
-			"https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token={key}",
-			"terrain-rgb",
-		),
-		P(
-			"google-elevation",
-			"heights",
-			"Google Elevation",
-			"Google's heights (the Elevation API), as the Velopark's came; needs a Google Maps API key.",
-			"© Google",
-			"google",
-			0,
-		),
+		P({
+			id: "esri",
+			kind: "image",
+			label: "Esri World Imagery",
+			about: "Satellite and aerial pictures; no key needed.",
+			attribution: "Esri, Maxar, Earthstar Geographics",
+			key: null,
+			top: 19,
+			url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+		}),
+		P({
+			id: "mapbox",
+			kind: "image",
+			label: "Mapbox Satellite",
+			about: "Satellite pictures; needs a Mapbox access token.",
+			attribution: "© Mapbox, © Maxar",
+			key: "mapbox",
+			top: 19,
+			url: "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}.jpg90?access_token={key}",
+		}),
+		P({
+			id: "google",
+			kind: "image",
+			label: "Google Maps",
+			about: "Google's satellite pictures (the Maps Static API); needs a Google Maps API key.",
+			attribution: "Imagery © Google",
+			key: "google",
+			top: 20,
+		}),
+		P({
+			id: "terrarium",
+			kind: "heights",
+			label: "AWS Terrain Tiles",
+			about: "Heights of the ground from SRTM and other surveys, some 5 to 30 m apart; no key needed.",
+			attribution: "Mapzen, AWS Open Data",
+			key: null,
+			top: 15,
+			url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+			decode: "terrarium",
+		}),
+		P({
+			id: "mapbox-dem",
+			kind: "heights",
+			label: "Mapbox Terrain",
+			about: "Heights in Mapbox Terrain-RGB tiles; needs a Mapbox access token.",
+			attribution: "© Mapbox",
+			key: "mapbox",
+			top: 15,
+			url: "https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token={key}",
+			decode: "terrain-rgb",
+		}),
+		P({
+			id: "google-elevation",
+			kind: "heights",
+			label: "Google Elevation",
+			about: "Google's heights (the Elevation API), as the Velopark's came; needs a Google Maps API key.",
+			attribution: "© Google",
+			key: "google",
+			top: 0,
+		}),
 	].map((p) => [p.id, p]),
 );
 
@@ -288,11 +297,14 @@ export async function providersForPage(keys: Keys) {
 	};
 }
 
-const pyRepr = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+const pyRepr = (s: string) => {
+	const escaped = s.replaceAll("\\", String.raw`\\`).replaceAll("'", String.raw`\'`);
+	return `'${escaped}'`;
+};
 
 export function provider(pid: string, kind: Provider["kind"]): Provider {
 	const p = PROVIDERS[pid];
-	if (!p || p.kind !== kind) throw new ProviderError(`no ${kind} provider ${pyRepr(pid)}`);
+	if (p?.kind !== kind) throw new ProviderError(`no ${kind} provider ${pyRepr(pid)}`);
 	return p;
 }
 
@@ -362,15 +374,19 @@ export async function tileJpeg(p: Provider, key: string, z: number, x: number, y
 export type Progress = (done: number, total: number) => void;
 
 /** The tiles at z fetched (a few at once) into one mosaic (RGB, 0-255), its first pixel's world pixel. */
+/** A long fetch's progress told, and whether it is to stop. */
+export interface Running {
+	progress?: Progress;
+	stop?: () => boolean;
+}
+
 export async function mosaic(
 	p: Provider,
 	key: string,
 	tiles: [number, number][],
 	z: number,
 	host: WizardHost,
-	progress: Progress = () => {},
-	stop: () => boolean = () => false,
-	workers = 6,
+	{ progress = () => {}, stop = () => false, workers = 6 }: Running & { workers?: number } = {},
 ): Promise<Mosaic> {
 	const xs = tiles.map((t) => t[0]);
 	const ys = tiles.map((t) => t[1]);
@@ -414,11 +430,10 @@ export async function picture(
 	area: Area,
 	mpp: number,
 	host: WizardHost,
-	progress?: Progress,
-	stop?: () => boolean,
+	{ progress, stop }: Running = {},
 ): Promise<[Picture, number]> {
 	const z = zoomFor(place.lat, mpp, p.top);
-	const m = await mosaic(p, key, tilesOver(place, area, z), z, host, progress, stop);
+	const m = await mosaic(p, key, tilesOver(place, area, z), z, host, { progress, stop });
 	// (sampled as float32, as numpy has the mosaic)
 	const f = { ...m, data: Float32Array.from(m.data) };
 	const [[xa, xb], [za, zb]] = area;
@@ -469,8 +484,7 @@ export async function heights(
 	x: number[],
 	z: number[],
 	host: WizardHost,
-	progress: Progress = () => {},
-	stop: () => boolean = () => false,
+	{ progress = () => {}, stop = () => false }: Running = {},
 ): Promise<[number[], number[]]> {
 	const ll = x.map((xi, i) => place.latlon(xi, z[i] as number));
 	if (p.id === "google-elevation") {
@@ -503,7 +517,7 @@ export async function heights(
 		[Math.min(...x), Math.max(...x)],
 		[Math.min(...z), Math.max(...z)],
 	];
-	const m = await mosaic(p, key, tilesOver(place, area, zt), zt, host, progress, stop);
+	const m = await mosaic(p, key, tilesOver(place, area, zt), zt, host, { progress, stop });
 	const H = new Float64Array(m.rows * m.cols);
 	for (let i = 0; i < H.length; i++) H[i] = decodeHeights(m.data[i * 3] as number, m.data[i * 3 + 1] as number, m.data[i * 3 + 2] as number, p.decode);
 	const hm: Mosaic = { ...m, channels: 1, data: H };

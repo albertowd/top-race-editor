@@ -49,35 +49,50 @@ let preview: {
 	box: [number, number, number, number];
 } | null = null;
 
+/** The roads' box in metres, each point's side out to its widest plus two metres. */
+function roadsBox(s: EditorState): [number, number, number, number] {
+	let [x0, z0, x1, z1] = [Infinity, Infinity, -Infinity, -Infinity];
+	for (const r of s.roads)
+		for (const n of r.curve ?? []) {
+			const w = Math.max(n.left ?? 4, n.right ?? 4) + 2;
+			[x0, z0, x1, z1] = [Math.min(x0, n.p[0] - w), Math.min(z0, n.p[1] - w), Math.max(x1, n.p[0] + w), Math.max(z1, n.p[1] + w)];
+		}
+	return [x0, z0, x1, z1];
+}
+
+/** The roughness painted a point every PREVIEW metres from the box's corner, W by H of them (none: too big, or no canvas). */
+function roughCanvas(rough: (x: number, z: number) => number, x0: number, z0: number, W: number, H: number): HTMLCanvasElement | null {
+	const c = W > 0 && H > 0 && W * H < 16e6 ? document.createElement("canvas") : null;
+	const g = c?.getContext("2d");
+	if (!c || !g) return null;
+	c.width = W;
+	c.height = H;
+	const img = g.createImageData(W, H);
+	for (let j = 0; j < H; j++)
+		for (let i = 0; i < W; i++) {
+			const v = rough(x0 + (i + 0.5) * PREVIEW, z0 + (j + 0.5) * PREVIEW);
+			if (v) img.data.set(roughColour(v), (j * W + i) * 4);
+		}
+	g.putImageData(img, 0, 0);
+	return c;
+}
+
+/** A point of roughness's colour: red where the floor goes up, blue where down, the stronger the more. */
+function roughColour(v: number): number[] {
+	const a = Math.min(1, Math.abs(v) / BUMP_FULL);
+	return [v > 0 ? 255 : 60, v > 0 ? 80 : 140, v > 0 ? 60 : 255, Math.round(a * 150)];
+}
+
 function roughPicture(s: EditorState) {
 	const surface = s.objects?.surface;
-	if (preview && preview.roads === s.roads && preview.surface === surface) return preview;
+	if (preview?.roads === s.roads && preview.surface === surface) return preview;
 	const rough = roughnessOf(s.roads as unknown as RoadDesc[], surface);
 	let pic: HTMLCanvasElement | null = null;
 	let box: [number, number, number, number] = [0, 0, 0, 0];
 	if (rough && typeof document !== "undefined") {
-		let [x0, z0, x1, z1] = [Infinity, Infinity, -Infinity, -Infinity];
-		for (const r of s.roads)
-			for (const n of r.curve ?? []) {
-				const w = Math.max(n.left ?? 4, n.right ?? 4) + 2;
-				[x0, z0, x1, z1] = [Math.min(x0, n.p[0] - w), Math.min(z0, n.p[1] - w), Math.max(x1, n.p[0] + w), Math.max(z1, n.p[1] + w)];
-			}
-		const W = Math.ceil((x1 - x0) / PREVIEW);
-		const H = Math.ceil((z1 - z0) / PREVIEW);
-		const c = W > 0 && H > 0 && W * H < 16e6 ? document.createElement("canvas") : null;
-		const g = c?.getContext("2d");
-		if (c && g) {
-			c.width = W;
-			c.height = H;
-			const img = g.createImageData(W, H);
-			for (let j = 0; j < H; j++)
-				for (let i = 0; i < W; i++) {
-					const v = rough(x0 + (i + 0.5) * PREVIEW, z0 + (j + 0.5) * PREVIEW);
-					if (!v) continue;
-					const a = Math.min(1, Math.abs(v) / BUMP_FULL);
-					img.data.set([v > 0 ? 255 : 60, v > 0 ? 80 : 140, v > 0 ? 60 : 255, Math.round(a * 150)], (j * W + i) * 4);
-				}
-			g.putImageData(img, 0, 0);
+		const [x0, z0, x1, z1] = roadsBox(s);
+		const c = roughCanvas(rough, x0, z0, Math.ceil((x1 - x0) / PREVIEW), Math.ceil((z1 - z0) / PREVIEW));
+		if (c) {
 			pic = c;
 			box = [x0, z0, x1, z1];
 		}
@@ -110,31 +125,45 @@ export function drawBumps(g: CanvasRenderingContext2D, s: EditorState, b: Box, p
 	if (s.mode !== "bumps") return;
 	const brush = s.bumpBrush;
 	if (brush.mode === "point") {
-		if (ppm >= POINTS_PPM) {
-			g.fillStyle = "rgba(255,255,255,0.7)";
-			const r = 1.5 * px;
-			for (const m of Object.values(s.meshes)) {
-				const P = m.P;
-				if (!P) continue;
-				for (let i = 0; i < P.length; i += 2) {
-					const x = P[i] as number;
-					const z = P[i + 1] as number;
-					if (x < b.xmin || x > b.xmax || z < b.zmin || z > b.zmax) continue;
-					g.fillRect(x - r, z - r, 2 * r, 2 * r);
-				}
-			}
-		}
-		const q: Vec2 | null = s.bumpPick;
-		if (q) {
-			ring(g, q, brush.reach, px, "rgba(79,163,255,0.6)");
-			g.beginPath();
-			g.arc(q[0], q[1], (MARK_PX.dot / 1.5) * px, 0, Math.PI * 2);
-			g.fillStyle = PICKED;
-			g.fill();
-		}
+		if (ppm >= POINTS_PPM) drawPoints(g, s, b, px);
+		drawPicked(g, s, px);
 		return;
 	}
-	if (s.mouse) ring(g, s.mouse, brush.radius, px, brush.mode === "lower" ? "#3c8cff" : brush.mode === "raise" ? "#ff503c" : "#ffffff");
+	if (s.mouse) ring(g, s.mouse, brush.radius, px, brushColour(brush.mode));
+}
+
+/** The point picked, if one is: a dot with the brush's reach around it. */
+function drawPicked(g: CanvasRenderingContext2D, s: EditorState, px: number) {
+	const q: Vec2 | null = s.bumpPick;
+	if (!q) return;
+	ring(g, q, s.bumpBrush.reach, px, "rgba(79,163,255,0.6)");
+	g.beginPath();
+	g.arc(q[0], q[1], (MARK_PX.dot / 1.5) * px, 0, Math.PI * 2);
+	g.fillStyle = PICKED;
+	g.fill();
+}
+
+/** The brush's ring colour: blue lowering, red raising, white otherwise. */
+function brushColour(mode: EditorState["bumpBrush"]["mode"]): string {
+	if (mode === "lower") return "#3c8cff";
+	if (mode === "raise") return "#ff503c";
+	return "#ffffff";
+}
+
+/** The roads' meshes' points in view, each a small square. */
+function drawPoints(g: CanvasRenderingContext2D, s: EditorState, b: Box, px: number) {
+	g.fillStyle = "rgba(255,255,255,0.7)";
+	const r = 1.5 * px;
+	for (const m of Object.values(s.meshes)) {
+		const P = m.P;
+		if (!P) continue;
+		for (let i = 0; i < P.length; i += 2) {
+			const x = P[i] as number;
+			const z = P[i + 1] as number;
+			if (x < b.xmin || x > b.xmax || z < b.zmin || z > b.zmax) continue;
+			g.fillRect(x - r, z - r, 2 * r, 2 * r);
+		}
+	}
 }
 
 function ring(g: CanvasRenderingContext2D, q: Vec2, r: number, px: number, colour: string) {

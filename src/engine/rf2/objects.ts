@@ -63,7 +63,7 @@ export const objectInstance = (name: string): Instance => ({
 });
 
 /** A placed object's GMT's name: its model and a short hash of where it stands and what it says (the same object in two layouts one GMT). */
-export const objectName = (model: string, hash: string): string => `${model.replace(/[^A-Za-z0-9_]/g, "_")}_${hash.slice(0, 10)}`.slice(0, 60);
+export const objectName = (model: string, hash: string): string => `${model.replaceAll(/\W/g, "_")}_${hash.slice(0, 10)}`.slice(0, 60);
 
 /** What makes a placed object one: its model, place, heading and text. */
 export const objectKey = (o: PhysicsObject): string => [o.model, o.x.toFixed(4), o.y.toFixed(4), o.z.toFixed(4), o.heading.toFixed(5), o.text ?? ""].join("|");

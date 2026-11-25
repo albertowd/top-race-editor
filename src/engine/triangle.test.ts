@@ -15,8 +15,8 @@ describe("Triangle as WebAssembly", () => {
 		expect(() => T.triangulate("pQ", { points: [0, 0, 1, 0] })).toThrow(TriangleError);
 		// (no segments, so not 'p': it would take away every triangle no segment keeps)
 		const out = T.triangulate("Q", { points: [0, 0, 1, 0, 0, 1] });
-		expect(out.triangles.length).toBe(3);
+		expect(out.triangles).toHaveLength(3);
 		// (many times over: what it makes is freed)
-		for (let i = 0; i < 2000; i++) expect(T.triangulate("Q", { points: [0, 0, 1, 0, 1, 1, 0, 1, 0.5, 0.5] }).triangles.length).toBe(12);
+		for (let i = 0; i < 2000; i++) expect(T.triangulate("Q", { points: [0, 0, 1, 0, 1, 1, 0, 1, 0.5, 0.5] }).triangles).toHaveLength(12);
 	});
 });

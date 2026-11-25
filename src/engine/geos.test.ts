@@ -34,7 +34,7 @@ describe("GEOS on the grid", () => {
 		expect(areaOf(geosOp("intersection", [a], [b]))).toBe(25);
 		expect(areaOf(geosOp("difference", [a], [b]))).toBe(75);
 		const ring = geosOp("difference", [square(0, 0, 10)], [square(3, 3, 4)]);
-		expect(ring.length).toBe(1);
+		expect(ring).toHaveLength(1);
 		expect(ring[0]?.holes.length).toBe(1);
 		expect(areaOf(ring)).toBe(84);
 	});

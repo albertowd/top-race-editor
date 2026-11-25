@@ -1,6 +1,6 @@
 import { CATEGORIES } from "../domain/categories";
 import { MARK_PX, RUNOFF_WIDTH, SNAP_PX } from "../domain/constants";
-import type { ObjectPick, PaintLine, Road, Vec2 } from "../domain/types";
+import type { MarkKind, ObjectPick, PaintLine, Road, Vec2 } from "../domain/types";
 import { bumpAt } from "../editing/bumps";
 import { keepEdge } from "../editing/ends";
 import { type HitContext, hitTest, type ItemHit, itemAt } from "../editing/hit";
@@ -202,11 +202,12 @@ function moveLineEnd({ ed, s, find, road, d, wx, wz, p }: HandleMove) {
 	const sp = p.ctrl ? null : snapToPaintEnd(s.roads, find, s.objects?.marks ?? [], wx, wz, { road: d.road, line }, SNAP_PX / s.view.ppm);
 	ed.set({ snapMark: sp });
 	const at = sp ? lineEndNearest(o, ln, sp.x, sp.z) : r1(nearestOn(o, wx, wz).s);
+	const near = sp ? 0.0005 : 0.05;
 	ed.edit((rs) => {
 		const ln = rs[d.road].lines?.[line];
 		if (!ln) return;
 		if (d.handle === "lfrom") ln.from = at;
-		else ln.to = at >= o.length - (sp ? 0.0005 : 0.05) ? null : at;
+		else ln.to = at >= o.length - near ? null : at;
 	});
 }
 
@@ -250,6 +251,16 @@ const HANDLE_MOVES: Record<string, (m: HandleMove) => void> = {
 	lfrom: moveLineEnd,
 	lto: moveLineEnd,
 };
+
+/** Where a mark's end dragged to (wx, wz) goes: onto another mark's end, a node or its line where near; a paint mark's onto the roads' edge lines too, a rubber
+ * mark's onto the other rubber only (no objects: nowhere). */
+function markSnap(s: EditorState, kind: MarkKind, i: number, wx: number, wz: number) {
+	if (!s.objects) return null;
+	const marks = marksOf(s.objects, kind);
+	const tol = SNAP_PX / s.view.ppm;
+	if (kind === "marks") return snapToMarks(marks, wx, wz, i, tol, s.roads, lookup(s.roads));
+	return snapToMarks(marks, wx, wz, i, tol, []);
+}
 
 /** The map's mouse: selecting, dragging nodes, handles, widths, lines and rumbles, panning, measuring. */
 export class MapInteractions {
@@ -374,7 +385,7 @@ export class MapInteractions {
 		if (!s.layers.objects || !s.objects || !kinds.length) return null;
 		const h = turnHandle(s.objects, s.layout, s.obj, (x, z) => toScreen(s.view, this.size(), x, z));
 		if (h && s.obj && Math.hypot(h[0] - p.sx, h[1] - p.sy) <= 8) return { pick: s.obj, turn: true };
-		const pick = objectAt(s.objects, s.layout, wx, wz, 6 / s.view.ppm, kinds, s.obj, MARK_PX.grab / s.view.ppm);
+		const pick = objectAt(s.objects, s.layout, wx, wz, 6 / s.view.ppm, kinds, { picked: s.obj, grab: MARK_PX.grab / s.view.ppm });
 		return pick && { pick, turn: false };
 	}
 
@@ -448,57 +459,15 @@ export class MapInteractions {
 		const s = ed.get();
 		const [wx, wz] = this.world(p);
 		ed.set({ mouse: [wx, wz] });
-		if (s.lining.drawing && !this.drag) {
-			const sp = this.snap(wx, wz, null, p);
-			ed.set({ snapMark: sp });
-			ed.lineHover(sp ? [sp.x, sp.z] : [wx, wz]);
-			return "crosshair";
-		}
+		if (s.lining.drawing && !this.drag) return this.lineHover(wx, wz, p);
 		const d = this.drag;
-		if (!d) return s.mode === "select" && !s.space ? this.hoverCursor(wx, wz) : null;
-		if (d.kind === "measure") {
-			const sp = this.snap(wx, wz, null, p);
-			ed.set({ snapMark: sp, measure: { a: s.measure?.a ?? [wx, wz], b: sp ? [sp.x, sp.z] : [wx, wz] } });
-			return null;
-		}
-		if (d.kind === "bumpBrush") {
-			// (a dab every quarter of the brush's reach along the drag)
-			const step = Math.max(s.bumpBrush.radius / 4, 0.05);
-			let [x, z] = d.last;
-			for (let n = Math.floor(Math.hypot(wx - x, wz - z) / step); n > 0; n--) {
-				const k = step / Math.hypot(wx - x, wz - z);
-				[x, z] = [x + (wx - x) * k, z + (wz - z) * k];
-				ed.bumpDabAt(x, z);
-			}
-			d.last = [x, z];
-			return "crosshair";
-		}
-		if (d.kind === "bumpPoint") {
-			// (up the screen: up; BUMP_PX pixels a millimetre, Shift a tenth as fast)
-			const by = ((d.sy - p.sy) / BUMP_PX / 1000) * (p.shift ? 0.1 : 1);
-			ed.setBumpAtPick(Math.round((d.from + by) * 1e4) / 1e4, !d.moved);
-			d.moved = true;
-			return "ns-resize";
-		}
-		if (d.kind === "mark") {
-			// (dragged: a new mark from where it was pressed, its far end dragged on)
-			if (Math.hypot(p.sx - d.sx, p.sy - d.sy) <= 3) return "crosshair";
-			ed.set({ placing: null });
-			this.drag = null;
-			this.place({ ...p, alt: d.alt }, d.at[0], d.at[1]);
-			const nd = this.drag as Drag | null;
-			if (nd?.kind === "object") this.dragObject(nd, wx, wz, p);
-			return "grabbing";
-		}
-		if (d.kind === "pan") {
-			ed.set({ view: panned(d.from, d.sx, d.sy, p.sx, p.sy) });
-			if (Math.hypot(p.sx - d.sx, p.sy - d.sy) > 3) d.click = false;
-			return null;
-		}
-		if (d.kind === "object" || d.kind === "turn") {
-			this.dragObject(d, wx, wz, p);
-			return d.kind === "object" ? "grabbing" : null;
-		}
+		if (!d) return this.idleCursor(s, wx, wz);
+		if (d.kind === "measure") return this.measureTo(s, wx, wz, p);
+		if (d.kind === "bumpBrush") return this.brushAlong(d, s, wx, wz);
+		if (d.kind === "bumpPoint") return this.bumpPointTo(d, p);
+		if (d.kind === "mark") return this.markDragged(d, wx, wz, p);
+		if (d.kind === "pan") return this.panTo(d, p);
+		if (d.kind === "object" || d.kind === "turn") return this.objectDragged(d, wx, wz, p);
 		const road = s.roads[d.road];
 		if (!road) return null;
 		d.moved = true;
@@ -511,10 +480,76 @@ export class MapInteractions {
 		return null;
 	}
 
+	/** Drawing a line: where it would go next, onto what is near. */
+	private lineHover(wx: number, wz: number, p: Pointer): string {
+		const sp = this.snap(wx, wz, null, p);
+		this.ed.set({ snapMark: sp });
+		this.ed.lineHover(sp ? [sp.x, sp.z] : [wx, wz]);
+		return "crosshair";
+	}
+
+	/** Nothing dragged: what is under the mouse, while selecting. */
+	private idleCursor(s: EditorState, wx: number, wz: number): string | null {
+		return s.mode === "select" && !s.space ? this.hoverCursor(wx, wz) : null;
+	}
+
+	/** Measuring: the far end at the mouse, onto what is near. */
+	private measureTo(s: EditorState, wx: number, wz: number, p: Pointer): null {
+		const sp = this.snap(wx, wz, null, p);
+		this.ed.set({ snapMark: sp, measure: { a: s.measure?.a ?? [wx, wz], b: sp ? [sp.x, sp.z] : [wx, wz] } });
+		return null;
+	}
+
+	/** A bump brush's stroke: a dab every quarter of the brush's reach along the drag. */
+	private brushAlong(d: Extract<Drag, { kind: "bumpBrush" }>, s: EditorState, wx: number, wz: number): string {
+		const step = Math.max(s.bumpBrush.radius / 4, 0.05);
+		let [x, z] = d.last;
+		for (let n = Math.floor(Math.hypot(wx - x, wz - z) / step); n > 0; n--) {
+			const k = step / Math.hypot(wx - x, wz - z);
+			[x, z] = [x + (wx - x) * k, z + (wz - z) * k];
+			this.ed.bumpDabAt(x, z);
+		}
+		d.last = [x, z];
+		return "crosshair";
+	}
+
+	/** A bump point dragged: up the screen up, BUMP_PX pixels a millimetre, Shift a tenth as fast. */
+	private bumpPointTo(d: Extract<Drag, { kind: "bumpPoint" }>, p: Pointer): string {
+		const by = ((d.sy - p.sy) / BUMP_PX / 1000) * (p.shift ? 0.1 : 1);
+		this.ed.setBumpAtPick(Math.round((d.from + by) * 1e4) / 1e4, !d.moved);
+		d.moved = true;
+		return "ns-resize";
+	}
+
+	/** Placing marks, dragged: a new mark from where it was pressed, its far end dragged on. */
+	private markDragged(d: Extract<Drag, { kind: "mark" }>, wx: number, wz: number, p: Pointer): string {
+		if (Math.hypot(p.sx - d.sx, p.sy - d.sy) <= 3) return "crosshair";
+		this.ed.set({ placing: null });
+		this.drag = null;
+		this.place({ ...p, alt: d.alt }, d.at[0], d.at[1]);
+		const nd = this.drag as Drag | null;
+		if (nd?.kind === "object") this.dragObject(nd, wx, wz, p);
+		return "grabbing";
+	}
+
+	/** The view panned with the mouse (moved more than 3 pixels: not a click). */
+	private panTo(d: Extract<Drag, { kind: "pan" }>, p: Pointer): null {
+		this.ed.set({ view: panned(d.from, d.sx, d.sy, p.sx, p.sy) });
+		if (Math.hypot(p.sx - d.sx, p.sy - d.sy) > 3) d.click = false;
+		return null;
+	}
+
+	/** An object dragged or turned, and the cursor for it. */
+	private objectDragged(d: ObjectDrag, wx: number, wz: number, p: Pointer): string | null {
+		this.dragObject(d, wx, wz, p);
+		return d.kind === "object" ? "grabbing" : null;
+	}
+
 	private hoverCursor(wx: number, wz: number): string {
 		const s = this.ed.get();
 		const kinds = CATEGORIES[s.focus].kinds;
-		const onObject = s.layers.objects && s.objects && objectAt(s.objects, s.layout, wx, wz, 6 / s.view.ppm, kinds, s.obj, MARK_PX.grab / s.view.ppm);
+		const onObject =
+			s.layers.objects && s.objects && objectAt(s.objects, s.layout, wx, wz, 6 / s.view.ppm, kinds, { picked: s.obj, grab: MARK_PX.grab / s.view.ppm });
 		return onObject || itemAt(this.hitContext(), wx, wz) ? "grab" : "default";
 	}
 
@@ -523,13 +558,7 @@ export class MapInteractions {
 		const s = this.ed.get();
 		const { layout } = s;
 		if (d.kind === "object" && isMarkKind(d.pick.kind) && d.pick.j >= 0 && !d.pick.h) {
-			// (onto another mark's end, a node or its line where near (Ctrl: not; Shift: its way by 15 degrees instead); a paint mark's onto the roads' edge lines
-			// too, a rubber mark's onto the other rubber only)
-			const paint = d.pick.kind === "marks";
-			const sp =
-				p.ctrl || p.shift || !s.objects
-					? null
-					: snapToMarks(marksOf(s.objects, d.pick.kind), wx, wz, d.pick.i, SNAP_PX / s.view.ppm, paint ? s.roads : [], paint ? lookup(s.roads) : undefined);
+			const sp = p.ctrl || p.shift ? null : markSnap(s, d.pick.kind, d.pick.i, wx, wz);
 			this.ed.set({ snapMark: sp });
 			const [x, z] = sp ? [sp.x, sp.z] : [wx, wz];
 			this.ed.editObjects((o) => moveObjectEnd(o, d.pick, x, z, p.shift), {}, d.pick.kind);

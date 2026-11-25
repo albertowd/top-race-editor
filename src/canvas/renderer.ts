@@ -122,12 +122,31 @@ export function drawFrame(f: Frame): string {
 	const shape = cat.roads === "shape";
 	const roadsAlpha = cat.roads === "none" ? fade && Math.max(fade, 0.55) : 1;
 	L.worldT();
+	drawGround(L, cat, fade, roadsAlpha);
+	const objects = objectsFrameOf(L);
+	if (objects) byKinds(g, cat, fade, (kinds) => drawObjectsWorld({ ...objects, kinds }));
+	drawLining(g, s.lining, L.ppm);
+	L.screenT();
+	drawScreenMarks(L, cat, roadsAlpha, shape);
+	if (objects) byKinds(g, cat, fade, (kinds) => drawObjectsScreen({ ...objects, kinds }, L.scr));
+	drawOverlays(g, s, L.scr);
+	f.extra?.over(g);
+	L.msgs.push(...modeMessages(s, L.sel));
+	const extra = f.extra?.message();
+	if (extra) L.msgs.push(extra);
+	return L.msgs.at(-1) ?? "";
+}
+
+/** What is drawn in metres on the ground, under the objects: the roads (as faint as asked), the selected road's wires and wrong faces, the paint, the bumps, the
+ * start lines, the selected line or rumble. */
+function drawGround(L: Layer, cat: (typeof CATEGORIES)[keyof typeof CATEGORIES], fade: number, roadsAlpha: number) {
+	const { g, s } = L;
 	if (roadsAlpha) {
 		g.globalAlpha = roadsAlpha;
 		drawRoads(L);
 		g.globalAlpha = 1;
 	}
-	if (L.sel && shape && s.layers.wire) drawWires(L);
+	if (L.sel && cat.roads === "shape" && s.layers.wire) drawWires(L);
 	if (L.sel) drawWrongFaces(L);
 	drawPaint(L, cat.kerbs ? 1 : fade, cat.lines ? 1 : fade);
 	// (the roads' bumps made by hand: over the roads while they are worked on (Bumps), or in Roads)
@@ -140,30 +159,45 @@ export function drawFrame(f: Frame): string {
 		g.globalAlpha = 1;
 	}
 	if (L.sel) drawSelectedItem(g, s, L.sel, L.find);
-	const objects = s.layers.objects &&
+}
+
+/** The objects as drawn this frame (their layer hidden, or none: nothing). */
+function objectsFrameOf({ g, s, b, ppm, find }: Layer) {
+	return (
+		s.layers.objects &&
 		s.objects && {
 			g,
 			o: s.objects,
 			layout: s.layout,
 			picked: s.obj,
-			b: L.b,
-			ppm: L.ppm,
+			b,
+			ppm,
 			catalogue: s.catalogue,
-			paint: paintOf(s.roads, s.objects.marks, L.find),
-		};
+			paint: paintOf(s.roads, s.objects.marks, find),
+		}
+	);
+}
+
+/** Objects drawn by their kinds: the other categories' first, as faint as the others are shown (not at all: not drawn), then the category worked on's own. */
+function byKinds(
+	g: CanvasRenderingContext2D,
+	cat: (typeof CATEGORIES)[keyof typeof CATEGORIES],
+	fade: number,
+	draw: (kinds: ReadonlySet<(typeof OBJECT_KINDS)[number]>) => void,
+) {
 	const mine = new Set(cat.kinds);
 	const rest = new Set(OBJECT_KINDS.filter((k) => !mine.has(k)));
-	const eachObjects = (draw: (kinds: ReadonlySet<(typeof OBJECT_KINDS)[number]>) => void) => {
-		if (fade && rest.size) {
-			g.globalAlpha = fade;
-			draw(rest);
-			g.globalAlpha = 1;
-		}
-		if (mine.size) draw(mine);
-	};
-	if (objects) eachObjects((kinds) => drawObjectsWorld({ ...objects, kinds }));
-	drawLining(g, s.lining, L.ppm);
-	L.screenT();
+	if (fade && rest.size) {
+		g.globalAlpha = fade;
+		draw(rest);
+		g.globalAlpha = 1;
+	}
+	if (mine.size) draw(mine);
+}
+
+/** What is drawn in pixels under the objects' names: the surface checked, the start lines' names, the roads' names, the selected road's handles. */
+function drawScreenMarks(L: Layer, cat: (typeof CATEGORIES)[keyof typeof CATEGORIES], roadsAlpha: number, shape: boolean) {
+	const { g, s } = L;
 	if (s.layers.surface && s.surface) drawSurface(L, s.surface);
 	// (the start lines named by their layouts, where the paint is worked on and near enough to read)
 	if (s.objects && cat.lines && L.ppm >= LABELS_PPM) drawStartLineLabels(g, startLinesOf(s.objects, s.roads), L.b, L.scr);
@@ -173,13 +207,6 @@ export function drawFrame(f: Frame): string {
 		g.globalAlpha = 1;
 	}
 	if (L.sel) drawHandles(g, s, L.sel, L.find, L.scr, shape);
-	if (objects) eachObjects((kinds) => drawObjectsScreen({ ...objects, kinds }, L.scr));
-	drawOverlays(g, s, L.scr);
-	f.extra?.over(g);
-	L.msgs.push(...modeMessages(s, L.sel));
-	const extra = f.extra?.message();
-	if (extra) L.msgs.push(extra);
-	return L.msgs.at(-1) ?? "";
 }
 
 function drawSatellite({ g, f, s, scr, ppm }: Layer) {
@@ -267,22 +294,26 @@ function drawWrongFaces({ g, s, find, ppm }: Layer) {
 function drawPaint({ g, s, find, b, ppm }: Layer, kerbsAlpha = 1, linesAlpha = 1) {
 	if (!kerbsAlpha && !linesAlpha) return;
 	g.globalAlpha = kerbsAlpha;
-	if (s.layers.kerbs && kerbsAlpha)
-		for (const r of s.roads) {
-			const o = geo(r, find);
-			const sh = o && boxesMeet(o.box, b) ? roadShapes(r, find) : null;
-			if (!sh) continue;
-			for (const [col, path] of roadPaths(sh).kerbs) {
-				g.fillStyle = col;
-				g.fill(path);
-			}
-		}
+	if (s.layers.kerbs && kerbsAlpha) drawKerbs(g, s.roads, find, b);
 	g.globalAlpha = linesAlpha;
 	if (s.layers.lines && linesAlpha) {
 		for (const { chain: c } of paintInView(paintOf(s.roads, s.objects?.marks, find), b, true))
 			strokePaint(g, c, c.colour === "yellow" ? "#ffd21f" : "#ffffff", 1 / ppm);
 	}
 	g.globalAlpha = 1;
+}
+
+/** Every road's rumbles in view, each piece in its colour. */
+function drawKerbs(g: CanvasRenderingContext2D, roads: readonly Road[], find: Lookup, b: Box) {
+	for (const r of roads) {
+		const o = geo(r, find);
+		const sh = o && boxesMeet(o.box, b) ? roadShapes(r, find) : null;
+		if (!sh) continue;
+		for (const [col, path] of roadPaths(sh).kerbs) {
+			g.fillStyle = col;
+			g.fill(path);
+		}
+	}
 }
 
 /** The surface checked: its window, its faces (zoomed in), its problems ringed. */
@@ -326,28 +357,31 @@ function modeMessages(s: EditorState, sel: Road | undefined): string[] {
 			s.lining.lines[s.lining.kind].a ? "Line: click the way the rest go (they snap; Ctrl: not), Esc to stop" : "Line: click where the first one stands",
 		);
 	if (s.mode === "add" && !s.newRoad) out.push(sel ? `Add node: click on ${sel.name}, or past one of its ends` : "Add node: select a road first");
-	if (s.mode === "place") {
-		const what = OBJECT_LABELS[s.place].one.toLowerCase();
-		const where = isLayoutKind(s.place) ? ` to ${s.layout}` : "";
-		// (the one this placing made, its nodes added; else a new one)
-		const into = placingInto(s);
-		const on =
-			into === undefined
-				? undefined
-				: s.place === "areas"
-					? s.objects?.areas?.[into]
-					: isMarkKind(s.place) && s.objects
-						? marksOf(s.objects, s.place)[into]
-						: s.objects?.objects[into];
-		const wall = on ? ` (on ${on.name})` : "";
-		if (s.place === "marks" && s.markAcross) out.push("Place: click on a road to paint a line across it, edge to edge; Esc to stop");
-		else if (isMarkKind(s.place))
-			out.push(
-				`Place: drag from its start to its end (Shift: its way by 15°) to add a ${what}${on ? `, or click to carry ${on.name} on to there` : ""}; Esc to stop`,
-			);
-		else out.push(`Place: click to add a ${what}${where}${wall}; Esc to stop`);
-	}
+	if (s.mode === "place") out.push(placeMessage(s));
 	return out;
+}
+
+/** What placing asks of the mouse. */
+function placeMessage(s: EditorState): string {
+	const what = OBJECT_LABELS[s.place].one.toLowerCase();
+	const where = isLayoutKind(s.place) ? ` to ${s.layout}` : "";
+	const on = placingOn(s);
+	if (s.place === "marks" && s.markAcross) return "Place: click on a road to paint a line across it, edge to edge; Esc to stop";
+	if (isMarkKind(s.place)) {
+		const carry = on ? `, or click to carry ${on.name} on to there` : "";
+		return `Place: drag from its start to its end (Shift: its way by 15°) to add a ${what}${carry}; Esc to stop`;
+	}
+	const wall = on ? ` (on ${on.name})` : "";
+	return `Place: click to add a ${what}${where}${wall}; Esc to stop`;
+}
+
+/** The one this placing made, its nodes added (else none: a new one). */
+function placingOn(s: EditorState): { name: string } | undefined {
+	const into = placingInto(s);
+	if (into === undefined) return undefined;
+	if (s.place === "areas") return s.objects?.areas?.[into];
+	if (isMarkKind(s.place) && s.objects) return marksOf(s.objects, s.place)[into];
+	return s.objects?.objects[into];
 }
 
 type Scr = (x: number, z: number) => [number, number];

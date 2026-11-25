@@ -56,13 +56,21 @@ const median = (a: number[]) => {
 	return s.length % 2 ? (s[h] as number) : ((s[h - 1] as number) + (s[h] as number)) / 2;
 };
 
+/** The two points numpy's gradient takes at point i of n: those either side of it, or at an end, it and its one neighbour. */
+function neighbours(i: number, n: number): [number, number] {
+	if (i === 0) return [0, 1];
+	if (i === n - 1) return [n - 2, n - 1];
+	return [i - 1, i + 1];
+}
+
 /** numpy's gradient along a list of points (unit spacing: central differences, one-sided at the ends). */
 function gradient(P: V2[]): V2[] {
 	const n = P.length;
 	return P.map((_, i) => {
 		if (n < 2) return [0, 0];
-		const a = P[i === 0 ? 0 : i === n - 1 ? n - 2 : i - 1] as V2;
-		const b = P[i === 0 ? 1 : i === n - 1 ? n - 1 : i + 1] as V2;
+		const [ia, ib] = neighbours(i, n);
+		const a = P[ia] as V2;
+		const b = P[ib] as V2;
 		const d = i === 0 || i === n - 1 ? 1 : 2;
 		return [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
 	});
@@ -132,14 +140,12 @@ export function describeRows(n: Kn5Mesh, m: Mat4, material: string): Road {
 
 // ---- road_grid.py: a mesh's outline, its four corners, its two sides paired into rows -------------------------------
 
-/** Mesh n's top's outline as rings of welded points: its edges no two faces share, followed the way each face runs, turning the least where more go on. As
- * road_grid.outline follows them (`ring`, the longest loop it closes: on to where it began, or as far as it goes; where two loops touch at a point, on round
- * the other or the walk's own end at it, a piece of the edge), and every loop each of them closes (`loops`, the longest first: two touching at a point each its
- * own); and its top's faces (`top`). */
-export function gridLoops(n: Kn5Mesh, m: Mat4): { ring: V2[]; loops: V2[][]; top: V2[][] } | string {
-	const W = placed(n, m);
-	const nv = n.verts.length / VERT;
-	// (welded: by their keys sorted, each the first point of its key, as numpy's unique)
+type P3 = [number, number, number];
+/** The next point on from b of an outline's edges left, come from p (undefined where the walk begins at b). */
+type NextEdge = (left: Set<string>, p: number | undefined, b: number) => number | undefined;
+
+/** A mesh's points welded: by their keys sorted, each the first point of its key, as numpy's unique (P), and each vertex's welded point (inv). */
+function weld(W: Float64Array, nv: number): { P: P3[]; inv: Int32Array } {
 	const keys: [number, number, number, number][] = [];
 	for (let i = 0; i < nv; i++)
 		keys.push([
@@ -150,18 +156,21 @@ export function gridLoops(n: Kn5Mesh, m: Mat4): { ring: V2[]; loops: V2[][]; top
 		]);
 	keys.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
 	const inv = new Int32Array(nv);
-	const P: [number, number, number][] = [];
+	const P: P3[] = [];
 	keys.forEach((k, j) => {
 		const prev = keys[j - 1];
-		if (!prev || prev[0] !== k[0] || prev[1] !== k[1] || prev[2] !== k[2])
-			P.push([W[k[3] * 3] as number, W[k[3] * 3 + 1] as number, W[k[3] * 3 + 2] as number]);
+		if (prev?.[0] !== k[0] || prev[1] !== k[1] || prev[2] !== k[2]) P.push([W[k[3] * 3] as number, W[k[3] * 3 + 1] as number, W[k[3] * 3 + 2] as number]);
 		inv[k[3]] = P.length - 1;
 	});
-	const F: [number, number, number][] = [];
+	return { P, inv };
+}
+
+/** Mesh n's faces on its welded points, its top's only (facing more up or down than sideways: not the skirts down its sides), none of two points the same. */
+function topFaces(n: Kn5Mesh, P: P3[], inv: Int32Array): P3[] {
+	const F: P3[] = [];
 	for (let f = 0; f < n.faces.length; f += 3) {
-		const t = [inv[n.faces[f] as number], inv[n.faces[f + 1] as number], inv[n.faces[f + 2] as number]] as [number, number, number];
+		const t = [inv[n.faces[f] as number], inv[n.faces[f + 1] as number], inv[n.faces[f + 2] as number]] as P3;
 		if (t[0] === t[1] || t[1] === t[2] || t[0] === t[2]) continue;
-		// (its top only: not the skirts down its sides)
 		const [a, b, c] = t.map((i) => P[i] as number[]) as unknown as [number[], number[], number[]];
 		const u = [0, 1, 2].map((k) => (b[k] as number) - (a[k] as number));
 		const v = [0, 1, 2].map((k) => (c[k] as number) - (a[k] as number));
@@ -170,14 +179,22 @@ export function gridLoops(n: Kn5Mesh, m: Mat4): { ring: V2[]; loops: V2[][]; top
 			(u[2] as number) * (v[0] as number) - (u[0] as number) * (v[2] as number),
 			(u[0] as number) * (v[1] as number) - (u[1] as number) * (v[0] as number),
 		];
-		if (Math.abs(nn[1] as number) > 0.5 * Math.max(Math.hypot(...(nn as [number, number, number])), 1e-12)) F.push(t);
+		if (Math.abs(nn[1] as number) > 0.5 * Math.max(Math.hypot(...(nn as P3)), 1e-12)) F.push(t);
 	}
+	return F;
+}
+
+/** An edge's key either way it runs: its lower point first. */
+const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
+
+/** Faces' outline: their edges no two of them share, the way each face runs (`a,b`), and from each point the points its edges go on to. */
+function outlineEdges(F: P3[]): { out: Map<number, number[]>; edges: string[] } {
 	const cnt = new Map<string, number>();
 	for (const f of F)
 		for (let i = 0; i < 3; i++) {
 			const a = f[i] as number;
 			const b = f[(i + 1) % 3] as number;
-			const k = a < b ? `${a},${b}` : `${b},${a}`;
+			const k = edgeKey(a, b);
 			cnt.set(k, (cnt.get(k) ?? 0) + 1);
 		}
 	const out = new Map<number, number[]>();
@@ -186,84 +203,118 @@ export function gridLoops(n: Kn5Mesh, m: Mat4): { ring: V2[]; loops: V2[][]; top
 		for (let i = 0; i < 3; i++) {
 			const a = f[i] as number;
 			const b = f[(i + 1) % 3] as number;
-			if (cnt.get(a < b ? `${a},${b}` : `${b},${a}`) !== 1) continue;
+			if (cnt.get(edgeKey(a, b)) !== 1) continue;
 			const l = out.get(a);
 			if (l) l.push(b);
 			else out.set(a, [b]);
 			edges.push(`${a},${b}`);
 		}
+	return { out, edges };
+}
+
+/** The point an outline goes on to from b of its edges left, come from p: where more go on, the one turning the least first. */
+function nextEdge(out: Map<number, number[]>, xzOf: (i: number) => V2, left: Set<string>, p: number | undefined, b: number): number | undefined {
+	const nx = (out.get(b) ?? []).filter((c) => left.has(`${b},${c}`));
+	if (nx.length > 1 && p !== undefined) {
+		const p0 = xzOf(p);
+		const pb = xzOf(b);
+		const d0 = [pb[0] - p0[0], pb[1] - p0[1]];
+		const ang = (c: number) => {
+			const pc = xzOf(c);
+			const d1 = [pc[0] - pb[0], pc[1] - pb[1]];
+			return Math.atan2(
+				(d0[0] as number) * (d1[1] as number) - (d0[1] as number) * (d1[0] as number),
+				(d0[0] as number) * (d1[0] as number) + (d0[1] as number) * (d1[1] as number),
+			);
+		};
+		nx.sort((x, y) => ang(x) - ang(y));
+	}
+	return nx[0];
+}
+
+/** The first of the edges left, its two points. */
+const firstOf = (left: Set<string>) => (left.values().next().value as string).split(",").map(Number) as [number, number];
+
+/** road_grid's walks round an outline's edges: each on till back where it began, or no edge goes on. */
+function walkLoops(edges: string[], next: NextEdge): number[][] {
+	const walked: number[][] = [];
+	const left = new Set(edges);
+	while (left.size) {
+		const [a, b0] = firstOf(left);
+		let b = b0;
+		const loop = [a];
+		left.delete(`${a},${b}`);
+		while (b !== loop[0]) {
+			loop.push(b);
+			const c = next(left, loop.at(-2), b);
+			if (c === undefined) break;
+			left.delete(`${b},${c}`);
+			b = c;
+		}
+		walked.push(loop);
+	}
+	return walked;
+}
+
+/** A walk back at a point it passed (seen, its place in the walk): the part since then a loop of its own, the walk cut back to that point. */
+function closeAt(loop: number[], at: Map<number, number>, seen: number, loops: number[][]): void {
+	loops.push(loop.slice(seen));
+	for (const p of loop.slice(seen + 1)) at.delete(p);
+	loop.length = seen + 1;
+}
+
+/** A walk from edge a to b0 round an outline's edges left, each loop it closes added to loops: on till it is back where it began with no edge on from there, or
+ * none goes on (as far as it went then a loop too). */
+function walkClosing(a: number, b0: number, left: Set<string>, out: Map<number, number[]>, next: NextEdge, loops: number[][]): void {
+	let b = b0;
+	const loop = [a];
+	const at = new Map<number, number>([[a, 0]]);
+	left.delete(`${a},${b}`);
+	for (;;) {
+		const seen = at.get(b);
+		if (seen !== undefined) {
+			closeAt(loop, at, seen, loops);
+			if (seen === 0 && !(out.get(b) ?? []).some((c) => left.has(`${b},${c}`))) break;
+		} else {
+			at.set(b, loop.length);
+			loop.push(b);
+		}
+		const c = next(left, loop.at(-2), b);
+		if (c === undefined) {
+			if (loop.length > 1) loops.push(loop.slice());
+			break;
+		}
+		left.delete(`${b},${c}`);
+		b = c;
+	}
+}
+
+/** Every loop an outline's edges close: back at a point a walk passed, the part since then a loop of its own. */
+function everyLoop(edges: string[], out: Map<number, number[]>, next: NextEdge): number[][] {
+	const loops: number[][] = [];
+	const left = new Set(edges);
+	while (left.size) {
+		const [a, b0] = firstOf(left);
+		walkClosing(a, b0, left, out, next, loops);
+	}
+	return loops;
+}
+
+/** Mesh n's top's outline as rings of welded points: its edges no two faces share, followed the way each face runs, turning the least where more go on. As
+ * road_grid.outline follows them (`ring`, the longest loop it closes: on to where it began, or as far as it goes; where two loops touch at a point, on round
+ * the other or the walk's own end at it, a piece of the edge), and every loop each of them closes (`loops`, the longest first: two touching at a point each its
+ * own); and its top's faces (`top`). */
+export function gridLoops(n: Kn5Mesh, m: Mat4): { ring: V2[]; loops: V2[][]; top: V2[][] } | string {
+	const W = placed(n, m);
+	const nv = n.verts.length / VERT;
+	const { P, inv } = weld(W, nv);
+	const F = topFaces(n, P, inv);
+	const { out, edges } = outlineEdges(F);
 	if (!out.size) return "no outline (a ring of road)";
 	const xzOf = (i: number) => [(P[i] as number[])[0] as number, (P[i] as number[])[2] as number] as V2;
-	// (where more go on from b, come from p: the one turning the least first)
-	const next = (left: Set<string>, p: number | undefined, b: number) => {
-		const nx = (out.get(b) ?? []).filter((c) => left.has(`${b},${c}`));
-		if (nx.length > 1 && p !== undefined) {
-			const p0 = xzOf(p);
-			const pb = xzOf(b);
-			const d0 = [pb[0] - p0[0], pb[1] - p0[1]];
-			const ang = (c: number) => {
-				const pc = xzOf(c);
-				const d1 = [pc[0] - pb[0], pc[1] - pb[1]];
-				return Math.atan2(
-					(d0[0] as number) * (d1[1] as number) - (d0[1] as number) * (d1[0] as number),
-					(d0[0] as number) * (d1[0] as number) + (d0[1] as number) * (d1[1] as number),
-				);
-			};
-			nx.sort((x, y) => ang(x) - ang(y));
-		}
-		return nx[0];
-	};
-	const firstOf = (left: Set<string>) => (left.values().next().value as string).split(",").map(Number) as [number, number];
-	// (road_grid's: on till back where it began, or no edge goes on)
-	const walked: number[][] = [];
-	{
-		const left = new Set(edges);
-		while (left.size) {
-			const [a, b0] = firstOf(left);
-			let b = b0;
-			const loop = [a];
-			left.delete(`${a},${b}`);
-			while (b !== loop[0]) {
-				loop.push(b);
-				const c = next(left, loop[loop.length - 2], b);
-				if (c === undefined) break;
-				left.delete(`${b},${c}`);
-				b = c;
-			}
-			walked.push(loop);
-		}
-	}
-	// (every loop: back at a point it passed, the part since then a loop of its own)
-	const loops: number[][] = [];
-	{
-		const left = new Set(edges);
-		while (left.size) {
-			const [a, b0] = firstOf(left);
-			let b = b0;
-			const loop = [a];
-			const at = new Map<number, number>([[a, 0]]);
-			left.delete(`${a},${b}`);
-			for (;;) {
-				const seen = at.get(b);
-				if (seen !== undefined) {
-					loops.push(loop.slice(seen));
-					for (const p of loop.slice(seen + 1)) at.delete(p);
-					loop.length = seen + 1;
-					if (seen === 0 && !(out.get(b) ?? []).some((c) => left.has(`${b},${c}`))) break;
-				} else {
-					at.set(b, loop.length);
-					loop.push(b);
-				}
-				const c = next(left, loop.length > 1 ? loop[loop.length - 2] : undefined, b);
-				if (c === undefined) {
-					if (loop.length > 1) loops.push(loop.slice());
-					break;
-				}
-				left.delete(`${b},${c}`);
-				b = c;
-			}
-		}
-	}
+	const next: NextEdge = (left, p, b) => nextEdge(out, xzOf, left, p, b);
+	const walked = walkLoops(edges, next);
+	const loops = everyLoop(edges, out, next);
 	const len = (l: number[]) =>
 		l.reduce((s, i, j) => {
 			const p = xzOf(i);
@@ -315,6 +366,31 @@ function roadRing(A: V2[], B: V2[]): V2[] {
 	return [...left, ...right.reverse()];
 }
 
+/** Rings' least and greatest z. */
+function zRange(rs: V2[][]): [number, number] {
+	let lo = Infinity;
+	let hi = -Infinity;
+	for (const r of rs)
+		for (const p of r) {
+			lo = Math.min(lo, p[1]);
+			hi = Math.max(hi, p[1]);
+		}
+	return [lo, hi];
+}
+
+/** Where rings' edges cross the line at z, its x each, least first. */
+function crossings(rs: V2[][], z: number): number[] {
+	const xs: number[] = [];
+	for (const r of rs)
+		for (let i = 0; i < r.length; i++) {
+			const a = r[i] as V2;
+			const b = r[(i + 1) % r.length] as V2;
+			if (a[1] > z !== b[1] > z) xs.push(a[0] + ((z - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
+		}
+	xs.sort((p, q) => p - q);
+	return xs;
+}
+
 /** How nearly a ring lies on a shape, on a raster: what both cover over what either does (the ring filled even-odd, wherever it goes; the shape the cells
  * inside any of its pieces, on cells of `cell` metres, `across` a side over it if not given). */
 function rasterFit(pieces: V2[][], cell?: number, across = FIT_CELLS): (other: V2[]) => number {
@@ -333,23 +409,9 @@ function rasterFit(pieces: V2[][], cell?: number, across = FIT_CELLS): (other: V
 	const H = Math.max(1, Math.ceil((z1 - z0) / c));
 	// (each row's spans of cells inside, as cell indices: rows from lo to hi)
 	const spans = (rs: V2[][], visit: (row: number, c0: number, c1: number) => void) => {
-		let lo = Infinity;
-		let hi = -Infinity;
-		for (const r of rs)
-			for (const p of r) {
-				lo = Math.min(lo, p[1]);
-				hi = Math.max(hi, p[1]);
-			}
+		const [lo, hi] = zRange(rs);
 		for (let row = Math.floor((lo - z0) / c); row <= Math.floor((hi - z0) / c); row++) {
-			const z = z0 + (row + 0.5) * c;
-			const xs: number[] = [];
-			for (const r of rs)
-				for (let i = 0; i < r.length; i++) {
-					const a = r[i] as V2;
-					const b = r[(i + 1) % r.length] as V2;
-					if (a[1] > z !== b[1] > z) xs.push(a[0] + ((z - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
-				}
-			xs.sort((p, q) => p - q);
+			const xs = crossings(rs, z0 + (row + 0.5) * c);
 			for (let j = 0; j + 1 < xs.length; j += 2) {
 				const c0 = Math.ceil(((xs[j] as number) - x0) / c - 0.5);
 				const c1 = Math.floor(((xs[j + 1] as number) - x0) / c - 0.5);
@@ -432,7 +494,6 @@ function cornersOf(X: V2[], seg: number[], over: boolean): { at: number[]; turn:
 
 /** Every four of a ring's corners, each way round its two sides, by how short its ends are against its sides (road_grid's score: the best first). */
 function quadsOf(X: V2[], seg: number[], cand: number[]): [number, Quad][] {
-	const k = X.length;
 	const cum = [0];
 	for (const s of seg) cum.push((cum.at(-1) as number) + s);
 	const span = (i: number, j: number) => (j >= i ? (cum[j] as number) - (cum[i] as number) : (cum.at(-1) as number) - (cum[i] as number) + (cum[j] as number));
@@ -440,18 +501,21 @@ function quadsOf(X: V2[], seg: number[], cand: number[]): [number, Quad][] {
 	const out: [number, Quad][] = [];
 	for (let a = 0; a < c.length; a++)
 		for (let b = a + 1; b < c.length; b++)
-			for (let d = b + 1; d < c.length; d++)
-				for (let e = d + 1; e < c.length; e++) {
-					const cs = [c[a], c[b], c[d], c[e]] as number[];
-					const Ls = [0, 1, 2, 3].map((i) => span(cs[i] as number, cs[(i + 1) % 4] as number));
-					const Ns = [0, 1, 2, 3].map((i) => ((((cs[(i + 1) % 4] as number) - (cs[i] as number)) % k) + k) % k);
-					for (const o of [0, 1]) {
-						const ends = (Ls[o + 1] as number) + (Ls[(o + 3) % 4] as number);
-						const sides = (Ls[o] as number) + (Ls[o + 2] as number);
-						out.push([ends / Math.max(sides, 1e-9) + (Ns[o] === Ns[o + 2] ? 0 : 0.05), { X, cs, o }]);
-					}
-				}
+			for (let d = b + 1; d < c.length; d++) for (let e = d + 1; e < c.length; e++) out.push(...quadScores(X, [c[a], c[b], c[d], c[e]] as number[], span));
 	return out.sort((x, y) => x[0] - y[0]);
+}
+
+/** Four of a ring's corners, each way round its two sides, scored by road_grid's: its ends' length over its sides', 0.05 more where its sides have not as
+ * many points (span: how far round the ring from one point to another). */
+function quadScores(X: V2[], cs: number[], span: (i: number, j: number) => number): [number, Quad][] {
+	const k = X.length;
+	const Ls = [0, 1, 2, 3].map((i) => span(cs[i] as number, cs[(i + 1) % 4] as number));
+	const Ns = [0, 1, 2, 3].map((i) => ((((cs[(i + 1) % 4] as number) - (cs[i] as number)) % k) + k) % k);
+	return [0, 1].map((o) => {
+		const ends = (Ls[o + 1] as number) + (Ls[(o + 3) % 4] as number);
+		const sides = (Ls[o] as number) + (Ls[o + 2] as number);
+		return [ends / Math.max(sides, 1e-9) + (Ns[o] === Ns[o + 2] ? 0 : 0.05), { X, cs, o }];
+	});
 }
 
 /** A ring's two sides between four of its corners, paired into rows: resampled to n points, or, unless they have as many, to as many as the longer has. */
@@ -472,6 +536,40 @@ function rowsOf({ X, cs, o }: Quad, n?: number): { A: V2[]; B: V2[] } {
 	return { A: resample(A, N), B: resample(B, N) };
 }
 
+/** A ring's segments' lengths, each from a point to the next. */
+const segOf = (X: V2[]) => X.map((p, i) => Math.hypot((X[(i + 1) % X.length] as V2)[0] - p[0], (X[(i + 1) % X.length] as V2)[1] - p[1]));
+
+/** road_grid's own four corners of a ring, by their turns from point to point: the four sharpest if all turn 60° or more, else the best of the 12 sharpest of
+ * 30° or more; none where it has not four. */
+function theirQuad(X0: V2[], seg0: number[]): Quad | null {
+	const { at, turn } = cornersOf(X0, seg0, false);
+	let cand = at.slice(0, 12).filter((i) => (turn[i] as number) >= 30);
+	const sharp4 = at.slice(0, 4);
+	if (cand.length >= 4 && Math.min(...sharp4.map((i) => turn[i] as number)) >= 60) cand = sharp4;
+	if (cand.length >= 4) return (quadsOf(X0, seg0, cand)[0] as [number, Quad])[1];
+	return null;
+}
+
+/** Every four of the corners of a ring and of the mesh's FIT_LOOPS longest loops (a quarter as long as the longest at least), among the FIT_CORNERS sharpest by
+ * their turns over CORNER_SPAN and the 12 sharpest from point to point, of 30° or more: each with its score. */
+function rankedQuads(X0: V2[], seg0: number[], loops: V2[][], score: (q: Quad) => number): [number, Quad][] {
+	const ranked: [number, Quad][] = [];
+	const len0 = segOf(loops[0] as V2[]).reduce((a, b) => a + b, 0);
+	for (const X of [X0, ...loops.slice(0, FIT_LOOPS)]) {
+		const seg = X === X0 ? seg0 : segOf(X);
+		if (X !== X0 && seg.reduce((a, b) => a + b, 0) < 0.25 * len0) break;
+		const near = cornersOf(X, seg, true);
+		const each = cornersOf(X, seg, false);
+		const cand = new Set([
+			...near.at.slice(0, FIT_CORNERS).filter((i) => (near.turn[i] as number) >= 30),
+			...each.at.slice(0, 12).filter((i) => (each.turn[i] as number) >= 30),
+		]);
+		if (cand.size < 4) continue;
+		for (const [, q] of quadsOf(X, seg, [...cand])) ranked.push([score(q), q]);
+	}
+	return ranked;
+}
+
 /** Mesh n as a strip (road_grid.grid, sharpest): its outline split at four corners into its two long sides and its two ends, its sides paired into rows.
  * road_grid's four (its outline's, by their turns from point to point: the four sharpest if all turn 60° or more, else the best of the 12 sharpest of 30° or
  * more); but where another four (of it or of the mesh's FIT_LOOPS longest loops, among the FIT_CORNERS sharpest either way), the road read from them, lies much
@@ -481,17 +579,9 @@ function gridRows(n: Kn5Mesh, m: Mat4): { A: V2[]; B: V2[] } | string {
 	const g = gridLoops(n, m);
 	if (typeof g === "string") return g;
 	const { ring, loops } = g;
-	const segOf = (X: V2[]) => X.map((p, i) => Math.hypot((X[(i + 1) % X.length] as V2)[0] - p[0], (X[(i + 1) % X.length] as V2)[1] - p[1]));
 	const X0 = ring;
 	const seg0 = segOf(X0);
-	let first: Quad | null = null;
-	{
-		const { at, turn } = cornersOf(X0, seg0, false);
-		let cand = at.slice(0, 12).filter((i) => (turn[i] as number) >= 30);
-		const sharp4 = at.slice(0, 4);
-		if (cand.length >= 4 && Math.min(...sharp4.map((i) => turn[i] as number)) >= 60) cand = sharp4;
-		if (cand.length >= 4) first = (quadsOf(X0, seg0, cand)[0] as [number, Quad])[1];
-	}
+	const first = theirQuad(X0, seg0);
 	// (judged on the mesh's top's faces, all it covers: a folded mesh's loops, filled, leave holes where it folds. Every four on a coarse raster; the best
 	// FIT_KEEP, and road_grid's, again on cells of the mesh's own size)
 	const coarse = rasterFit(g.top);
@@ -505,22 +595,9 @@ function gridRows(n: Kn5Mesh, m: Mat4): { A: V2[]; B: V2[] } | string {
 		return roadRing(A, B);
 	};
 	const theirs = first ? fine(ringOf(first)) : -Infinity;
-	const ranked: [number, Quad][] = [];
-	const len0 = segOf(loops[0] as V2[]).reduce((a, b) => a + b, 0);
-	for (const X of [X0, ...loops.slice(0, FIT_LOOPS)]) {
-		const seg = X === X0 ? seg0 : segOf(X);
-		if (X !== X0 && seg.reduce((a, b) => a + b, 0) < 0.25 * len0) break;
-		const near = cornersOf(X, seg, true);
-		const each = cornersOf(X, seg, false);
-		const cand = new Set([
-			...near.at.slice(0, FIT_CORNERS).filter((i) => (near.turn[i] as number) >= 30),
-			...each.at.slice(0, 12).filter((i) => (each.turn[i] as number) >= 30),
-		]);
-		if (cand.size < 4) continue;
-		for (const [, q] of quadsOf(X, seg, [...cand])) ranked.push([coarse(ringOf(q)), q]);
-	}
+	const ranked = rankedQuads(X0, seg0, loops, (q) => coarse(ringOf(q)));
 	let best: [number, Quad] | null = null;
-	for (const [, q] of ranked.sort((x, y) => y[0] - x[0]).slice(0, FIT_KEEP)) {
+	for (const [, q] of ranked.toSorted((x, y) => y[0] - x[0]).slice(0, FIT_KEEP)) {
 		const f = fine(ringOf(q));
 		if (!best || f > best[0]) best = [f, q];
 	}
@@ -720,6 +797,31 @@ async function described(files: HostFiles, s: BringSettings): Promise<Set<string
 	return have;
 }
 
+/** Whether a mesh is a road to offer: a 1ROAD_ one (not a kerb's or a patch's) with faces, not described already. */
+const isRoadOffered = (nm: string, faces: number, have: Set<string>) =>
+	nm.startsWith("1ROAD_") && !nm.startsWith("1ROAD_KERB") && !nm.startsWith("1ROAD_PATCH") && !have.has(nm) && faces > 0;
+
+/** Triangles' area seen from above, and their box (x and z, least then greatest). */
+function areaAndBox(T: Float64Array): { a: number; lo: number[]; hi: number[] } {
+	let a = 0;
+	const lo = [Infinity, Infinity];
+	const hi = [-Infinity, -Infinity];
+	for (let t = 0; t < T.length; t += 9) {
+		const x = [T[t] as number, T[t + 3] as number, T[t + 6] as number];
+		const z = [T[t + 2] as number, T[t + 5] as number, T[t + 8] as number];
+		a +=
+			Math.abs(
+				((x[1] as number) - (x[0] as number)) * ((z[2] as number) - (z[0] as number)) -
+					((x[2] as number) - (x[0] as number)) * ((z[1] as number) - (z[0] as number)),
+			) / 2;
+		lo[0] = Math.min(lo[0] as number, ...x);
+		lo[1] = Math.min(lo[1] as number, ...z);
+		hi[0] = Math.max(hi[0] as number, ...x);
+		hi[1] = Math.max(hi[1] as number, ...z);
+	}
+	return { a, lo, hi };
+}
+
 /** The roads in the track's models not described yet, the biggest first (geometry.py's road_meshes). */
 export async function roadMeshesOffered(files: HostFiles, s: BringSettings, library?: MaterialLibrary) {
 	const have = await described(files, s);
@@ -732,25 +834,8 @@ export async function roadMeshesOffered(files: HostFiles, s: BringSettings, libr
 		const k = await shapesOf(files, path, library);
 		for (const [n, m] of meshes(k)) {
 			const nm = n.name;
-			if (!nm.startsWith("1ROAD_") || nm.startsWith("1ROAD_KERB") || nm.startsWith("1ROAD_PATCH")) continue;
-			if (have.has(nm) || !n.faces.length) continue;
-			const T = triangles(n, m);
-			let a = 0;
-			const lo = [Infinity, Infinity];
-			const hi = [-Infinity, -Infinity];
-			for (let t = 0; t < T.length; t += 9) {
-				const x = [T[t] as number, T[t + 3] as number, T[t + 6] as number];
-				const z = [T[t + 2] as number, T[t + 5] as number, T[t + 8] as number];
-				a +=
-					Math.abs(
-						((x[1] as number) - (x[0] as number)) * ((z[2] as number) - (z[0] as number)) -
-							((x[2] as number) - (x[0] as number)) * ((z[1] as number) - (z[0] as number)),
-					) / 2;
-				lo[0] = Math.min(lo[0] as number, ...x);
-				lo[1] = Math.min(lo[1] as number, ...z);
-				hi[0] = Math.max(hi[0] as number, ...x);
-				hi[1] = Math.max(hi[1] as number, ...z);
-			}
+			if (!isRoadOffered(nm, n.faces.length, have)) continue;
+			const { a, lo, hi } = areaAndBox(triangles(n, m));
 			if (a < MIN_AREA) continue;
 			out.push({
 				model: f,

@@ -81,7 +81,7 @@ const PERCENT = /(\d{1,3})%/g;
 const DEFAULT_SECONDS = { track: 120, ac: 60, pack: 120, beamng: 300, rf2: 60 };
 /** build/cache: how long the track, the AC track, the BeamNG level, the rFactor 2 location and the packing took the last time */
 const TIMES = "editor_build.json";
-const DEFAULT_GAME = "D:\\SteamLibrary\\steamapps\\common\\assettocorsa\\content\\tracks";
+const DEFAULT_GAME = String.raw`D:\SteamLibrary\steamapps\common\assettocorsa\content\tracks`;
 
 const text = async (files: HostFiles, p: string): Promise<string | null> => {
 	try {
@@ -91,11 +91,24 @@ const text = async (files: HostFiles, p: string): Promise<string | null> => {
 	}
 };
 
+/** A path without the slashes (either way) it ends with. */
+function trimSlashes(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
+}
+
+/** Where a path with / starts: its drive's root (C:/), the root (/), else nothing (a path from where it is). */
+function rootOf(s: string): string {
+	if (/^[A-Za-z]:\//.test(s)) return s.slice(0, 3);
+	return s.startsWith("/") ? "/" : "";
+}
+
 /** A path with / and no . or .. in it. */
 export function normalPath(p: string): string {
 	const parts: string[] = [];
-	const s = p.replace(/\\/g, "/");
-	const lead = /^[A-Za-z]:\//.test(s) ? s.slice(0, 3) : s.startsWith("/") ? "/" : "";
+	const s = p.replaceAll("\\", "/");
+	const lead = rootOf(s);
 	for (const part of s.slice(lead.length).split("/")) {
 		if (!part || part === ".") continue;
 		if (part === "..") parts.pop();
@@ -106,7 +119,7 @@ export function normalPath(p: string): string {
 
 /** A track's tools: its project's own, or (a track the wizard made) another project's, as its track file says. */
 export function toolsOf(s: TrackSettings): string {
-	const project = s.project.replace(/[\\/]+$/, "");
+	const project = trimSlashes(s.project);
 	const t = s.track.tools;
 	if (typeof t !== "string" || !t) return `${project}/tools`;
 	return normalPath(/^([A-Za-z]:)?[\\/]/.test(t) ? t : `${project}/${t}`);
@@ -157,6 +170,18 @@ export class Stage {
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
+
+/** How far a running stage is (0 to 1), spent seconds in: the packing's by 7-Zip's percentage where it says one, else by what it took the last time (0.95 at
+ * most), else half. */
+function runningPart(s: Stage, spent: number, percent: number | null): number {
+	if (s.kind === "pack" && percent !== null) return percent / 100;
+	return s.expected ? Math.min(spent / s.expected, 0.95) : 0.5;
+}
+
+/** What a build that failed says of why: its error's message, else the error as text ("Error" where that says nothing). */
+function failure(err: unknown): string {
+	return (err instanceof Error ? err.message : String(err)) || "Error";
+}
 
 export class BuildJob {
 	archives: { game: Game; path: string; size: number }[] = [];
@@ -238,7 +263,7 @@ export class BuildJob {
 		const st = this.running();
 		return {
 			stage: st ? st.label : "",
-			line: this.log.length ? (this.log[this.log.length - 1] as string) : "",
+			line: this.log.at(-1) ?? "",
 			quiet: round1(Math.max(0, now - this.heard)),
 			alive: this.state === "running",
 		};
@@ -253,7 +278,7 @@ export class BuildJob {
 			if (s.state === "done" || s.state === "cached" || s.state === "skipped") done += s.state !== "skipped" ? s.expected : 0;
 			else if (s.state === "running") {
 				const spent = now - s.started;
-				const part = s.kind === "pack" && this.percent !== null ? this.percent / 100 : s.expected ? Math.min(spent / s.expected, 0.95) : 0.5;
+				const part = runningPart(s, spent, this.percent);
 				done += s.expected * part;
 				left += Math.max(s.expected - spent, s.expected * (1 - part), 0);
 			} else left += s.expected;
@@ -325,7 +350,7 @@ export class Builder {
 	}
 
 	get project(): string {
-		return this.settings.project.replace(/[\\/]+$/, "");
+		return trimSlashes(this.settings.project);
 	}
 
 	/** The build's own cache (what each stage took the last time). */
@@ -339,7 +364,8 @@ export class Builder {
 
 	/** The track's folder name in the game, made from its name. */
 	folderName(): string {
-		return acFolder(String(this.settings.track.name ?? this.project.split(/[/]/).pop() ?? "track"));
+		const name: unknown = this.settings.track.name ?? this.project.split("/").pop() ?? "track";
+		return acFolder(String(name));
 	}
 
 	/** Why this track cannot be built here ('' if it can): every layout whole (its racing lines, grid, pits, timing and hotlap start). */
@@ -405,9 +431,9 @@ export class Builder {
 			if (!(await this.sys.stat(s))?.dir) continue;
 			out.push(s);
 			const vdf = await text(this.files, `${s}/steamapps/libraryfolders.vdf`);
-			for (const m of vdf?.matchAll(/"path"\s+"([^"]+)"/g) ?? []) out.push((m[1] as string).replace(/\\\\/g, "\\"));
+			for (const m of vdf?.matchAll(/"path"\s+"([^"]+)"/g) ?? []) out.push((m[1] as string).replaceAll("\\\\", "\\"));
 		}
-		return [...new Set(out.map((p) => p.replace(/[\\/]+$/, "")))];
+		return [...new Set(out.map((p) => trimSlashes(p)))];
 	}
 
 	/** BeamNG's mods folder: BEAMNG_MODS, else its user folder's current one (BeamNG.drive/current/mods), else the newest version's of the older user folder
@@ -536,10 +562,8 @@ export class Builder {
 		// (installing in AC: its own; BeamNG's zip in its mods, BeamNG's)
 		const inGame = install && games.includes("ac");
 		const installBeamng = !!more.installBeamng && games.includes("beamng");
-		if (inGame && !(await this.acTracks())) throw new BuildError("Assetto Corsa's tracks folder is not found (AC_TRACKS names it)", 400);
-		if (installBeamng && !(await this.beamngMods())) throw new BuildError("BeamNG's mods folder is not found (BEAMNG_MODS names it)", 400);
 		const installRf2 = !!more.installRf2 && games.includes("rf2");
-		if (installRf2 && !(await this.rf2Folder())) throw new BuildError("rFactor 2's folder (with its ModDev) is not found (RF2_FOLDER names it)", 400);
+		await this.gamesFound(inGame, installBeamng, installRf2);
 		// (the AC track packed unless only installed: AC reads its folder; BeamNG's level is always a zip)
 		const packAc = more.packAc !== false || !inGame;
 		if ([...this.jobs.values()].some((j) => j.state === "running")) throw new BuildError("a build is running already", 409);
@@ -561,6 +585,13 @@ export class Builder {
 		return job.page();
 	}
 
+	/** An error where a game the build is to install in is not found: AC's tracks folder (inGame), BeamNG's mods folder, rFactor 2's. */
+	private async gamesFound(inGame: boolean, installBeamng: boolean, installRf2: boolean): Promise<void> {
+		if (inGame && !(await this.acTracks())) throw new BuildError("Assetto Corsa's tracks folder is not found (AC_TRACKS names it)", 400);
+		if (installBeamng && !(await this.beamngMods())) throw new BuildError("BeamNG's mods folder is not found (BEAMNG_MODS names it)", 400);
+		if (installRf2 && !(await this.rf2Folder())) throw new BuildError("rFactor 2's folder (with its ModDev) is not found (RF2_FOLDER names it)", 400);
+	}
+
 	/** The job's end, for the tests. */
 	readonly ends = new Map<string, Promise<void>>();
 
@@ -573,10 +604,7 @@ export class Builder {
 	private async runJob(job: BuildJob): Promise<void> {
 		try {
 			const tid = this.folderName();
-			if (job.install && (await this.sys.running("acs.exe"))) throw new Error("Assetto Corsa is running: close it before installing.");
-			if (job.installBeamng && (await this.sys.running("BeamNG.drive.x64.exe"))) throw new Error("BeamNG.drive is running: close it before installing.");
-			if (job.installRf2 && ((await this.sys.running("rFactor2.exe")) || (await this.sys.running("rFactor2 Mod Mode.exe"))))
-				throw new Error("rFactor 2 is running: close it before copying the location into its ModDev.");
+			await this.gamesClosed(job);
 			// (the track's models made by the engine, then the games' tracks of them, the lock taken round all of it)
 			await this.locked(async () => {
 				job.next(this.clock());
@@ -590,13 +618,21 @@ export class Builder {
 			await this.keepTimes(job);
 		} catch (err) {
 			job.state = job.stop ? "stopped" : "failed";
-			job.error = job.stop ? "stopped" : (err instanceof Error ? err.message : String(err)) || "Error";
+			job.error = job.stop ? "stopped" : failure(err);
 			const st = job.running();
 			if (st) job.endStage(st.name, job.state);
 			job.say(`${job.state}: ${job.error}`);
 		} finally {
 			job.ended = this.clock();
 		}
+	}
+
+	/** An error where a game the build installs in is running: it is closed before the build begins. */
+	private async gamesClosed(job: BuildJob): Promise<void> {
+		if (job.install && (await this.sys.running("acs.exe"))) throw new Error("Assetto Corsa is running: close it before installing.");
+		if (job.installBeamng && (await this.sys.running("BeamNG.drive.x64.exe"))) throw new Error("BeamNG.drive is running: close it before installing.");
+		if (job.installRf2 && ((await this.sys.running("rFactor2.exe")) || (await this.sys.running("rFactor2 Mod Mode.exe"))))
+			throw new Error("rFactor 2 is running: close it before copying the location into its ModDev.");
 	}
 
 	private stopped(job: BuildJob): void {
@@ -631,7 +667,7 @@ export class Builder {
 		}
 		if (job.install) {
 			this.stopped(job);
-			const dest = `${((await this.acTracks()) ?? "").replace(/[\\/]+$/, "")}/${tid}`;
+			const dest = `${trimSlashes((await this.acTracks()) ?? "")}/${tid}`;
 			job.say(`AC: ${await this.sync(out, dest)} files updated in ${dest}`);
 			job.installed.push(["ac", dest]);
 		}
@@ -678,7 +714,7 @@ export class Builder {
 		job.archives.push({ game: "beamng", path: zipped, size: s.size });
 		if (job.installBeamng) {
 			const mods = (await this.beamngMods()) as string;
-			const dest = `${mods.replace(/[\\/]+$/, "")}/${zipped.split("/").pop()}`;
+			const dest = `${trimSlashes(mods)}/${zipped.split("/").pop()}`;
 			await this.sys.copy(zipped, dest);
 			job.say(`BeamNG: ${dest}`);
 			job.installed.push(["beamng", dest]);
@@ -739,7 +775,7 @@ export class Builder {
 					continue;
 				}
 				const b = await this.sys.stat(`${dst}/${r}`);
-				if (!b || b.size !== a.size || Math.trunc(b.mtime / 1000) !== Math.trunc(a.mtime / 1000)) {
+				if (b?.size !== a.size || Math.trunc(b.mtime / 1000) !== Math.trunc(a.mtime / 1000)) {
 					await this.sys.copy(`${src}/${r}`, `${dst}/${r}`);
 					n++;
 				}
@@ -775,7 +811,7 @@ export class Builder {
 			said = (said + t).slice(-2000);
 			const got = [...t.matchAll(PERCENT)];
 			if (got.length) {
-				job.percent = base + Math.floor((span * Math.min(100, Number(got[got.length - 1]?.[1]))) / 100);
+				job.percent = base + Math.floor((span * Math.min(100, Number(got.at(-1)?.[1]))) / 100);
 				job.heard = this.clock();
 			}
 		});
@@ -846,9 +882,9 @@ const builders = new Map<string, Builder>();
 
 /** The builds of a track, kept while the engine runs (a build goes on through a reload of the page). */
 export function builderOf(files: HostFiles, sys: SystemHost, settings: TrackSettings, opts: BuilderOptions): Builder {
-	const key = settings.project.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+	const key = trimSlashes(settings.project.replaceAll("\\", "/")).toLowerCase();
 	let b = builders.get(key);
-	if (!b || b.files !== files || b.sys !== sys) {
+	if (b?.files !== files || b.sys !== sys) {
 		b = new Builder(files, sys, settings, opts);
 		builders.set(key, b);
 	}

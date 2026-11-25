@@ -58,10 +58,10 @@ export function sphere(n: Kn5Mesh): void {
 	const mid = [0, 1, 2].map((i) => ((lo[i] as number) + (hi[i] as number)) / 2);
 	let r = 0;
 	for (let v = 0; v < nv; v++) {
-		const d = Math.sqrt(
-			((V[v * VERT] as number) - (mid[0] as number)) ** 2 +
-				((V[v * VERT + 1] as number) - (mid[1] as number)) ** 2 +
-				((V[v * VERT + 2] as number) - (mid[2] as number)) ** 2,
+		const d = Math.hypot(
+			(V[v * VERT] as number) - (mid[0] as number),
+			(V[v * VERT + 1] as number) - (mid[1] as number),
+			(V[v * VERT + 2] as number) - (mid[2] as number),
 		);
 		if (d > r) r = d;
 	}

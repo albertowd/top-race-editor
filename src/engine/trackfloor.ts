@@ -48,14 +48,18 @@ export function floorKind(name: string, described: Set<string>): FloorKind | nul
 	if (FAR.some((p) => u.startsWith(p))) return "far";
 	if (described.has(name)) return "road";
 	if (DROP.some((p) => name.startsWith(p)) || SIDE.test(name)) return "drop";
-	if (name === GROUND || new RegExp(`^${GROUND}_\\d+$`).test(name) || name === FILLER) return "ground";
+	if (name === GROUND || new RegExp(String.raw`^${GROUND}_\d+$`).test(name) || name === FILLER) return "ground";
 	if (name.startsWith("1ROAD_KERB_") && !name.startsWith("1ROAD_KERB_BED_")) return "kerb";
 	if (["1ROAD", "1KERB", "KERB"].some((p) => u.startsWith(p))) return "paved";
 	return "grass";
 }
 
 /** The paved and the grass among themselves: a kerb's bed first, the paving, then by name (merge_floor's order_key). */
-const orderKey = (name: string): [number, string] => [name.includes("KERB_BED") || name.includes("KERB_FILL") ? 0 : name.startsWith("1KERB") ? 1 : 2, name];
+function orderKey(name: string): [number, string] {
+	if (name.includes("KERB_BED") || name.includes("KERB_FILL")) return [0, name];
+	if (name.startsWith("1KERB")) return [1, name];
+	return [2, name];
+}
 
 /** A mesh's tops: its triangles facing up (nine numbers each), their corners' mapping (six each). */
 function tops(n: Kn5Mesh, m: Mat4): { T: Float64Array; UV: Float64Array } {
@@ -103,7 +107,7 @@ function laid(
 			// (an old kerb, driven on: by what the road beside it moved, carried out to it (drape_track's); else by what the ground moved under it)
 			const c = carried?.(x, z) ?? null;
 			const b = before?.y(x, z) ?? Number.NaN;
-			out[i + 1] = (out[i + 1] as number) + (c !== null ? c : Number.isNaN(b) ? 0 : g - b);
+			out[i + 1] = (out[i + 1] as number) + (c ?? (Number.isNaN(b) ? 0 : g - b));
 		}
 	}
 	return out;
@@ -131,27 +135,41 @@ function carriedChange(old: Float64Array[], built: Surface): (x: number, z: numb
 		}
 	const reach = Math.ceil(CARRY / C);
 	return (x, z) => {
-		let best = CARRY;
-		let d: number | null = null;
-		const cx = Math.floor(x / C);
-		const cz = Math.floor(z / C);
+		const cell: [number, number] = [Math.floor(x / C), Math.floor(z / C)];
+		let near: [number, number | null] = [CARRY, null];
 		for (let r = 0; r <= reach; r++) {
 			// (rings of cells out to the nearest found: a point found closer than the next ring's nearest is it)
-			for (let i = cx - r; i <= cx + r; i++)
-				for (let j = cz - r; j <= cz + r; j++) {
-					if (Math.max(Math.abs(i - cx), Math.abs(j - cz)) !== r) continue;
-					for (const k of cells.get(`${i},${j}`) ?? []) {
-						const e = Math.hypot((pts[k] as number) - x, (pts[k + 1] as number) - z);
-						if (e < best) {
-							best = e;
-							d = pts[k + 2] as number;
-						}
-					}
-				}
-			if (d !== null && best <= r * C) break;
+			near = nearerChange(cells, pts, x, z, cell, r, near);
+			if (near[1] !== null && near[0] <= r * C) break;
 		}
-		return d;
+		return near[1];
 	};
+}
+
+/** The nearest to (x, z) of the points (x, z, change: three numbers each) filed in the cells r rings out from cell (cx, cz), nearer than the nearest found
+ * before: how far, its change; else the nearest before. */
+function nearerChange(
+	cells: Map<string, number[]>,
+	pts: number[],
+	x: number,
+	z: number,
+	[cx, cz]: [number, number],
+	r: number,
+	found: [number, number | null],
+): [number, number | null] {
+	let [best, d] = found;
+	for (let i = cx - r; i <= cx + r; i++)
+		for (let j = cz - r; j <= cz + r; j++) {
+			if (Math.max(Math.abs(i - cx), Math.abs(j - cz)) !== r) continue;
+			for (const k of cells.get(`${i},${j}`) ?? []) {
+				const e = Math.hypot((pts[k] as number) - x, (pts[k + 1] as number) - z);
+				if (e < best) {
+					best = e;
+					d = pts[k + 2] as number;
+				}
+			}
+		}
+	return [best, d];
 }
 
 /** Triangles within margin of a box (merge_floor's crop). */
@@ -175,7 +193,28 @@ const OLD_NEAR = 2;
 /** The old kerbs along the roads that have rumbles described (build_kerbs' old_kerbs): their names (each the base after 1ROAD_KERB_), from their tops within
  * OLD_NEAR of such a road's edge (the median of every seventh point). */
 export function oldKerbs(models: Kn5[], roads: RoadDesc[]): Set<string> {
-	// (the roads' edges: each one's outline, its left side out and its right back)
+	const segs = kerbedEdges(roads);
+	const out = new Set<string>();
+	if (!segs.length) return out;
+	// (filed by cells: a point's distance looked for within the cells round it, OLD_NEAR or more is far)
+	const cells = edgeCells(segs);
+	const near = (x: number, z: number) => edgeDistance(segs, cells, x, z);
+	for (const k of models)
+		for (const [n, m] of meshes(k)) {
+			const nm = n.name;
+			if (!nm.startsWith("1ROAD_KERB_") || nm.startsWith("1ROAD_KERB_E_") || nm.startsWith("1ROAD_KERB_BED_")) continue;
+			if (!n.faces.length) continue;
+			if (medianDistance(triangles(n, m), near) < OLD_NEAR) out.add(nm.slice("1ROAD_KERB_".length));
+		}
+	return out;
+}
+
+/** metres a side of the cells the roads' edges are filed in, for an old kerb's distance from them */
+const EDGE_CELL = 4;
+
+/** The edges of the roads that have rumbles described (none laid along another): each one's outline, its left side out and its right back, as segments (x0,
+ * z0, x1, z1: four numbers each). */
+function kerbedEdges(roads: RoadDesc[]): number[] {
 	const segs: number[] = [];
 	for (const r of roads as (RoadDesc & { kerbs?: unknown[]; along?: unknown })[]) {
 		if (!r.kerbs?.length || r.along) continue;
@@ -191,10 +230,12 @@ export function oldKerbs(models: Kn5[], roads: RoadDesc[]): Set<string> {
 			segs.push(a[0], a[1], b[0], b[1]);
 		}
 	}
-	const out = new Set<string>();
-	if (!segs.length) return out;
-	// (filed by cells: a point's distance looked for within the cells round it, OLD_NEAR or more is far)
-	const C = 4;
+	return segs;
+}
+
+/** Segments filed by the cells their boxes cover: each cell's segments (where they start in segs). */
+function edgeCells(segs: number[]): Map<string, number[]> {
+	const C = EDGE_CELL;
 	const cells = new Map<string, number[]>();
 	for (let s = 0; s < segs.length; s += 4) {
 		const [x0, z0, x1, z1] = [segs[s] as number, segs[s + 1] as number, segs[s + 2] as number, segs[s + 3] as number];
@@ -206,37 +247,35 @@ export function oldKerbs(models: Kn5[], roads: RoadDesc[]): Set<string> {
 				else cells.set(k, [s]);
 			}
 	}
-	const near = (x: number, z: number) => {
-		let best = Infinity;
-		const gx = Math.floor(x / C);
-		const gz = Math.floor(z / C);
-		for (let i = gx - 1; i <= gx + 1; i++)
-			for (let j = gz - 1; j <= gz + 1; j++)
-				for (const s of cells.get(`${i},${j}`) ?? []) {
-					const [x0, z0, x1, z1] = [segs[s] as number, segs[s + 1] as number, segs[s + 2] as number, segs[s + 3] as number];
-					const dx = x1 - x0;
-					const dz = z1 - z0;
-					const l2 = dx * dx + dz * dz;
-					const t = l2 ? Math.min(1, Math.max(0, ((x - x0) * dx + (z - z0) * dz) / l2)) : 0;
-					best = Math.min(best, Math.hypot(x - x0 - t * dx, z - z0 - t * dz));
-				}
-		return best;
-	};
-	for (const k of models)
-		for (const [n, m] of meshes(k)) {
-			const nm = n.name;
-			if (!nm.startsWith("1ROAD_KERB_") || nm.startsWith("1ROAD_KERB_E_") || nm.startsWith("1ROAD_KERB_BED_")) continue;
-			if (!n.faces.length) continue;
-			const T = triangles(n, m);
-			const d: number[] = [];
-			for (let i = 0; i < T.length / 3; i += 7) d.push(near(T[i * 3] as number, T[i * 3 + 2] as number));
-			d.sort((a, b) => a - b);
-			// (numpy's median: the middle two's mean where there is an even number)
-			const h = d.length / 2;
-			const med = d.length % 2 ? (d[Math.floor(h)] as number) : ((d[h - 1] as number) + (d[h] as number)) / 2;
-			if (med < OLD_NEAR) out.add(nm.slice("1ROAD_KERB_".length));
-		}
-	return out;
+	return cells;
+}
+
+/** How far a point is from the nearest of the segments filed in its cell and those round it (Infinity where none is). */
+function edgeDistance(segs: number[], cells: Map<string, number[]>, x: number, z: number): number {
+	let best = Infinity;
+	const gx = Math.floor(x / EDGE_CELL);
+	const gz = Math.floor(z / EDGE_CELL);
+	for (let i = gx - 1; i <= gx + 1; i++)
+		for (let j = gz - 1; j <= gz + 1; j++)
+			for (const s of cells.get(`${i},${j}`) ?? []) {
+				const [x0, z0, x1, z1] = [segs[s] as number, segs[s + 1] as number, segs[s + 2] as number, segs[s + 3] as number];
+				const dx = x1 - x0;
+				const dz = z1 - z0;
+				const l2 = dx * dx + dz * dz;
+				const t = l2 ? Math.min(1, Math.max(0, ((x - x0) * dx + (z - z0) * dz) / l2)) : 0;
+				best = Math.min(best, Math.hypot(x - x0 - t * dx, z - z0 - t * dz));
+			}
+	return best;
+}
+
+/** The median of how far every seventh point of a mesh's triangles (nine numbers each) is, by the distance given. */
+function medianDistance(T: Float64Array, far: (x: number, z: number) => number): number {
+	const d: number[] = [];
+	for (let i = 0; i < T.length / 3; i += 7) d.push(far(T[i * 3] as number, T[i * 3 + 2] as number));
+	d.sort((a, b) => a - b);
+	// (numpy's median: the middle two's mean where there is an even number)
+	const h = d.length / 2;
+	return d.length % 2 ? (d[Math.floor(h)] as number) : ((d[h - 1] as number) + (d[h] as number)) / 2;
 }
 
 /** Whether a mesh is one of an old kerb's parts (build_kerbs' parts_of; base: its name after 1ROAD_KERB_). */
@@ -303,31 +342,62 @@ export interface FloorMade {
 	far?: Mesh;
 }
 
-/** The floor merged, each model given its meshes (the models changed in place). */
-export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOptions, more: Omit<MergeOptions, "cache" | "log"> = {}): Promise<FloorMade> {
-	const log = o.log ?? (() => {});
-	const roads = Object.fromEntries(o.roads.map((r) => [r.name, r])) as Record<string, RoadDesc>;
-	const described = new Set<string>([
+/** A hand-made floor's meshes of one name in one model, as the merge takes them: its kind, its model's file, its first node, each part with where it stands. */
+type FoundFloor = { kind: FloorKind; file: string; node: Kn5Mesh; parts: [Kn5Mesh, Mat4][] };
+
+/** A hand-made floor laid on the place: its name, its model's file, its node, its tops (nine numbers each) and their mapping (six each). */
+type LaidFloor = { name: string; file: string; node: Kn5Mesh; T: Float64Array; UV: Float64Array };
+
+/** The hand-made floors laid on the place, by kind. */
+type LaidFloors = Record<"kerb" | "paved" | "grass", LaidFloor[]>;
+
+/** A road described, as built. */
+type BuiltRoad = { name: string; m: RoadMesh };
+
+/** What the floor is made with: the models, their files, the names of the roads described, the place's ground, the log. */
+interface FloorRun {
+	models: Record<string, Kn5>;
+	files: string[];
+	described: Set<string>;
+	ground: (x: number, z: number) => number;
+	log: (line: string) => void;
+}
+
+/** The regions gathered for the merge, where each one's mesh goes, the window they are cropped to, the roads described by name. */
+interface Gathering {
+	regions: Region[];
+	owners: Record<string, Owner>;
+	window: Box;
+	roads: Record<string, RoadDesc>;
+}
+
+/** The names of the roads described and of the meshes they say they are made in. */
+function describedNames(roads: Record<string, RoadDesc>, list: RoadDesc[]): Set<string> {
+	return new Set<string>([
 		...Object.keys(roads),
-		...o.roads.flatMap((r) => {
+		...list.flatMap((r) => {
 			const m = (r as unknown as { mesh?: unknown }).mesh;
 			return typeof m === "string" ? [m] : [];
 		}),
 	]);
-	const place = await placeOf(host, o.project, o.terrain);
-	const ground = place.ground.y.bind(place.ground);
-	// (the hand-made ground: what the hand-made floors were laid on, to move what stands on it by the change)
-	const files = Object.keys(o.models);
-	// (the old kerbs along the roads with rumbles described, in any of the models: out, every part of them)
-	const gone = o.roads.some((r) => (r as { kerbs?: unknown[] }).kerbs?.length) ? oldKerbs(Object.values(o.models), o.roads) : new Set<string>();
+}
+
+/** What a mesh is in the merge, an old kerb's part dropped (gone: the old kerbs' names); null, not a floor. */
+function mergeKind(name: string, described: Set<string>, gone: Set<string>): FloorKind | null {
+	const kind = floorKind(name, described);
+	if (!kind) return null;
+	return kind !== "road" && kind !== "drop" && [...gone].some((b) => partsOf(b, name)) ? "drop" : kind;
+}
+
+/** The models' floors, by kind, model and name, and the hand-made ground's tops (what the hand-made floors were laid on). */
+function findFloors(run: FloorRun, gone: Set<string>): { found: Map<string, FoundFloor>; groundTops: Float64Array[] } {
 	const groundTops: Float64Array[] = [];
-	const found = new Map<string, { kind: FloorKind; file: string; node: Kn5Mesh; parts: [Kn5Mesh, Mat4][] }>();
-	for (const f of files) {
-		for (const [n, m] of meshes(o.models[f] as Kn5)) {
+	const found = new Map<string, FoundFloor>();
+	for (const f of run.files) {
+		for (const [n, m] of meshes(run.models[f] as Kn5)) {
 			if (!n.faces.length) continue;
-			const kind0 = floorKind(n.name, described);
-			if (!kind0) continue;
-			const kind: FloorKind = kind0 !== "road" && kind0 !== "drop" && [...gone].some((b) => partsOf(b, n.name)) ? "drop" : kind0;
+			const kind = mergeKind(n.name, run.described, gone);
+			if (!kind) continue;
 			if (kind === "ground") groundTops.push(tops(n, m).T);
 			const key = `${kind}|${f}|${n.name}`;
 			const g = found.get(key) ?? { kind, file: f, node: n, parts: [] };
@@ -335,43 +405,40 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 			found.set(key, g);
 		}
 	}
-	const beforeT = new Float64Array(groundTops.reduce((a, t) => a + t.length, 0));
+	return { found, groundTops };
+}
+
+/** Arrays of numbers one after another, in one. */
+function joined(parts: Float64Array[]): Float64Array {
+	const all = new Float64Array(parts.reduce((a, t) => a + t.length, 0));
 	let at = 0;
-	for (const t of groundTops) {
-		beforeT.set(t, at);
+	for (const t of parts) {
+		all.set(t, at);
 		at += t.length;
 	}
-	const before = beforeT.length ? new Surface(beforeT) : null;
-	// (the roads described, each made from its description on its own heights or the place's)
-	const built = priority(roads as Roads).map((name) => {
-		const rr = asBuilt(roads[name] as RoadDesc, roads as Roads);
-		return { name, m: (rr.heights ? mesh(rr) : mesh(rr, ground)) as RoadMesh };
-	});
-	// (what the roads moved from their hand-made meshes to as built: carried out to the old kerbs beside them)
-	const oldRoads = [...found.values()].filter((g) => g.kind === "road").flatMap((g) => g.parts.map(([n, m]) => triangles(n, m)));
-	const builtT = (() => {
-		const parts = built.map(({ m }) => {
+	return all;
+}
+
+/** The roads as built, as triangles (nine numbers each). */
+function builtTriangles(built: BuiltRoad[]): Float64Array {
+	return joined(
+		built.map(({ m }) => {
 			const T = new Float64Array(m.F.length * 3);
 			for (let k = 0; k < m.F.length; k++) T.set(m.P.subarray((m.F[k] as number) * 3, (m.F[k] as number) * 3 + 3), k * 3);
 			return T;
-		});
-		const all = new Float64Array(parts.reduce((a, t) => a + t.length, 0));
-		let at2 = 0;
-		for (const t of parts) {
-			all.set(t, at2);
-			at2 += t.length;
-		}
-		return all;
-	})();
-	const carried = oldRoads.length && builtT.length ? carriedChange(oldRoads, new Surface(builtT)) : null;
-	// (the hand-made floors laid on the place, by kind)
-	const groups: Record<"kerb" | "paved" | "grass", { name: string; file: string; node: Kn5Mesh; T: Float64Array; UV: Float64Array }[]> = {
-		kerb: [],
-		paved: [],
-		grass: [],
-	};
+		}),
+	);
+}
+
+/** The hand-made floors laid on the place (by lay), by kind; those out, to be emptied in their models (the roads described, the dropped, the ground, and an old
+ * floor the editor does not make: own, the floors it makes, where given); how many old floors are out. */
+function layFloors(
+	found: Map<string, FoundFloor>,
+	own: Set<string> | null,
+	lay: (T: Float64Array, kind: FloorKind) => Float64Array,
+): { groups: LaidFloors; dropped: { file: string; name: string }[]; old: number } {
+	const groups: LaidFloors = { kerb: [], paved: [], grass: [] };
 	const dropped: { file: string; name: string }[] = [];
-	const own = o.own ? new Set(o.own) : null;
 	let old = 0;
 	for (const g of found.values()) {
 		// (an old floor the editor does not make: out, emptied as the rest it replaces)
@@ -381,21 +448,17 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 			if (g.kind !== "far") dropped.push({ file: g.file, name: g.node.name });
 			continue;
 		}
+		const kind = g.kind;
 		const ts = g.parts.map(([n, m]) => tops(n, m));
-		const T = new Float64Array(ts.reduce((a, t) => a + t.T.length, 0));
-		const UV = new Float64Array(ts.reduce((a, t) => a + t.UV.length, 0));
-		let p = 0;
-		let q = 0;
-		for (const t of ts) {
-			T.set(laid(t.T, g.kind, ground, before, carried), p);
-			UV.set(t.UV, q);
-			p += t.T.length;
-			q += t.UV.length;
-		}
-		if (T.length) groups[g.kind].push({ name: g.node.name, file: g.file, node: g.node, T, UV });
+		const T = joined(ts.map((t) => lay(t.T, kind)));
+		const UV = joined(ts.map((t) => t.UV));
+		if (T.length) groups[kind].push({ name: g.node.name, file: g.file, node: g.node, T, UV });
 	}
-	if (old) log(`${old} old floors out (not the editor's)`);
-	// (the window: round every road and floor)
+	return { groups, dropped, old };
+}
+
+/** The window round every road and floor, NEAR out, in whole metres. */
+function windowRound(built: BuiltRoad[], groups: LaidFloors): Box {
 	const w = { x0: Infinity, z0: Infinity, x1: -Infinity, z1: -Infinity };
 	const take = (P: ArrayLike<number>) => {
 		for (let i = 0; i < P.length; i += 3) {
@@ -407,58 +470,69 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 	};
 	for (const { m } of built) take(m.P);
 	for (const k of Object.values(groups)) for (const g of k) take(g.T);
-	const window: Box = o.window ?? {
+	return {
 		x0: Math.floor(w.x0 - NEAR),
 		z0: Math.floor(w.z0 - NEAR),
 		x1: Math.ceil(w.x1 + NEAR),
 		z1: Math.ceil(w.z1 + NEAR),
 	};
-	// (the regions, in merge_floor's order: the rumbles over all, the roads described, the old kerbs, the paved, the grass, the ground)
-	const regions: Region[] = [];
-	const owners: Record<string, Owner> = {};
-	const firstModel = files[0] as string;
-	const roadModel = (name: string) => files.find((f) => meshes(o.models[f] as Kn5).some(([n]) => n.name === name)) ?? firstModel;
-	const kerbModel = o.rumbles ?? files.find((f) => meshes(o.models[f] as Kn5).some(([n]) => n.name.startsWith("1ROAD_KERB_"))) ?? firstModel;
-	const top = roadsTop(built);
-	// (the rumbles' pictures as long as they are: their proportions)
-	const aspects = await pictureAspects(host.files, o.project, KERB_MATERIALS);
+}
+
+/** The rumbles of the roads described (none laid along another) as regions, over all: in the model the rumbles go into. */
+function addRumbles(
+	cx: Gathering,
+	built: BuiltRoad[],
+	kerbModel: string,
+	top: (x: number, z: number) => number,
+	aspects: Record<string, number>,
+	ground: (x: number, z: number) => number,
+) {
 	for (const { name } of built) {
-		const r = roads[name] as RoadDesc & { along?: unknown; kerbs?: unknown[] };
+		const r = cx.roads[name] as RoadDesc & { along?: unknown; kerbs?: unknown[] };
 		if (r.along) continue;
 		const num = name.replace(/^1(ROAD|KERB)_/, "");
 		((r.kerbs ?? []) as Parameters<typeof kerbGeometry>[1][]).forEach((k, i) => {
-			for (const g of kerbGeometry(r as never, k, roads as Roads, top, (m) => aspects[m], ground)) {
-				const c = crop({ P: g.P, U: g.U, F: g.F }, window);
+			for (const g of kerbGeometry(r as never, k, cx.roads as Roads, top, (m) => aspects[m], ground)) {
+				const c = crop({ P: g.P, U: g.U, F: g.F }, cx.window);
 				if (!c) continue;
 				const rn = `1ROAD_KERB_E_${num}_${i}${g.suffix}`;
-				regions.push({ name: rn, ...c });
-				owners[rn] = { model: kerbModel, template: null, material: g.material, replaces: [] };
+				cx.regions.push({ name: rn, ...c });
+				cx.owners[rn] = { model: kerbModel, template: null, material: g.material, replaces: [] };
 			}
 		});
 	}
+}
+
+/** The roads described as regions: each in the model holding its mesh (by its name, or the mesh it says), in its material. */
+function addRoads(cx: Gathering, built: BuiltRoad[], roadModel: (name: string) => string) {
 	for (const { name, m } of built) {
-		const c = crop(m, window);
+		const c = crop(m, cx.window);
 		if (!c) continue;
-		regions.push({ name, ...c });
-		const r = roads[name] as RoadDesc & { material?: string; mesh?: string };
+		cx.regions.push({ name, ...c });
+		const r = cx.roads[name] as RoadDesc & { material?: string; mesh?: string };
 		const model = roadModel(r.mesh ?? name);
-		owners[name] = { model, template: null, material: r.material ?? "Tarmac Dark", replaces: [] };
+		cx.owners[name] = { model, template: null, material: r.material ?? "Tarmac Dark", replaces: [] };
 	}
-	const names = new Set(regions.map((r) => r.name));
+}
+
+/** The hand-made floors laid as regions, the old kerbs, the paved, the grass, each by orderKey: each in its own model after its own node (a name already taken:
+ * its model's after it). */
+function addFloors(cx: Gathering, groups: LaidFloors, models: Record<string, Kn5>) {
+	const names = new Set(cx.regions.map((r) => r.name));
 	for (const kind of ["kerb", "paved", "grass"] as const) {
 		const sorted = [...groups[kind]].sort((a, b) => {
 			const [ka, na] = orderKey(a.name);
 			const [kb, nb] = orderKey(b.name);
-			return ka - kb || (na < nb ? -1 : na > nb ? 1 : 0);
+			return ka - kb || byCodePoint(na, nb);
 		});
 		for (const g of sorted) {
-			const c = cropTris(g.T, g.UV, window);
+			const c = cropTris(g.T, g.UV, cx.window);
 			if (!c.tris.length) continue;
 			const rn = names.has(g.name) ? `${g.name}@${g.file}` : g.name;
 			names.add(rn);
-			regions.push({ name: rn, ...c });
-			const k = o.models[g.file] as Kn5;
-			owners[rn] = {
+			cx.regions.push({ name: rn, ...c });
+			const k = models[g.file] as Kn5;
+			cx.owners[rn] = {
 				model: g.file,
 				template: g.node,
 				material: k.materials[g.node.material]?.name ?? "",
@@ -466,21 +540,116 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 			};
 		}
 	}
-	const groundModel = files.find((f) => meshes(o.models[f] as Kn5).some(([n]) => n.name === GROUND)) ?? firstModel;
-	const groundAt = meshes(o.models[groundModel] as Kn5).find(([n]) => n.name === GROUND);
+}
+
+/** The ground as a region, under all: in the model holding the hand-made ground, after it (else in the first model, in the ground given); its model and node. */
+function addGround(cx: Gathering, run: FloorRun, given: FloorOptions["ground"]): { model: string; node: Kn5Mesh | null } {
+	const { models, files, ground } = run;
+	const groundModel = files.find((f) => meshes(models[f] as Kn5).some(([n]) => n.name === GROUND)) ?? (files[0] as string);
+	const groundAt = meshes(models[groundModel] as Kn5).find(([n]) => n.name === GROUND);
 	const groundNode = groundAt?.[0] ?? null;
 	// (mapped as the ground it takes the place of was: a picture over the whole place (the satellite's) stays one picture; none, or not mapped flat: a picture
 	// every 50 m)
-	const uv = (groundAt && flatMapping(groundAt[0], groundAt[1])) ?? o.ground?.uv ?? ((x: number, z: number): [number, number] => [x / 50, z / 50]);
-	regions.push({ name: GROUND, ground: { height: ground, uv, spacing: SPACING } });
-	owners[GROUND] = {
+	const uv = (groundAt && flatMapping(groundAt[0], groundAt[1])) ?? given?.uv ?? ((x: number, z: number): [number, number] => [x / 50, z / 50]);
+	cx.regions.push({ name: GROUND, ground: { height: ground, uv, spacing: SPACING } });
+	cx.owners[GROUND] = {
 		model: groundModel,
 		template: groundNode,
-		material: groundNode ? ((o.models[groundModel] as Kn5).materials[groundNode.material]?.name ?? "") : (o.ground?.material ?? "Grass"),
+		material: groundNode ? ((models[groundModel] as Kn5).materials[groundNode.material]?.name ?? "") : (given?.material ?? "Grass"),
 		replaces: [GROUND],
 		// (grass on the ground made here: the hand-made one said so itself)
 		...(groundNode ? {} : { grass: true }),
 	};
+	return { model: groundModel, node: groundNode };
+}
+
+/** The merged floor's points moved by the bumps made by hand and the surface's roughness, where there are any. */
+function bumpFloor(result: Record<string, Mesh>, o: FloorOptions, log: (line: string) => void) {
+	const rough = roughnessOf(o.roads, o.surface);
+	if (!o.bumps && !rough) return;
+	const hand = o.bumps;
+	const n = bumped(result, (x, z) => (hand ? bumpAt(hand, x, z) : 0) + (rough ? rough(x, z) : 0));
+	if (n) log(`the bumps${rough ? " and the surface's roughness" : ""}: ${n} points of the floor moved`);
+}
+
+/** The far ground made again round the merged floor, in place of the hand-made one (emptied): in its model, under its first mesh's name; with none, in the
+ * ground's model (at: its model, node and material). */
+function writeFarGround(
+	run: FloorRun,
+	far: NonNullable<FloorOptions["far"]>,
+	result: Record<string, Mesh>,
+	window: Box,
+	at: { model: string; node: Kn5Mesh | null; material: string },
+): Mesh {
+	const { models, files, described } = run;
+	const fars = files.flatMap((f) => meshes(models[f] as Kn5).flatMap(([n]) => (floorKind(n.name, described) === "far" ? [[f, n] as const] : [])));
+	const g = farGround(result, window, far.area, run.ground, far.triangle);
+	const [file, template] = fars[0] ?? [at.model, at.node];
+	for (const [, n] of fars) n.faces = new Uint16Array(0);
+	const k = models[file] as Kn5;
+	const name = template?.name ?? "GRASS_1";
+	const material = template ? (k.materials[template.material]?.name ?? "") : at.material;
+	k.root.children.push(meshNode(k, name, g, material, template ?? null, models));
+	run.log(`the far ground: ${g.P.length / 3} points, ${g.F.length / 3} faces, out to the land round it`);
+	return g;
+}
+
+/** Each model's merged meshes, by name (a region's name before its @), in order. */
+function mergedNames(owners: Record<string, Owner>, result: Record<string, Mesh>): Record<string, string[]> {
+	const merged: Record<string, string[]> = {};
+	for (const [rn, own] of Object.entries(owners)) {
+		if (!result[rn]) continue;
+		const list = merged[own.model] ?? [];
+		list.push(rn.split("@")[0] as string);
+		merged[own.model] = list;
+	}
+	for (const v of Object.values(merged)) v.sort(byCodePoint);
+	return merged;
+}
+
+/** The floor merged, each model given its meshes (the models changed in place). */
+export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOptions, more: Omit<MergeOptions, "cache" | "log"> = {}): Promise<FloorMade> {
+	const log = o.log ?? (() => {});
+	const roads = Object.fromEntries(o.roads.map((r) => [r.name, r])) as Record<string, RoadDesc>;
+	const described = describedNames(roads, o.roads);
+	const place = await placeOf(host, o.project, o.terrain);
+	const ground = place.ground.y.bind(place.ground);
+	// (the hand-made ground: what the hand-made floors were laid on, to move what stands on it by the change)
+	const files = Object.keys(o.models);
+	const run: FloorRun = { models: o.models, files, described, ground, log };
+	// (the old kerbs along the roads with rumbles described, in any of the models: out, every part of them)
+	const gone = o.roads.some((r) => (r as { kerbs?: unknown[] }).kerbs?.length) ? oldKerbs(Object.values(o.models), o.roads) : new Set<string>();
+	const { found, groundTops } = findFloors(run, gone);
+	const beforeT = joined(groundTops);
+	const before = beforeT.length ? new Surface(beforeT) : null;
+	// (the roads described, each made from its description on its own heights or the place's)
+	const built: BuiltRoad[] = priority(roads as Roads).map((name) => {
+		const rr = asBuilt(roads[name] as RoadDesc, roads as Roads);
+		return { name, m: (rr.heights ? mesh(rr) : mesh(rr, ground)) as RoadMesh };
+	});
+	// (what the roads moved from their hand-made meshes to as built: carried out to the old kerbs beside them)
+	const oldRoads = [...found.values()].filter((g) => g.kind === "road").flatMap((g) => g.parts.map(([n, m]) => triangles(n, m)));
+	const builtT = builtTriangles(built);
+	const carried = oldRoads.length && builtT.length ? carriedChange(oldRoads, new Surface(builtT)) : null;
+	// (the hand-made floors laid on the place, by kind)
+	const own = o.own ? new Set(o.own) : null;
+	const { groups, dropped, old } = layFloors(found, own, (T, kind) => laid(T, kind, ground, before, carried));
+	if (old) log(`${old} old floors out (not the editor's)`);
+	// (the window: round every road and floor)
+	const window: Box = o.window ?? windowRound(built, groups);
+	// (the regions, in merge_floor's order: the rumbles over all, the roads described, the old kerbs, the paved, the grass, the ground)
+	const cx: Gathering = { regions: [], owners: {}, window, roads };
+	const { regions, owners } = cx;
+	const firstModel = files[0] as string;
+	const roadModel = (name: string) => files.find((f) => meshes(o.models[f] as Kn5).some(([n]) => n.name === name)) ?? firstModel;
+	const kerbModel = o.rumbles ?? files.find((f) => meshes(o.models[f] as Kn5).some(([n]) => n.name.startsWith("1ROAD_KERB_"))) ?? firstModel;
+	const top = roadsTop(built);
+	// (the rumbles' pictures as long as they are: their proportions)
+	const aspects = await pictureAspects(host.files, o.project, KERB_MATERIALS);
+	addRumbles(cx, built, kerbModel, top, aspects, ground);
+	addRoads(cx, built, roadModel);
+	addFloors(cx, groups, o.models);
+	const groundAt = addGround(cx, run, o.ground);
 	log(
 		`${regions.length} regions: ${built.length} roads described, ${groups.kerb.length} old kerbs, ` +
 			`${groups.paved.length} paved, ${groups.grass.length} grass; the window ${window.x1 - window.x0} by ${window.z1 - window.z0} m`,
@@ -495,39 +664,14 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 		log: (s, ms) => log(`  ${s} ${(ms / 1000).toFixed(1)} s`),
 	});
 	// (the bumps made by hand: every point moved by them where it is, the same in each mesh, before anything is laid on it)
-	const rough = roughnessOf(o.roads, o.surface);
-	if (o.bumps || rough) {
-		const hand = o.bumps;
-		const n = bumped(result, (x, z) => (hand ? bumpAt(hand, x, z) : 0) + (rough ? rough(x, z) : 0));
-		if (n) log(`the bumps${rough ? " and the surface's roughness" : ""}: ${n} points of the floor moved`);
-	}
+	bumpFloor(result, o, log);
 	// (written: the meshes it takes the place of emptied, each region's mesh in its model, one normal at each point)
 	writeFloor(o.models, result, owners, dropped);
 	// (the far ground made again round it, in place of the hand-made one: in its model, under its first mesh's name)
-	let farMesh: Mesh | undefined;
-	if (o.far) {
-		const fars = files.flatMap((f) => meshes(o.models[f] as Kn5).flatMap(([n]) => (floorKind(n.name, described) === "far" ? [[f, n] as const] : [])));
-		const g = farGround(result, window, o.far.area, ground, o.far.triangle);
-		farMesh = g;
-		const [file, template] = fars[0] ?? [groundModel, groundNode];
-		for (const [, n] of fars) n.faces = new Uint16Array(0);
-		const k = o.models[file] as Kn5;
-		const name = template?.name ?? "GRASS_1";
-		const material = template ? (k.materials[template.material]?.name ?? "") : (owners[GROUND]?.material ?? "");
-		k.root.children.push(meshNode(k, name, g, material, template ?? null, o.models));
-		log(`the far ground: ${g.P.length / 3} points, ${g.F.length / 3} faces, out to the land round it`);
-	}
-	const merged: Record<string, string[]> = {};
-	for (const [rn, own] of Object.entries(owners)) {
-		if (!result[rn]) continue;
-		const list = merged[own.model] ?? [];
-		list.push(rn.split("@")[0] as string);
-		merged[own.model] = list;
-	}
-	for (const v of Object.values(merged)) v.sort(byCodePoint);
+	const farMesh = o.far ? writeFarGround(run, o.far, result, window, { ...groundAt, material: owners[GROUND]?.material ?? "" }) : undefined;
 	return {
 		window,
-		merged,
+		merged: mergedNames(owners, result),
 		regions: regions.length,
 		faces: Object.values(result).reduce((a, m) => a + m.F.length / 3, 0),
 		meshes: result,
@@ -536,11 +680,11 @@ export async function buildFloor(host: PlaceHost, filler: Filler, o: FloorOption
 	};
 }
 
-/** The merged meshes into their models: those they replace (and those dropped) emptied, each region's mesh a node after its template, one normal at each point
- * (every face round it, across the seams). */
-function writeFloor(models: Record<string, Kn5>, result: Record<string, Mesh>, owners: Record<string, Owner>, dropped: { file: string; name: string }[]) {
-	// (one normal at each point, by where it is: a point two regions share is one)
-	const key = (x: number, z: number) => `${Math.round(x / 1e-4)},${Math.round(z / 1e-4)}`;
+/** Where a point is, to a tenth of a millimetre over x and z: the same for the points two regions share. */
+const pointKey = (x: number, z: number) => `${Math.round(x / 1e-4)},${Math.round(z / 1e-4)}`;
+
+/** Each point's normal, by where it is (pointKey): the sum of the faces' round it, every mesh's, each face's up and as long as twice its area. */
+function pointNormals(result: Record<string, Mesh>): Map<string, [number, number, number]> {
 	const normals = new Map<string, [number, number, number]>();
 	for (const m of Object.values(result))
 		for (let f = 0; f < m.F.length; f += 3) {
@@ -555,13 +699,21 @@ function writeFloor(models: Record<string, Kn5>, result: Record<string, Mesh>, o
 			let n: [number, number, number] = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
 			if (n[1] < 0) n = [-n[0], -n[1], -n[2]];
 			for (const v of [a, b, c]) {
-				const k = key(P[v * 3] as number, P[v * 3 + 2] as number);
+				const k = pointKey(P[v * 3] as number, P[v * 3 + 2] as number);
 				const s = normals.get(k) ?? [0, 0, 0];
 				normals.set(k, [s[0] + n[0], s[1] + n[1], s[2] + n[2]]);
 			}
 		}
+	return normals;
+}
+
+/** The merged meshes into their models: those they replace (and those dropped) emptied, each region's mesh a node after its template, one normal at each point
+ * (every face round it, across the seams). */
+function writeFloor(models: Record<string, Kn5>, result: Record<string, Mesh>, owners: Record<string, Owner>, dropped: { file: string; name: string }[]) {
+	// (one normal at each point, by where it is: a point two regions share is one)
+	const normals = pointNormals(result);
 	const normalAt = (x: number, z: number): [number, number, number] => {
-		const s = normals.get(key(x, z));
+		const s = normals.get(pointKey(x, z));
 		if (!s) return [0, 1, 0];
 		const l = Math.hypot(...s) || 1;
 		return [s[0] / l, s[1] / l, s[2] / l];
@@ -584,28 +736,21 @@ function writeFloor(models: Record<string, Kn5>, result: Record<string, Mesh>, o
 /** metres between the far ground's points (far_terrain's STEP) */
 const FAR_STEP = 20;
 
-/** The far ground (far_terrain.py's build, on the place): from the merged floor's outer edge out to area (the land round the track's pictures: x and z,
- * metres), a point every FAR_STEP, on the place's ground; along that edge the merged floor's own points at their own heights, so the two meet with no gap. Its
- * faces up, mapped onto the picture of the land round it as far_ground.py maps it ((x max - x, z max - z) over the area's size). */
-export function farGround(
-	meshes: Record<string, Mesh>,
-	window: Box,
-	area: [[number, number], [number, number]],
-	height: (x: number, z: number) => number,
-	tri: Triangle,
-): { P: Float64Array; UV: Float64Array; F: Int32Array } {
-	const [[xa, xb], [za, zb]] = area;
+/** metres from a window's edge a point is on it */
+const ON_EDGE = 1e-6;
+
+/** How far along a window's perimeter a point on its edge is, the way the ring round it goes: along z0, up x1, back along z1, down x0. */
+function alongEdge({ x0, z0, x1, z1 }: Box, x: number, z: number): number {
+	if (Math.abs(z - z0) < ON_EDGE) return x - x0;
+	if (Math.abs(x - x1) < ON_EDGE) return x1 - x0 + (z - z0);
+	if (Math.abs(z - z1) < ON_EDGE) return x1 - x0 + (z1 - z0) + (x1 - x);
+	return 2 * (x1 - x0) + (z1 - z0) + (z1 - z);
+}
+
+/** The meshes' points on a window's edge (one at each place), round it the way the ring goes: by how far along its perimeter. */
+function edgePoints(meshes: Record<string, Mesh>, window: Box): [number, number, number][] {
 	const { x0, z0, x1, z1 } = window;
-	const eps = 1e-6;
-	// (the merged floor's points on the window's edge, round it the way the ring goes: by how far along its perimeter)
-	const along = (x: number, z: number) =>
-		Math.abs(z - z0) < eps
-			? x - x0
-			: Math.abs(x - x1) < eps
-				? x1 - x0 + (z - z0)
-				: Math.abs(z - z1) < eps
-					? x1 - x0 + (z1 - z0) + (x1 - x)
-					: 2 * (x1 - x0) + (z1 - z0) + (z1 - z);
+	const eps = ON_EDGE;
 	const edge = new Map<string, [number, number, number]>();
 	for (const m of Object.values(meshes))
 		for (let i = 0; i < m.P.length; i += 3) {
@@ -613,7 +758,11 @@ export function farGround(
 			if (Math.abs(x - x0) < eps || Math.abs(x - x1) < eps || Math.abs(z - z0) < eps || Math.abs(z - z1) < eps)
 				edge.set(`${x.toFixed(6)},${z.toFixed(6)}`, [x, y, z]);
 		}
-	const inner = [...edge.values()].sort((a, b) => along(a[0], a[2]) - along(b[0], b[2]));
+	return [...edge.values()].sort((a, b) => alongEdge(window, a[0], a[2]) - alongEdge(window, b[0], b[2]));
+}
+
+/** The points round an area's edge (x and z, metres), FAR_STEP apart along each side from its corner, the way the ring goes. */
+function areaRing([[xa, xb], [za, zb]]: [[number, number], [number, number]]): [number, number][] {
 	const outer: [number, number][] = [];
 	for (const [p, q] of [
 		[
@@ -636,10 +785,34 @@ export function farGround(
 		const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
 		for (let t = 0; t < L; t += FAR_STEP) outer.push([p[0] + ((q[0] - p[0]) * t) / L, p[1] + ((q[1] - p[1]) * t) / L]);
 	}
+	return outer;
+}
+
+/** The points inside an area (x and z, metres), FAR_STEP apart from its corner, but for those within half a step of a window. */
+function farGrid([[xa, xb], [za, zb]]: [[number, number], [number, number]], { x0, z0, x1, z1 }: Box): [number, number][] {
 	const grid: [number, number][] = [];
 	const m = FAR_STEP / 2;
 	for (let z = za + FAR_STEP; z < zb - FAR_STEP / 2; z += FAR_STEP)
 		for (let x = xa + FAR_STEP; x < xb - FAR_STEP / 2; x += FAR_STEP) if (x < x0 - m || x > x1 + m || z < z0 - m || z > z1 + m) grid.push([x, z]);
+	return grid;
+}
+
+/** The far ground (far_terrain.py's build, on the place): from the merged floor's outer edge out to area (the land round the track's pictures: x and z,
+ * metres), a point every FAR_STEP, on the place's ground; along that edge the merged floor's own points at their own heights, so the two meet with no gap. Its
+ * faces up, mapped onto the picture of the land round it as far_ground.py maps it ((x max - x, z max - z) over the area's size). */
+export function farGround(
+	meshes: Record<string, Mesh>,
+	window: Box,
+	area: [[number, number], [number, number]],
+	height: (x: number, z: number) => number,
+	tri: Triangle,
+): { P: Float64Array; UV: Float64Array; F: Int32Array } {
+	const [[xa, xb], [za, zb]] = area;
+	const { x0, z0, x1, z1 } = window;
+	// (the merged floor's points on the window's edge, round it the way the ring goes: by how far along its perimeter)
+	const inner = edgePoints(meshes, window);
+	const outer = areaRing(area);
+	const grid = farGrid(area, window);
 	const ni = inner.length;
 	const no = outer.length;
 	const points = [...inner.map((p) => [p[0], p[2]]), ...outer, ...grid].flat();
@@ -706,7 +879,7 @@ export function flatMapping(n: Kn5Mesh, m: Mat4): ((x: number, z: number) => [nu
 		szz += dz * dz;
 	}
 	const det = sxx * szz - sxz * sxz;
-	if (!(Math.abs(det) > 1e-9)) return null;
+	if (Number.isNaN(det) || Math.abs(det) <= 1e-9) return null;
 	const plane = (col: number): [number, number, number] | null => {
 		let mu = 0;
 		for (let v = 0; v < nv; v++) mu += V[v * VERT + col] as number;

@@ -49,6 +49,14 @@ function across(p: V2, t: V2, clear: (x: number, z: number) => boolean, upTo: nu
 	return null;
 }
 
+/** The radius of the circle through a, p and b, the way a line through them turns at p (Infinity where they are in a row). */
+function turnRadius(a: V2, p: V2, b: V2): number {
+	const cross = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
+	if (Math.abs(cross) < 1e-9) return Infinity;
+	const ab = Math.hypot(b[0] - a[0], b[1] - a[1]);
+	return (ab * Math.hypot(p[0] - a[0], p[1] - a[1]) * Math.hypot(b[0] - p[0], b[1] - p[1])) / (2 * Math.abs(cross));
+}
+
 /** The points P (every step metres along a line; closed: round to the first again) kept CLEAR of the edges of the road clear says is there. pinned: how many
  * points at either end stay where they are (a pit lane's run on the fast line); side: metres of road either side of the line counted at most (a pit lane's own
  * road, not the track beside it). */
@@ -146,24 +154,21 @@ export function keepClear(
 		const s = spreadOut(w);
 		for (let i = 0; i < n; i++) if (!fixed(i)) o[i] = (o[i] as number) + (s[i] as number);
 	};
+	// (the points AROUND either side of point i marked in want, the line's ends as far as it goes)
+	const markAround = (want: Uint8Array, i: number) => {
+		for (let d = -AROUND; d <= AROUND; d++) {
+			const j = closed ? idx(i + d) : i + d;
+			if (j >= 0 && j < n) want[j] = 1;
+		}
+	};
 	// (where it turns tighter than KINK, and AROUND points either side: each point a little towards its neighbours' middle, across the line)
 	const smooth = () => {
 		const Q = Array.from({ length: n }, (_, i) => at(i));
 		const q = (i: number) => Q[idx(i)] as V2;
 		const want = new Uint8Array(n);
 		for (let i = 0; i < n; i++) {
-			const a = q(i - 2);
-			const p = q(i);
-			const b = q(i + 2);
-			const cross = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
-			if (Math.abs(cross) < 1e-9) continue;
-			const ab = Math.hypot(b[0] - a[0], b[1] - a[1]);
-			const r = (ab * Math.hypot(p[0] - a[0], p[1] - a[1]) * Math.hypot(b[0] - p[0], b[1] - p[1])) / (2 * Math.abs(cross));
-			if (r >= KINK) continue;
-			for (let d = -AROUND; d <= AROUND; d++) {
-				const j = closed ? idx(i + d) : i + d;
-				if (j >= 0 && j < n) want[j] = 1;
-			}
+			if (turnRadius(q(i - 2), q(i), q(i + 2)) >= KINK) continue;
+			markAround(want, i);
 		}
 		for (let i = 0; i < n; i++) {
 			if (fixed(i) || !want[i]) continue;

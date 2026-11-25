@@ -82,8 +82,16 @@ export function startFacing(line: V3[], at: V3, heading: number): V3 {
 
 /** A layout's name in the game, the track's name off its front (its ui_track.json's name; none: the layout's). */
 export function layoutTitle(uiName: string | undefined, trackName: string, layout: string): string {
-	const lead = new RegExp(`^${trackName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`);
+	const escaped = trackName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+	const lead = new RegExp(String.raw`^${escaped}\s*`);
 	return (uiName ?? layout).replace(lead, "") || layout;
+}
+
+/** A path without the slashes (either way) it ends with. */
+function trimSlashes(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
 }
 
 const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -93,7 +101,7 @@ const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every(
  * wrote. */
 export async function acPictures(files: HostFiles, host: PictureHost, o: { project: string; out: string; log?: (line: string) => void }): Promise<number> {
 	const log = o.log ?? (() => {});
-	const project = o.project.replace(/[\\/]+$/, "");
+	const project = trimSlashes(o.project);
 	const dec = (b: Uint8Array) => new TextDecoder().decode(b).replace(/^﻿/, "");
 	const track = JSON.parse(dec(await files.read(`${project}/tools/reference/track.json`))) as {
 		layouts?: Record<string, unknown>;

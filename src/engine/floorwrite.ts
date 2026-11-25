@@ -43,6 +43,37 @@ export function materialIn(k: Kn5, name: string, models: Record<string, Kn5> = {
 	return k.materials.length - 1;
 }
 
+/** A made mesh's normals, one at each point, from normalAt. */
+function normalsAt(m: MadeMesh, nv: number, normalAt: (x: number, z: number, y: number) => [number, number, number]): Float32Array {
+	const nor = new Float32Array(nv * 3);
+	for (let v = 0; v < nv; v++) {
+		const n = normalAt(m.P[v * 3] as number, m.P[v * 3 + 2] as number, m.P[v * 3 + 1] as number);
+		nor.set(n, v * 3);
+	}
+	return nor;
+}
+
+/** A made mesh's normals from its faces' own: each point's the sum of its faces' (as large as they are), made one long. */
+function faceNormals(m: MadeMesh, nv: number): Float32Array {
+	const nor = new Float32Array(nv * 3);
+	for (let f = 0; f < m.F.length; f += 3) {
+		const [a, b, c] = [m.F[f] as number, m.F[f + 1] as number, m.F[f + 2] as number];
+		const u = [0, 1, 2].map((i) => (m.P[b * 3 + i] as number) - (m.P[a * 3 + i] as number));
+		const w = [0, 1, 2].map((i) => (m.P[c * 3 + i] as number) - (m.P[a * 3 + i] as number));
+		const n = [
+			(u[1] as number) * (w[2] as number) - (u[2] as number) * (w[1] as number),
+			(u[2] as number) * (w[0] as number) - (u[0] as number) * (w[2] as number),
+			(u[0] as number) * (w[1] as number) - (u[1] as number) * (w[0] as number),
+		];
+		for (const v of [a, b, c]) for (let i = 0; i < 3; i++) nor[v * 3 + i] = (nor[v * 3 + i] as number) + (n[i] as number);
+	}
+	for (let v = 0; v < nv; v++) {
+		const l = Math.hypot(nor[v * 3] as number, nor[v * 3 + 1] as number, nor[v * 3 + 2] as number) || 1;
+		for (let i = 0; i < 3; i++) nor[v * 3 + i] = (nor[v * 3 + i] as number) / l;
+	}
+	return nor;
+}
+
 /** A made mesh as a node of k: its name, its material's, its flags as the template's (or a floor's: drawn, casting shadows), its normals from normalAt where
  * given (one at each point across seams), else its faces' own. */
 export function meshNode(
@@ -59,29 +90,7 @@ export function meshNode(
 	const uv = new Float32Array(nv * 2);
 	for (let i = 0; i < nv * 3; i++) pos[i] = m.P[i] as number;
 	for (let i = 0; i < nv * 2; i++) uv[i] = m.UV[i] as number;
-	const nor = new Float32Array(nv * 3);
-	if (normalAt)
-		for (let v = 0; v < nv; v++) {
-			const n = normalAt(m.P[v * 3] as number, m.P[v * 3 + 2] as number, m.P[v * 3 + 1] as number);
-			nor.set(n, v * 3);
-		}
-	else {
-		for (let f = 0; f < m.F.length; f += 3) {
-			const [a, b, c] = [m.F[f] as number, m.F[f + 1] as number, m.F[f + 2] as number];
-			const u = [0, 1, 2].map((i) => (m.P[b * 3 + i] as number) - (m.P[a * 3 + i] as number));
-			const w = [0, 1, 2].map((i) => (m.P[c * 3 + i] as number) - (m.P[a * 3 + i] as number));
-			const n = [
-				(u[1] as number) * (w[2] as number) - (u[2] as number) * (w[1] as number),
-				(u[2] as number) * (w[0] as number) - (u[0] as number) * (w[2] as number),
-				(u[0] as number) * (w[1] as number) - (u[1] as number) * (w[0] as number),
-			];
-			for (const v of [a, b, c]) for (let i = 0; i < 3; i++) nor[v * 3 + i] = (nor[v * 3 + i] as number) + (n[i] as number);
-		}
-		for (let v = 0; v < nv; v++) {
-			const l = Math.hypot(nor[v * 3] as number, nor[v * 3 + 1] as number, nor[v * 3 + 2] as number) || 1;
-			for (let i = 0; i < 3; i++) nor[v * 3 + i] = (nor[v * 3 + i] as number) / l;
-		}
-	}
+	const nor = normalAt ? normalsAt(m, nv, normalAt) : faceNormals(m, nv);
 	const tan = tangents(pos, nor, uv, m.F);
 	const verts = new Float32Array(nv * VERT);
 	for (let v = 0; v < nv; v++) {

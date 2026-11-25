@@ -28,7 +28,12 @@ export class ObjectsError extends Error {}
 
 type J = { [k: string]: unknown };
 const isObj = (v: unknown): v is J => !!v && typeof v === "object" && !Array.isArray(v) && !(v instanceof PyNumber);
-const num = (v: unknown): number | null => (v instanceof PyNumber ? v.value : typeof v === "number" ? v : null);
+const num = (v: unknown): number | null => {
+	if (v instanceof PyNumber) return v.value;
+	return typeof v === "number" ? v : null;
+};
+/** A name the file gives (one checked there, or none: ""), as text, as Python's str() has it. */
+const nameText = (v: unknown): string => String(v as string);
 
 /** A float as Python's: written as its repr (10.0, not 10). */
 export const f = (x: number) => new PyNumber(x, pyFloat(x));
@@ -93,55 +98,84 @@ function _object(o: unknown, w: string): J {
 	const model = o.model;
 	if (typeof model !== "string" || !model) throw new ObjectsError(`${w}.model: a model of the catalogue`);
 	const curve = _curve(o.curve, w);
-	const out: J = { name: String(o.name), model, curve };
+	const out: J = { name: nameText(o.name), model, curve };
 	const single = curve.length === 1;
 	if (single) out.heading = heading(o.heading, `${w}.heading`);
 	else out.closed = Boolean(num(o.closed) ?? o.closed ?? false);
-	if (o.spacing !== undefined && o.spacing !== null) {
-		const spacing = _num(o.spacing, `${w}.spacing`);
-		if (spacing <= 0) throw new ObjectsError(`${w}.spacing: more than 0, please`);
-		out.spacing = f(pyRound(spacing, ROUND));
-	}
+	if (o.spacing !== undefined && o.spacing !== null) out.spacing = _spacing(o.spacing, w);
 	const rows = o.rows ?? 1;
 	if (!isInt(rows) || (num(rows) as number) < 1) throw new ObjectsError(`${w}.rows: a whole number, 1 or more`);
 	if (!single) {
 		out.rows = num(rows);
-		const fit = o.fit ?? "place";
-		if (!FITS.includes(fit as string)) throw new ObjectsError(`${w}.fit: ${FITS.join(" or ")}`);
-		out.fit = fit;
+		out.fit = _fit(o.fit, w);
 	}
-	const scale = o.scale;
-	if (scale !== undefined && scale !== null) {
-		if (!Array.isArray(scale) || scale.length !== 3) throw new ObjectsError(`${w}.scale: [across, up, deep], each 1 as the model is`);
-		const sc = scale.map((v, i) => pyRound(_num(v, `${w}.scale[${i}]`), ROUND));
-		if (sc.some((v) => v <= 0)) throw new ObjectsError(`${w}.scale: more than 0, please`);
-		if (sc.some((v) => v !== 1)) out.scale = sc.map(f);
-	}
-	const allowed = single ? SINGLE_COLLISIONS : CURVE_COLLISIONS;
-	const collision = o.collision ?? "none";
-	if (!allowed.includes(collision as string)) throw new ObjectsError(`${w}.collision: ${allowed.join(" or ")} for ${single ? "one" : "a curve of them"}`);
-	out.collision = collision;
-	const layouts = o.layouts;
-	if (layouts !== undefined && layouts !== null) {
-		if (!Array.isArray(layouts) || !layouts.every((x) => typeof x === "string" && x))
-			throw new ObjectsError(`${w}.layouts: a list of layouts' names (none: every layout)`);
-		out.layouts = [...new Set(layouts as string[])].sort(byCodePoint);
-	}
+	const scale = _scale(o.scale, w);
+	if (scale) out.scale = scale;
+	out.collision = _collision(o.collision, w, single);
+	if (o.layouts !== undefined && o.layouts !== null) out.layouts = _layouts(o.layouts, w);
 	// (a board's own text, as its card says it: none, its name's)
-	if (o.text !== undefined && o.text !== null) {
-		if (typeof o.text !== "string") throw new ObjectsError(`${w}.text: what its card says, as text`);
-		const text = o.text.trim();
-		if (text.length > 40) throw new ObjectsError(`${w}.text: 40 letters at most, please`);
-		if (text) out.text = text;
-	}
+	const text = _text(o.text, w);
+	if (text) out.text = text;
 	// (its own lights: those not as their series are, by their place among its model's lights)
+	const lights = _lights(o.lights, w);
+	if (lights) out.lights = lights;
+	return out;
+}
+
+/** An object's spacing: metres between its models along its curve, more than 0. */
+function _spacing(v: unknown, w: string) {
+	const spacing = _num(v, `${w}.spacing`);
+	if (spacing <= 0) throw new ObjectsError(`${w}.spacing: more than 0, please`);
+	return f(pyRound(spacing, ROUND));
+}
+
+/** How a curve's models fit along it: one of FITS (none: place). */
+function _fit(v: unknown, w: string): unknown {
+	const fit = v ?? "place";
+	if (!FITS.includes(fit as string)) throw new ObjectsError(`${w}.fit: ${FITS.join(" or ")}`);
+	return fit;
+}
+
+/** An object's scale: [across, up, deep], each more than 0; null where none is given or each is 1, as the model is. */
+function _scale(scale: unknown, w: string): PyNumber[] | null {
+	if (scale === undefined || scale === null) return null;
+	if (!Array.isArray(scale) || scale.length !== 3) throw new ObjectsError(`${w}.scale: [across, up, deep], each 1 as the model is`);
+	const sc = scale.map((v, i) => pyRound(_num(v, `${w}.scale[${i}]`), ROUND));
+	if (sc.some((v) => v <= 0)) throw new ObjectsError(`${w}.scale: more than 0, please`);
+	return sc.some((v) => v !== 1) ? sc.map(f) : null;
+}
+
+/** An object's collision: one a single object or a curve of them can have (none: none). */
+function _collision(v: unknown, w: string, single: boolean): unknown {
+	const allowed = single ? SINGLE_COLLISIONS : CURVE_COLLISIONS;
+	const collision = v ?? "none";
+	if (!allowed.includes(collision as string)) throw new ObjectsError(`${w}.collision: ${allowed.join(" or ")} for ${single ? "one" : "a curve of them"}`);
+	return collision;
+}
+
+/** The layouts an object is in: their names, each once, in order. */
+function _layouts(layouts: unknown, w: string): string[] {
+	if (!Array.isArray(layouts) || !layouts.every((x) => typeof x === "string" && x))
+		throw new ObjectsError(`${w}.layouts: a list of layouts' names (none: every layout)`);
+	return [...new Set(layouts as string[])].sort(byCodePoint);
+}
+
+/** A board's own text, trimmed, 40 letters at most; "" where none is given. */
+function _text(v: unknown, w: string): string {
+	if (v === undefined || v === null) return "";
+	if (typeof v !== "string") throw new ObjectsError(`${w}.text: what its card says, as text`);
+	const text = v.trim();
+	if (text.length > 40) throw new ObjectsError(`${w}.text: 40 letters at most, please`);
+	return text;
+}
+
+/** An object's own lights, as cleanLightOptions has them (its errors as the objects'). */
+function _lights(v: unknown, w: string) {
 	try {
-		const lights = cleanLightOptions(o.lights, `${w}.lights`, (x) => f(pyRound(x, ROUND)));
-		if (lights) out.lights = lights;
+		return cleanLightOptions(v, `${w}.lights`, (x) => f(pyRound(x, ROUND)));
 	} catch (e) {
 		throw e instanceof LightOptionsError ? new ObjectsError(e.message) : e;
 	}
-	return out;
 }
 
 /** An area (a car park, a lane): a paved surface of its own shape, laid as a road's top is; its corners in order. */
@@ -150,7 +184,7 @@ function _area(a: unknown, w: string): J {
 	if (typeof a.material !== "string" || !a.material) throw new ObjectsError(`${w}.material: its material's name`);
 	const pts = _list(a.points, `${w}.points`);
 	if (pts.length < 3) throw new ObjectsError(`${w}.points: three corners at least`);
-	return { name: String(a.name), material: a.material, points: pts.map((p, i) => _pair(p, `${w}.points[${i}]`)) };
+	return { name: nameText(a.name), material: a.material, points: pts.map((p, i) => _pair(p, `${w}.points[${i}]`)) };
 }
 
 /** A mark's curve: its own, else (as older files have it: from p, length metres along heading) one straight from p. */
@@ -175,7 +209,7 @@ function _mark(m: unknown, w: string): J {
 	const style = m.style ?? "solid";
 	if (!COLOURS.includes(colour as string)) throw new ObjectsError(`${w}.colour: ${COLOURS.join(" or ")}`);
 	if (!STYLES.includes(style as string)) throw new ObjectsError(`${w}.style: ${STYLES.join(" or ")}`);
-	const out: J = { name: String(m.name), curve };
+	const out: J = { name: nameText(m.name), curve };
 	if (curve.length > 2 && (num(m.closed) ?? m.closed)) out.closed = true;
 	Object.assign(out, { width: f(pyRound(width, ROUND)), colour, style });
 	if (style === "dotted")
@@ -201,7 +235,7 @@ function _rubber(m: unknown, w: string): J {
 	const width = _num(m.width, `${w}.width`);
 	if (width <= 0) throw new ObjectsError(`${w}: its width more than 0, please`);
 	if (!RUBBER_WEARS.includes(m.wear as string)) throw new ObjectsError(`${w}.wear: ${RUBBER_WEARS.join(", ")}`);
-	const out: J = { name: String(m.name), curve };
+	const out: J = { name: nameText(m.name), curve };
 	if (curve.length > 2 && (num(m.closed) ?? m.closed)) out.closed = true;
 	return Object.assign(out, { width: f(pyRound(width, ROUND)), wear: m.wear });
 }
@@ -241,7 +275,7 @@ function wallV2(t: unknown, w: string): J {
 	const rows = t.rows ?? 1;
 	if (!isInt(rows) || (num(rows) as number) < 1) throw new ObjectsError(`${w}.rows: a whole number, 1 or more`);
 	return {
-		name: String(t.name),
+		name: nameText(t.name),
 		curve,
 		closed: Boolean(num(t.closed) ?? t.closed ?? false),
 		spacing: pyRound(spacing, ROUND),
@@ -300,13 +334,9 @@ function cleanV2(objects: unknown): J {
 
 const single = (x: number, z: number) => [{ p: [x, z], in: [0, 0], out: [0, 0] }];
 
-/** Objects of version 2 as version 3's (objects.py's convert): every tyre wall (one of a single stack and a wall to hit: a static one), pole, cone, board and
- * piece of scenery an object of the catalogue's model; a cone or a board in several layouts at one place (within SAME_PLACE; a board of the same name too) one
- * object listing them (none listed: in every layout); the layouts their grid, pits, hotlap and timing alone; the marks as they were. Names kept, made unique (a
- * second _2) across the objects and the marks. */
-export function convertV2(objects: unknown): J {
-	const v2 = cleanV2(objects);
-	const taken = new Set((v2.marks as J[]).map((m) => m.name as string));
+/** Names made unique across the objects and the marks (taken: those so far): own(name) the name, else a second _2 (a third _3...); free(prefix) the prefix
+ * with the first number not taken. */
+function uniqueNames(taken: Set<string>) {
 	const own = (name: string) => {
 		let [n, k] = [name, 2];
 		while (taken.has(n)) [n, k] = [`${name}_${k}`, k + 1];
@@ -319,46 +349,41 @@ export function convertV2(objects: unknown): J {
 		taken.add(`${prefix}${k}`);
 		return `${prefix}${k}`;
 	};
-	const out: J[] = [];
-	for (const t of v2.tyre_walls as J[])
-		out.push({
-			name: own(t.name as string),
-			model: "tyre_stack",
-			curve: t.curve,
-			closed: t.closed,
-			spacing: t.spacing,
-			rows: t.rows,
-			fit: "place",
-			collision: t.collision ? ((t.curve as unknown[]).length > 1 ? "wall" : "static") : "none",
-		});
-	for (const p of v2.poles as J[])
-		out.push({
-			name: p.name ? own(p.name as string) : free("POLE_"),
-			model: "light_pole",
-			curve: single(p.x as number, p.z as number),
-			heading: p.heading,
-			collision: "none",
-		});
-	const lays = v2.layouts as Record<string, J>;
+	return { own, free };
+}
+
+/** A version 2 tyre wall's collision as its object's: a wall to hit (a single stack's: a static one), else none. */
+function wallCollision(t: J): string {
+	if (!t.collision) return "none";
+	return (t.curve as unknown[]).length > 1 ? "wall" : "static";
+}
+
+/** The cones or the boards of every layout, one of those at one place (within SAME_PLACE; a board of the same name too) with the layouts it is in. */
+function groupSpots(lays: Record<string, J>, kind: "cones" | "boards"): (J & { layouts: string[] })[] {
+	const groups: (J & { layouts: string[] })[] = [];
+	for (const [name, lay] of Object.entries(lays))
+		for (const spot of lay[kind] as J[]) {
+			// (a board the same one only of its name too: two boards at one place say different things)
+			const g = groups.find(
+				(g) =>
+					Math.abs((g.x as number) - (spot.x as number)) <= SAME_PLACE && Math.abs((g.z as number) - (spot.z as number)) <= SAME_PLACE && g.name === spot.name,
+			);
+			if (!g) groups.push({ ...spot, layouts: [name] });
+			else if (!g.layouts.includes(name)) g.layouts.push(name);
+		}
+	return groups;
+}
+
+/** The cones and then the boards of every layout as objects, onto out: one at each place (groupSpots), named by names, listing its layouts unless it is in
+ * every one. */
+function spotObjects(lays: Record<string, J>, names: ReturnType<typeof uniqueNames>, out: J[]): void {
+	const { own, free } = names;
 	const every = Object.keys(lays).sort(byCodePoint);
 	for (const [kind, model, prefix] of [
 		["cones", "cone", "CONE_"],
 		["boards", "board", "BOARD_"],
 	] as const) {
-		const groups: (J & { layouts: string[] })[] = [];
-		for (const [name, lay] of Object.entries(lays))
-			for (const spot of lay[kind] as J[]) {
-				// (a board the same one only of its name too: two boards at one place say different things)
-				const g = groups.find(
-					(g) =>
-						Math.abs((g.x as number) - (spot.x as number)) <= SAME_PLACE &&
-						Math.abs((g.z as number) - (spot.z as number)) <= SAME_PLACE &&
-						g.name === spot.name,
-				);
-				if (!g) groups.push({ ...spot, layouts: [name] });
-				else if (!g.layouts.includes(name)) g.layouts.push(name);
-			}
-		for (const g of groups) {
+		for (const g of groupSpots(lays, kind)) {
 			const obj: J = {
 				name: g.name ? own(g.name as string) : free(prefix),
 				model,
@@ -371,6 +396,37 @@ export function convertV2(objects: unknown): J {
 			out.push(obj);
 		}
 	}
+}
+
+/** Objects of version 2 as version 3's (objects.py's convert): every tyre wall (one of a single stack and a wall to hit: a static one), pole, cone, board and
+ * piece of scenery an object of the catalogue's model; a cone or a board in several layouts at one place (within SAME_PLACE; a board of the same name too) one
+ * object listing them (none listed: in every layout); the layouts their grid, pits, hotlap and timing alone; the marks as they were. Names kept, made unique (a
+ * second _2) across the objects and the marks. */
+export function convertV2(objects: unknown): J {
+	const v2 = cleanV2(objects);
+	const { own, free } = uniqueNames(new Set((v2.marks as J[]).map((m) => m.name as string)));
+	const out: J[] = [];
+	for (const t of v2.tyre_walls as J[])
+		out.push({
+			name: own(t.name as string),
+			model: "tyre_stack",
+			curve: t.curve,
+			closed: t.closed,
+			spacing: t.spacing,
+			rows: t.rows,
+			fit: "place",
+			collision: wallCollision(t),
+		});
+	for (const p of v2.poles as J[])
+		out.push({
+			name: p.name ? own(p.name as string) : free("POLE_"),
+			model: "light_pole",
+			curve: single(p.x as number, p.z as number),
+			heading: p.heading,
+			collision: "none",
+		});
+	const lays = v2.layouts as Record<string, J>;
+	spotObjects(lays, { own, free }, out);
 	for (const kind of SCENERY)
 		for (const p of (v2.scenery as Record<string, J[]>)[kind] as J[])
 			out.push({
@@ -396,7 +452,8 @@ export async function seedObjects(files: HostFiles, models: string): Promise<J> 
 		: {};
 	const layouts: J = {};
 	const stems = (await files.exists(models)) ? (await files.list(models)).filter((f) => /^vp_.*\.glb$/.test(f)) : [];
-	for (const f of stems.sort(byCodePoint)) {
+	stems.sort(byCodePoint);
+	for (const f of stems) {
 		const stem = f.slice(0, -4);
 		layouts[stem] = places[stem] ? layoutPlaces(places[stem]) : { grid: [], pits: [], hotlap: null, timing: [], cones: [], boards: [] };
 	}
@@ -423,7 +480,7 @@ function layoutPlaces(places: J): J {
 	});
 	const point = (x: number, z: number) => ({ x: pyRound(x, ROUND), z: pyRound(z, ROUND) });
 	for (const p of (places.spots as J[] | undefined) ?? []) {
-		const name = `AC_${String(p.name ?? "")}`;
+		const name = `AC_${nameText(p.name ?? "")}`;
 		const at = [p.x as number, p.z as number, (p.heading as number | undefined) ?? 0] as const;
 		const start = /^AC_START_(\d+)$/.exec(name);
 		const pit = /^AC_PIT_(\d+)$/.exec(name);
@@ -471,18 +528,21 @@ function _lines(v: unknown, w: string): J {
 			curve: _curve(line.curve, `${w}.${k}`),
 			closed: Boolean(num(line.closed) ?? line.closed ?? k === "fast"),
 		};
-		// (where it forks off the fast line and merges back into it: metres along it from its start; joins less than leaves where the pit lane crosses the start
-		// line)
-		if (k === "pit")
-			for (const e of ["leaves", "joins"]) {
-				if (line[e] === null || line[e] === undefined) continue;
-				const m = _num(line[e], `${w}.pit.${e}`);
-				if (m < 0) throw new ObjectsError(`${w}.pit.${e}: metres along the fast line, 0 or more`);
-				o[e] = f(pyRound(m, ROUND));
-			}
+		if (k === "pit") pitEnds(line, o, w);
 		out[k] = o;
 	}
 	return out;
+}
+
+/** A pit line's ends into o: where it forks off the fast line and merges back into it, metres along it from its start; joins less than leaves where the pit
+ * lane crosses the start line. */
+function pitEnds(line: J, o: J, w: string) {
+	for (const e of ["leaves", "joins"]) {
+		if (line[e] === null || line[e] === undefined) continue;
+		const m = _num(line[e], `${w}.pit.${e}`);
+		if (m < 0) throw new ObjectsError(`${w}.pit.${e}: metres along the fast line, 0 or more`);
+		o[e] = f(pyRound(m, ROUND));
+	}
 }
 
 /** Whether objects are of version 2 or before (objects.py's is_v2). */
@@ -492,36 +552,40 @@ export function isV2(objects: unknown): boolean {
 	return old || !("objects" in objects) || Math.trunc(num(objects.version) ?? 2) < VERSION;
 }
 
+/** A layout checked and rounded (version 3): its grid, pits, hotlap, safety car (rFactor 2's), timing, racing lines and start line. */
+function _layout(lay: unknown, w: string): J {
+	if (!isObj(lay)) throw new ObjectsError(`${w}: not an object`);
+	const hot = lay.hotlap;
+	const timing = _list(lay.timing, `${w}.timing`).map((g, i) => ({
+		name: `AC_TIME_${i}`,
+		left: _spot(isObj(g) ? g.left : null, `${w}.timing[${i}].left`, false),
+		right: _spot(isObj(g) ? g.right : null, `${w}.timing[${i}].right`, false),
+	}));
+	const out: J = {
+		grid: _list(lay.grid, `${w}.grid`).map((s, i) => _spot(s, `${w}.grid[${i}]`)),
+		pits: _list(lay.pits, `${w}.pits`).map((s, i) => _spot(s, `${w}.pits[${i}]`)),
+		hotlap: hot === null || hot === undefined ? null : _spot(hot, `${w}.hotlap`),
+		timing,
+	};
+	// (where rFactor 2's safety car waits; none: the build's guess, on the pit lane)
+	if (lay.safety_car !== null && lay.safety_car !== undefined) out.safety_car = _spot(lay.safety_car, `${w}.safety_car`);
+	if (lay.lines !== null && lay.lines !== undefined) out.lines = _lines(lay.lines, `${w}.lines`);
+	// (its start line painted across the road at the front of its grid: chequered, or a solid white line; none: none)
+	if (lay.start_line !== null && lay.start_line !== undefined) {
+		if (!START_LINE_STYLES.includes(lay.start_line as string))
+			throw new ObjectsError(`${w}.start_line: ${START_LINE_STYLES.join(" or ")} (none: no start line)`);
+		out.start_line = lay.start_line;
+	}
+	return out;
+}
+
 /** The objects checked and rounded, as they are written (objects.py's clean, version 3). */
 export function cleanObjects(given: unknown): J {
 	// (version 2 given: checked as it was, then converted)
 	const objects = isV2(given) ? convertV2(given) : given;
 	if (!isObj(objects) || !isObj(objects.layouts ?? {})) throw new ObjectsError("objects: {layouts, objects, marks}");
 	const layouts: J = {};
-	for (const [name, lay] of Object.entries((objects.layouts ?? {}) as J)) {
-		const w = `layouts.${name}`;
-		if (!isObj(lay)) throw new ObjectsError(`${w}: not an object`);
-		const hot = lay.hotlap;
-		const timing = _list(lay.timing, `${w}.timing`).map((g, i) => ({
-			name: `AC_TIME_${i}`,
-			left: _spot(isObj(g) ? g.left : null, `${w}.timing[${i}].left`, false),
-			right: _spot(isObj(g) ? g.right : null, `${w}.timing[${i}].right`, false),
-		}));
-		const out: J = {
-			grid: _list(lay.grid, `${w}.grid`).map((s, i) => _spot(s, `${w}.grid[${i}]`)),
-			pits: _list(lay.pits, `${w}.pits`).map((s, i) => _spot(s, `${w}.pits[${i}]`)),
-			hotlap: hot === null || hot === undefined ? null : _spot(hot, `${w}.hotlap`),
-			timing,
-		};
-		if (lay.lines !== null && lay.lines !== undefined) out.lines = _lines(lay.lines, `${w}.lines`);
-		// (its start line painted across the road at the front of its grid: chequered, or a solid white line; none: none)
-		if (lay.start_line !== null && lay.start_line !== undefined) {
-			if (!START_LINE_STYLES.includes(lay.start_line as string))
-				throw new ObjectsError(`${w}.start_line: ${START_LINE_STYLES.join(" or ")} (none: no start line)`);
-			out.start_line = lay.start_line;
-		}
-		layouts[String(name)] = out;
-	}
+	for (const [name, lay] of Object.entries((objects.layouts ?? {}) as J)) layouts[String(name)] = _layout(lay, `layouts.${name}`);
 	const objs = _list(objects.objects, "objects").map((o, i) => _object(o, `objects[${i}]`));
 	const marks = _list(objects.marks, "marks").map((m, i) => _mark(m, `marks[${i}]`));
 	const rubber = _list(objects.rubber, "rubber").map((m, i) => _rubber(m, `rubber[${i}]`));
@@ -578,25 +642,33 @@ function _surface(v: unknown): J | null {
 	if (v === undefined || v === null) return null;
 	if (!isObj(v)) throw new ObjectsError("surface: {waves, bumps, ripple, camber, seed}");
 	const out: J = {};
+	surfaceMillimetres(v, out);
+	if (v.seed !== undefined && v.seed !== null) {
+		if (!isInt(v.seed)) throw new ObjectsError("surface.seed: a whole number");
+		out.seed = num(v.seed);
+	}
+	if (v.map !== undefined && v.map !== null) out.map = surfaceMap(v.map);
+	return Object.keys(out).some((k) => k !== "seed" && k !== "map") ? out : null;
+}
+
+/** The surface's millimetres (waves, bumps, ripple, camber), each 0 to 100: into out, those more than 0, rounded to hundredths. */
+function surfaceMillimetres(v: J, out: J): void {
 	for (const k of ["waves", "bumps", "ripple", "camber"]) {
 		if (v[k] === undefined || v[k] === null) continue;
 		const mm = _num(v[k], `surface.${k}`);
 		if (mm < 0 || mm > 100) throw new ObjectsError(`surface.${k}: millimetres, 0 to 100`);
 		if (mm > 0) out[k] = f(pyRound(mm, 2));
 	}
-	if (v.seed !== undefined && v.seed !== null) {
-		if (!isInt(v.seed)) throw new ObjectsError("surface.seed: a whole number");
-		out.seed = num(v.seed);
-	}
-	if (v.map !== undefined && v.map !== null) {
-		out.map = _list(v.map, "surface.map").map((p, i) => {
-			if (!Array.isArray(p) || p.length !== 3) throw new ObjectsError(`surface.map[${i}]: [x, z, k]`);
-			const [x, z, k] = p.map((q, j) => _num(q, `surface.map[${i}][${j}]`)) as [number, number, number];
-			if (k < 0 || k > 10) throw new ObjectsError(`surface.map[${i}]: its k 0 to 10`);
-			return [f(pyRound(x, 2)), f(pyRound(z, 2)), f(pyRound(k, 2))];
-		});
-	}
-	return Object.keys(out).some((k) => k !== "seed" && k !== "map") ? out : null;
+}
+
+/** The surface's map: points [x, z, k] (k 0 to 10), rounded to centimetres. */
+function surfaceMap(v: unknown): PyNumber[][] {
+	return _list(v, "surface.map").map((p, i) => {
+		if (!Array.isArray(p) || p.length !== 3) throw new ObjectsError(`surface.map[${i}]: [x, z, k]`);
+		const [x, z, k] = p.map((q, j) => _num(q, `surface.map[${i}][${j}]`)) as [number, number, number];
+		if (k < 0 || k > 10) throw new ObjectsError(`surface.map[${i}]: its k 0 to 10`);
+		return [f(pyRound(x, 2)), f(pyRound(z, 2)), f(pyRound(k, 2))];
+	});
 }
 
 /** What the AI lines are made for: its cars' width (metres, more than 0). */

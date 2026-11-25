@@ -337,7 +337,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 		if (!picked) return;
 		selectObject(picked);
 		set({ placing: placedAlong(kind) ? { kind, i: (picked as ObjectPick).i } : null });
-		status(`${within === undefined ? OBJECT_LABELS[kind].one : "A node"} added${isLayoutKind(kind) ? ` to ${s.layout}` : ""}; not saved yet`);
+		const where = isLayoutKind(kind) ? ` to ${s.layout}` : "";
+		status(`${within === undefined ? OBJECT_LABELS[kind].one : "A node"} added${where}; not saved yet`);
 	}
 
 	/** A line painted across the road at (wx, wz), from its left edge to its right (a start line), picked. */
@@ -408,7 +409,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 		changeObjects((d) => {
 			did = smoothObject(d, s.layout, obj.kind, obj.i, obj.h ? -1 : obj.j);
 		}, obj.kind);
-		if (did) status(`${obj.j >= 0 ? "its node" : `the ${OBJECT_LABELS[obj.kind].one.toLowerCase()}`} smoothed; not saved yet`);
+		const what = obj.j >= 0 ? "its node" : `the ${OBJECT_LABELS[obj.kind].one.toLowerCase()}`;
+		if (did) status(`${what} smoothed; not saved yet`);
 	}
 
 	/** The object picked earlier or later in its list (a grid slot's number, a pit box's). */
@@ -451,7 +453,9 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 			if (style) l.start_line = style;
 			else delete l.start_line;
 		});
-		const what = style === "checker" ? "a chequered start line" : style === "line" ? "a solid start line" : "no start line";
+		let what = "no start line";
+		if (style === "checker") what = "a chequered start line";
+		else if (style === "line") what = "a solid start line";
 		status(`${layout}: ${what}; not saved yet`);
 	}
 
@@ -738,6 +742,35 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 		await task("Saving", true, async () => saving(s, names, objectsChanged, roadsChanged, bumpsChanged));
 	}
 
+	/** The roads saved (those deleted since gone, unless named again): what is said of it. */
+	async function savingRoads(s: EditorState, names: string[]): Promise<string> {
+		const deleted = s.deleted.filter((n) => !names.includes(n));
+		const res = await api.save(s.roads, deleted);
+		setRoads(res.roads, { deleted: [] });
+		savedRoads = get().roads;
+		wantMeshes();
+		const again = res.changed.join(", ");
+		return again ? `saved — heights recorded again at the next build for: ${again}` : "saved";
+	}
+
+	/** The objects saved (the trees apart, as the track keeps them, and the layouts' models; only those read): what is said of it. */
+	async function savingObjects(all: NonNullable<EditorState["objects"]>): Promise<string> {
+		const { lists, ...rest } = all;
+		const { objects, trees } = splitTrees(rest);
+		const res = await api.saveObjects(objects);
+		const kept = treesRead ? (await api.saveTrees(trees)).trees : [];
+		let models = lists;
+		if (listsRead && lists && JSON.stringify(lists) !== savedLists) {
+			models = (await api.saveLayouts(lists)).layouts;
+			savedLists = JSON.stringify(models);
+		}
+		const back = { ...withTrees(res.objects, kept), ...(models ? { lists: models } : {}) };
+		savedObjects = back;
+		const { obj, layout } = get();
+		set({ objects: back, objectsSeeded: false, obj: obj && exists(back, layout, obj) ? obj : null });
+		return treesRead ? `objects and ${kept.length} trees saved` : "objects saved";
+	}
+
 	async function saving(s: EditorState, names: string[], objectsChanged: boolean, roadsChanged: boolean, bumpsChanged = false) {
 		try {
 			const said: string[] = [];
@@ -746,32 +779,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 				savedBumps = s.bumps;
 				said.push("bumps saved");
 			}
-			if (roadsChanged) {
-				const deleted = s.deleted.filter((n) => !names.includes(n));
-				const res = await api.save(s.roads, deleted);
-				setRoads(res.roads, { deleted: [] });
-				savedRoads = get().roads;
-				wantMeshes();
-				const again = res.changed.join(", ");
-				said.push(again ? `saved — heights recorded again at the next build for: ${again}` : "saved");
-			}
-			if (objectsChanged && s.objects) {
-				// (the trees apart, as the track keeps them, and the layouts' models; only those read)
-				const { lists, ...rest } = s.objects;
-				const { objects, trees } = splitTrees(rest);
-				const res = await api.saveObjects(objects);
-				const kept = treesRead ? (await api.saveTrees(trees)).trees : [];
-				let models = lists;
-				if (listsRead && lists && JSON.stringify(lists) !== savedLists) {
-					models = (await api.saveLayouts(lists)).layouts;
-					savedLists = JSON.stringify(models);
-				}
-				const back = { ...withTrees(res.objects, kept), ...(models ? { lists: models } : {}) };
-				savedObjects = back;
-				const { obj, layout } = get();
-				set({ objects: back, objectsSeeded: false, obj: obj && exists(back, layout, obj) ? obj : null });
-				said.push(treesRead ? `objects and ${kept.length} trees saved` : "objects saved");
-			}
+			if (roadsChanged) said.push(await savingRoads(s, names));
+			if (objectsChanged && s.objects) said.push(await savingObjects(s.objects));
 			set({ dirty: false });
 			status(said.join("; "));
 		} catch (e) {
@@ -942,9 +951,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 			}
 		}, "rubber");
 		if (first >= 0) selectObject({ kind: "rubber", i: first, j: -1 });
-		status(
-			`rubber laid along ${layout}'s ${lines.map(([k]) => (k === "fast" ? "fast line" : "pit lane")).join(" and ")}${replaced ? ` (replacing ${replaced} laid before)` : ""}; not saved yet`,
-		);
+		const before = replaced ? ` (replacing ${replaced} laid before)` : "";
+		status(`rubber laid along ${layout}'s ${lines.map(([k]) => (k === "fast" ? "fast line" : "pit lane")).join(" and ")}${before}; not saved yet`);
 	}
 
 	/** A kind's model chosen: what placing it adds, and placing it. */
@@ -1036,9 +1044,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 			d.marks = [...kept, ...castDraft(marks)];
 		}, "marks");
 		set({ obj: null });
-		status(
-			`${made} paint marks laid out (${kind === "gridPaint" ? "the grid" : "the pit boxes"})${replaced ? `, replacing ${replaced} there` : ""}; not saved yet`,
-		);
+		const there = replaced ? `, replacing ${replaced} there` : "";
+		status(`${made} paint marks laid out (${kind === "gridPaint" ? "the grid" : "the pit boxes"})${there}; not saved yet`);
 	}
 
 	/** What is laid out along the line put down: the layout's grid slots or pit boxes (the others with the same set too), or their paint (every layout's, the
@@ -1525,7 +1532,8 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 		const name = best.name;
 		const roads = r.roads.at(-1) === name ? r.roads.slice(0, -1) : [...r.roads, name];
 		set({ routing: { ...r, roads } });
-		status(roads.length ? `the ${r.kind === "fast" ? "lap" : "pit lane"}: ${roads.join(" → ")}` : "no roads yet");
+		const route = r.kind === "fast" ? "lap" : "pit lane";
+		status(roads.length ? `the ${route}: ${roads.join(" → ")}` : "no roads yet");
 	}
 
 	function cancelRouting() {
@@ -1579,11 +1587,9 @@ export function createEditor(api: EngineClient, options: EditorOptions = {}) {
 		const lay = s.objects.layouts[s.layout];
 		// (a lap from its start line: its first timing gate, else its first grid slot)
 		const gate = lay?.timing[0];
-		const start: Vec2 | undefined = gate
-			? [(gate.left.x + gate.right.x) / 2, (gate.left.z + gate.right.z) / 2]
-			: lay?.grid[0]
-				? [lay.grid[0].x, lay.grid[0].z]
-				: undefined;
+		let start: Vec2 | undefined;
+		if (gate) start = [(gate.left.x + gate.right.x) / 2, (gate.left.z + gate.right.z) / 2];
+		else if (lay?.grid[0]) start = [lay.grid[0].x, lay.grid[0].z];
 		let made = false;
 		changeObjects((d) => {
 			d.layouts[s.layout] ??= emptyLayout();

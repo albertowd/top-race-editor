@@ -50,24 +50,29 @@ const KEYS: Record<string, Act> = {
 	...Object.fromEntries(CATEGORY_ORDER.map((c): [string, Act] => [categoryKey(c), (ed) => ed.setFocus(c)])),
 };
 
-/** While the terrain is worked on, the keys it has its own way: true if it did something with this one. */
-function terrainKey(t: Terrain, e: Key): boolean {
-	const ctrl = e.ctrlKey || e.metaKey;
+/** The terrain's keys with Ctrl (or Cmd): undo, redo, save; true if it did something with this one. */
+function terrainCtrlKey(t: Terrain, e: Key): boolean {
 	const k = e.key.toLowerCase();
-	const s = t.get();
-	if (ctrl && k === "z") {
+	if (k === "z") {
 		if (e.shiftKey) t.redo();
 		else t.undo();
 		return true;
 	}
-	if (ctrl && k === "y") {
+	if (k === "y") {
 		t.redo();
 		return true;
 	}
-	if (ctrl && k === "s") {
+	if (k === "s") {
 		void t.save();
 		return true;
 	}
+	return false;
+}
+
+/** While the terrain is worked on, the keys it has its own way: true if it did something with this one. */
+function terrainKey(t: Terrain, e: Key): boolean {
+	if ((e.ctrlKey || e.metaKey) && terrainCtrlKey(t, e)) return true;
+	const s = t.get();
 	if (e.key === "Enter" && s.draft) {
 		t.finishDraft();
 		return true;

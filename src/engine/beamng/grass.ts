@@ -83,19 +83,30 @@ export async function bladesTexture(): Promise<{ png: Uint8Array; opacity: Uint8
 	return { png: await writePng(px, w, h, 4), opacity: await writePng(alpha, w, h, 1) };
 }
 
-/** Where clumps stand, in the track's axes ([x, y, z] each): on grass meshes of the models (lib: the library's materials; photo: a material's colour texture,
- * the ground's photo), within BAND of the line's points ([x, z]). */
-export function grassPlaces(
-	models: TrackMesh[][],
-	lib: Record<string, { colour?: string; covers_grass?: boolean }>,
-	photo: (texture: string) => Picture | undefined,
-	line: [number, number][],
-): [number, number, number][] {
-	// (none grows anywhere, or no line to grow along: nothing looked at, as a track's millions of triangles would be)
-	if (!line.length) return [];
-	const meshes = models.flat().filter((m) => m.visible && (m.grass || (m.material ? lib[m.material]?.covers_grass : false)));
-	if (!meshes.some((m) => m.grass)) return [];
-	// (where the clumps can be: within BAND of the line's points)
+/** metres a cell of the triangles grass grows on or that keep it off is across */
+const CELL = 4;
+
+/** A box across the ground: x from x0 to x1, z from z0 to z1. */
+type Box = [number, number, number, number];
+
+/** The triangles grass grows on or that keep it off, reaching into the box: which mesh and face each, read from the mesh itself, not copied; their corners, x
+ * y z each, as the meshes keep them (32-bit, so none changed); and the triangles by CELL cells over the box, a cell's in order: cellStart[k] to cellStart[k +
+ * 1] of cellTris. */
+interface TriGrid {
+	meshes: TrackMesh[];
+	triMesh: Int32Array;
+	triFace: Int32Array;
+	T: Float32Array;
+	gx0: number;
+	gz0: number;
+	ncx: number;
+	ncz: number;
+	cellStart: Int32Array;
+	cellTris: Int32Array;
+}
+
+/** The box within BAND of a line's points ([x, z]). */
+function lineBox(line: [number, number][]): Box {
 	let [x0, x1, z0, z1] = [Infinity, -Infinity, Infinity, -Infinity];
 	for (const p of line) {
 		x0 = Math.min(x0, p[0]);
@@ -103,47 +114,48 @@ export function grassPlaces(
 		z0 = Math.min(z0, p[1]);
 		z1 = Math.max(z1, p[1]);
 	}
-	[x0, x1, z0, z1] = [x0 - BAND, x1 + BAND, z0 - BAND, z1 + BAND];
-	// (the triangles grass grows on or that keep it off, reaching in there: which mesh and face each, read from the mesh itself, not copied)
-	const pics = meshes.map((m) => {
-		const colour = m.material ? lib[m.material]?.colour : undefined;
-		return m.grass && colour ? photo(colour) : undefined;
-	});
-	const reaches = (m: TrackMesh, f: number) => {
-		const a = m.f[f] as number;
-		const b = m.f[f + 1] as number;
-		const c = m.f[f + 2] as number;
-		if (a === b || b === c || a === c) return false;
-		const ax = m.v[a * CORNER] as number;
-		const bx = m.v[b * CORNER] as number;
-		const cx = m.v[c * CORNER] as number;
-		const az = m.v[a * CORNER + 2] as number;
-		const bz = m.v[b * CORNER + 2] as number;
-		const cz = m.v[c * CORNER + 2] as number;
-		return Math.max(ax, bx, cx) >= x0 && Math.min(ax, bx, cx) <= x1 && Math.max(az, bz, cz) >= z0 && Math.min(az, bz, cz) <= z1;
-	};
+	return [x0 - BAND, x1 + BAND, z0 - BAND, z1 + BAND];
+}
+
+/** Whether a mesh's face (its first corner's place in f) is a triangle reaching into the box. */
+function faceReaches(m: TrackMesh, f: number, [x0, x1, z0, z1]: Box): boolean {
+	const a = m.f[f] as number;
+	const b = m.f[f + 1] as number;
+	const c = m.f[f + 2] as number;
+	if (a === b || b === c || a === c) return false;
+	const ax = m.v[a * CORNER] as number;
+	const bx = m.v[b * CORNER] as number;
+	const cx = m.v[c * CORNER] as number;
+	const az = m.v[a * CORNER + 2] as number;
+	const bz = m.v[b * CORNER + 2] as number;
+	const cz = m.v[c * CORNER + 2] as number;
+	return Math.max(ax, bx, cx) >= x0 && Math.min(ax, bx, cx) <= x1 && Math.max(az, bz, cz) >= z0 && Math.min(az, bz, cz) <= z1;
+}
+
+/** a triangle's corner's number (0 1 2: x y z; 6 7: u v) */
+function triCorner(g: Pick<TriGrid, "meshes" | "triMesh" | "triFace">, t: number, c: number, i: number): number {
+	const m = g.meshes[g.triMesh[t] as number] as TrackMesh;
+	return m.v[(m.f[(g.triFace[t] as number) + c] as number) * CORNER + i] as number;
+}
+
+/** The meshes' triangles reaching into the box, with their corners and by cells. */
+function triGrid(meshes: TrackMesh[], box: Box): TriGrid {
 	let nt = 0;
-	for (const m of meshes) for (let f = 0; f < m.f.length; f += 3) if (reaches(m, f)) nt++;
+	for (const m of meshes) for (let f = 0; f < m.f.length; f += 3) if (faceReaches(m, f, box)) nt++;
 	const triMesh = new Int32Array(nt);
 	const triFace = new Int32Array(nt);
 	nt = 0;
 	meshes.forEach((m, mi) => {
 		for (let f = 0; f < m.f.length; f += 3)
-			if (reaches(m, f)) {
+			if (faceReaches(m, f, box)) {
 				triMesh[nt] = mi;
 				triFace[nt++] = f;
 			}
 	});
-	/** a triangle's corner's number (0 1 2: x y z; 6 7: u v) */
-	const corner = (t: number, c: number, i: number) => {
-		const m = meshes[triMesh[t] as number] as TrackMesh;
-		return m.v[(m.f[(triFace[t] as number) + c] as number) * CORNER + i] as number;
-	};
-	// (their corners, x y z each, as the meshes keep them: 32-bit, so none changed)
+	const tris = { meshes, triMesh, triFace };
 	const T = new Float32Array(nt * 9);
-	for (let t = 0; t < nt; t++) for (let c = 0; c < 3; c++) for (let i = 0; i < 3; i++) T[t * 9 + c * 3 + i] = corner(t, c, i);
-	// (the triangles by 4 m cells over there, a cell's in order: cellStart[k] to cellStart[k + 1] of cellTris)
-	const CELL = 4;
+	for (let t = 0; t < nt; t++) for (let c = 0; c < 3; c++) for (let i = 0; i < 3; i++) T[t * 9 + c * 3 + i] = triCorner(tris, t, c, i);
+	const [x0, x1, z0, z1] = box;
 	const gx0 = Math.floor(x0 / CELL);
 	const gz0 = Math.floor(z0 / CELL);
 	const ncx = Math.floor(x1 / CELL) - gx0 + 1;
@@ -169,7 +181,11 @@ export function grassPlaces(
 		cellsOf(t, (k) => {
 			cellTris[filled[k]++] = t;
 		});
-	// (the line's points by BAND cells, to tell a point within BAND of it)
+	return { ...tris, T, gx0, gz0, ncx, ncz, cellStart, cellTris };
+}
+
+/** Whether a point (x, z) is within BAND of a line's points (every fourth of them, by BAND cells). */
+function nearLineOf(line: [number, number][]): (x: number, z: number) => boolean {
 	const lineCells = new Map<string, [number, number][]>();
 	for (let i = 0; i < line.length; i += 4) {
 		const p = line[i] as [number, number];
@@ -178,14 +194,99 @@ export function grassPlaces(
 		if (l) l.push(p);
 		else lineCells.set(key, [p]);
 	}
-	const nearLine = (x: number, z: number) => {
+	return (x: number, z: number) => {
 		const cx = Math.floor(x / BAND);
 		const cz = Math.floor(z / BAND);
 		for (let i = cx - 1; i <= cx + 1; i++)
 			for (let j = cz - 1; j <= cz + 1; j++) for (const p of lineCells.get(`${i},${j}`) ?? []) if (Math.hypot(p[0] - x, p[1] - z) < BAND) return true;
 		return false;
 	};
-	const grows = (t: number) => (meshes[triMesh[t] as number] as TrackMesh).grass;
+}
+
+/** A triangle over a point: which, its height there, its weights. */
+interface Hit {
+	t: number;
+	y: number;
+	l: [number, number, number];
+}
+
+/** Each triangle of cell k over a point (x, z). */
+function hitsAt(g: TriGrid, k: number, x: number, z: number): Hit[] {
+	const { T } = g;
+	const hits: Hit[] = [];
+	for (let e = g.cellStart[k] as number; e < (g.cellStart[k + 1] as number); e++) {
+		const t = g.cellTris[e] as number;
+		const ax = T[t * 9] as number;
+		const az = T[t * 9 + 2] as number;
+		const bx = T[t * 9 + 3] as number;
+		const bz = T[t * 9 + 5] as number;
+		const cx = T[t * 9 + 6] as number;
+		const cz = T[t * 9 + 8] as number;
+		const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+		if (Math.abs(d) <= 1e-9) continue;
+		const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+		const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+		const l3 = 1 - l1 - l2;
+		if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+		const y = l1 * (T[t * 9 + 1] as number) + l2 * (T[t * 9 + 4] as number) + l3 * (T[t * 9 + 7] as number);
+		hits.push({ t, y, l: [l1, l2, l3] });
+	}
+	return hits;
+}
+
+/** Whether a picture is green at (u, v), wrapped: its green over its red and blue by GREEN at least. */
+function greenAt(img: Picture, u: number, v: number): boolean {
+	const ch = img.mode === "RGBA" ? 4 : 3;
+	const py = Math.floor((((v % 1) + 1) % 1) * img.height) % img.height;
+	const pxx = Math.floor((((u % 1) + 1) % 1) * img.width) % img.width;
+	const at = (py * img.width + pxx) * ch;
+	const [rr, gg, bb] = [img.data[at] as number, img.data[at + 1] as number, img.data[at + 2] as number].map((c) => c / 255) as [number, number, number];
+	if (gg - Math.max(rr, bb) < GREEN) return false;
+	return true;
+}
+
+/** The height a clump stands at at (x, z): the topmost triangle there, where grass grows on it and its photo (pics: each mesh's) is green, nothing that keeps
+ * grass off lying over it; null for none. */
+function clumpHeight(g: TriGrid, pics: (Picture | undefined)[], x: number, z: number): number | null {
+	// (within BAND of the line: inside the cells)
+	const i = Math.floor(x / CELL) - g.gx0;
+	const j = Math.floor(z / CELL) - g.gz0;
+	if (i < 0 || i >= g.ncx || j < 0 || j >= g.ncz) return null;
+	// (each triangle over it: its height there, its weights)
+	const hits = hitsAt(g, j * g.ncx + i, x, z);
+	if (!hits.length) return null;
+	const grows = (t: number) => (g.meshes[g.triMesh[t] as number] as TrackMesh).grass;
+	const top = hits.reduce((a, b) => (b.y > a.y ? b : a), hits[0] as Hit);
+	const img = pics[g.triMesh[top.t] as number];
+	if (!grows(top.t) || !img) return null;
+	// (anything that keeps grass off lying over it, even a little below the grass's top)
+	if (hits.some((h) => !grows(h.t) && h.y > top.y - 0.05)) return null;
+	const u = top.l.reduce((a, l, c) => a + l * triCorner(g, top.t, c, 6), 0);
+	const v = top.l.reduce((a, l, c) => a + l * triCorner(g, top.t, c, 7), 0);
+	return greenAt(img, u, v) ? top.y : null;
+}
+
+/** Where clumps stand, in the track's axes ([x, y, z] each): on grass meshes of the models (lib: the library's materials; photo: a material's colour texture,
+ * the ground's photo), within BAND of the line's points ([x, z]). */
+export function grassPlaces(
+	models: TrackMesh[][],
+	lib: Record<string, { colour?: string; covers_grass?: boolean }>,
+	photo: (texture: string) => Picture | undefined,
+	line: [number, number][],
+): [number, number, number][] {
+	// (none grows anywhere, or no line to grow along: nothing looked at, as a track's millions of triangles would be)
+	if (!line.length) return [];
+	const meshes = models.flat().filter((m) => m.visible && (m.grass || (m.material ? lib[m.material]?.covers_grass : false)));
+	if (!meshes.some((m) => m.grass)) return [];
+	// (where the clumps can be: within BAND of the line's points)
+	const box = lineBox(line);
+	const [x0, x1, z0, z1] = box;
+	const pics = meshes.map((m) => {
+		const colour = m.material ? lib[m.material]?.colour : undefined;
+		return m.grass && colour ? photo(colour) : undefined;
+	});
+	const grid = triGrid(meshes, box);
+	const nearLine = nearLineOf(line);
 	const r = seeded(SEED);
 	const out: [number, number, number][] = [];
 	for (let gz = z0; gz < z1; gz += STEP)
@@ -193,52 +294,14 @@ export function grassPlaces(
 			const x = gx + uniform(r, -STEP / 2, STEP / 2);
 			const z = gz + uniform(r, -STEP / 2, STEP / 2);
 			if (!nearLine(x, z)) continue;
-			// (within BAND of the line: inside the cells)
-			const i = Math.floor(x / CELL) - gx0;
-			const j = Math.floor(z / CELL) - gz0;
-			if (i < 0 || i >= ncx || j < 0 || j >= ncz) continue;
-			const k = j * ncx + i;
-			// (each triangle over it: its height there, its weights)
-			const hits: { t: number; y: number; l: [number, number, number] }[] = [];
-			for (let e = cellStart[k] as number; e < (cellStart[k + 1] as number); e++) {
-				const t = cellTris[e] as number;
-				const ax = T[t * 9] as number;
-				const az = T[t * 9 + 2] as number;
-				const bx = T[t * 9 + 3] as number;
-				const bz = T[t * 9 + 5] as number;
-				const cx = T[t * 9 + 6] as number;
-				const cz = T[t * 9 + 8] as number;
-				const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-				if (Math.abs(d) <= 1e-9) continue;
-				const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
-				const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
-				const l3 = 1 - l1 - l2;
-				if (l1 < 0 || l2 < 0 || l3 < 0) continue;
-				const y = l1 * (T[t * 9 + 1] as number) + l2 * (T[t * 9 + 4] as number) + l3 * (T[t * 9 + 7] as number);
-				hits.push({ t, y, l: [l1, l2, l3] });
-			}
-			if (!hits.length) continue;
-			const top = hits.reduce((a, b) => (b.y > a.y ? b : a), hits[0] as (typeof hits)[number]);
-			const img = pics[triMesh[top.t] as number];
-			if (!grows(top.t) || !img) continue;
-			// (anything that keeps grass off lying over it, even a little below the grass's top)
-			if (hits.some((h) => !grows(h.t) && h.y > top.y - 0.05)) continue;
-			const u = top.l.reduce((a, l, c) => a + l * corner(top.t, c, 6), 0);
-			const v = top.l.reduce((a, l, c) => a + l * corner(top.t, c, 7), 0);
-			const ch = img.mode === "RGBA" ? 4 : 3;
-			const py = Math.floor((((v % 1) + 1) % 1) * img.height) % img.height;
-			const pxx = Math.floor((((u % 1) + 1) % 1) * img.width) % img.width;
-			const at = (py * img.width + pxx) * ch;
-			const [rr, gg, bb] = [img.data[at] as number, img.data[at + 1] as number, img.data[at + 2] as number].map((c) => c / 255) as [number, number, number];
-			if (gg - Math.max(rr, bb) < GREEN) continue;
-			out.push([x, top.y, z]);
+			const y = clumpHeight(grid, pics, x, z);
+			if (y !== null) out.push([x, y, z]);
 		}
 	return out;
 }
 
-/** The clumps standing at at (the track's axes), by tile ('i_j'), as meshes in BeamNG's axes (toBeamng: a point's). */
-export function grassClumps(at: [number, number, number][], toBeamng: (x: number, y: number, z: number) => [number, number, number]): Map<string, DaeMesh> {
-	const r = seeded(SEED + 1);
+/** The points at, by tile ('i_j'). */
+function byTile(at: [number, number, number][]): Map<string, [number, number, number][]> {
 	const tiles = new Map<string, [number, number, number][]>();
 	for (const p of at) {
 		const key = `${Math.floor(p[0] / TILE)}_${Math.floor(p[2] / TILE)}`;
@@ -246,6 +309,13 @@ export function grassClumps(at: [number, number, number][], toBeamng: (x: number
 		if (l) l.push(p);
 		else tiles.set(key, [p]);
 	}
+	return tiles;
+}
+
+/** The clumps standing at at (the track's axes), by tile ('i_j'), as meshes in BeamNG's axes (toBeamng: a point's). */
+export function grassClumps(at: [number, number, number][], toBeamng: (x: number, y: number, z: number) => [number, number, number]): Map<string, DaeMesh> {
+	const r = seeded(SEED + 1);
+	const tiles = byTile(at);
 	const out = new Map<string, DaeMesh>();
 	for (const [key, ps] of tiles) {
 		const P: number[] = [];

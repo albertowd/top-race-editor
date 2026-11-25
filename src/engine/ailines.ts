@@ -89,9 +89,9 @@ export function fitLine(P: V2[], closed: boolean, tol = FIT_TOL): LineNode[] {
 	// (the way at a point: over about a metre either side)
 	const way = (i: number): V2 => {
 		const k = Math.max(1, Math.round(1 / Math.max(total / n, 1e-3)));
-		const a = closed ? at(i - k) : (pts[Math.max(0, i - k)] as V2);
-		const b = closed ? at(i + k) : (pts[Math.min(n - 1, i + k)] as V2);
-		const d = sub(b, a);
+		const from = closed ? at(i - k) : (pts[Math.max(0, i - k)] as V2);
+		const to = closed ? at(i + k) : (pts[Math.min(n - 1, i + k)] as V2);
+		const d = sub(to, from);
 		const m = Math.hypot(...d) || 1;
 		return [d[0] / m, d[1] / m];
 	};
@@ -108,8 +108,8 @@ export function fitLine(P: V2[], closed: boolean, tol = FIT_TOL): LineNode[] {
 			const dOut = next === null ? 0 : gap(i, next) / 3;
 			return { p: at(i), in: [-t[0] * dIn, -t[1] * dIn], out: [t[0] * dOut, t[1] * dOut] };
 		});
-	for (let round = 0; round < 40; round++) {
-		const curve = make();
+	// (the points halfway along each of the curve's pieces that strays more than tol from the points between its nodes)
+	const strayMiddles = (curve: LineNode[]): number[] => {
 		const more: number[] = [];
 		const pieces = closed ? nodes.length : nodes.length - 1;
 		for (let k = 0; k < pieces; k++) {
@@ -122,6 +122,11 @@ export function fitLine(P: V2[], closed: boolean, tol = FIT_TOL): LineNode[] {
 			const w = strays(Q, 0, Q.length - 1, curve[k] as LineNode, curve[(k + 1) % curve.length] as LineNode);
 			if (w.d > tol) more.push((i0 + Math.round(span / 2)) % n);
 		}
+		return more;
+	};
+	for (let round = 0; round < 40; round++) {
+		const curve = make();
+		const more = strayMiddles(curve);
 		if (!more.length) return round3(curve);
 		nodes = [...new Set([...nodes, ...more])].sort((a, b) => a - b);
 	}

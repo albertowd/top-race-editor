@@ -62,7 +62,7 @@ export function Toolbar() {
 					aria-label={sidebar ? "Hide sidebar" : "Show sidebar"}
 					aria-expanded={sidebar}
 					aria-controls="sidebar"
-					title={`${sidebar ? "Hide" : "Show"} the sidebar (\\)`}
+					title={String.raw`${sidebar ? "Hide" : "Show"} the sidebar (\)`}
 					onClick={() => ed.toggleSidebar()}
 				>
 					<Icon name="sidebar" />

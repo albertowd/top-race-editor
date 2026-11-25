@@ -8,6 +8,7 @@
 // own with a material whose glow BeamNG multiplies by the object's instance colour, as its traffic signals are: the Lua lights them by setting that colour.
 
 import { byCodePoint } from "../order";
+import { SLANT, segments } from "../segments";
 import type { DaeMesh } from "./dae";
 import { CORNER, type TrackMesh } from "./trackmodel";
 
@@ -27,7 +28,7 @@ const LIFT_OFF = 0.004;
 export const LAMPS = /^(KS|NO)_START_LIGHT_(\d+)$/;
 export const FLAGS = /^(GANTRY|STATIC)_FLAG$/;
 export const BOARD = "GANTRY_BOARD";
-export const GLYPHS = "0123456789:.";
+export { SEGMENT_CHARS as GLYPHS } from "../segments";
 export const SHAPES = "board";
 
 type V3 = [number, number, number];
@@ -41,43 +42,8 @@ function rowAt(rank: number): [number, number] {
 
 export const glyphName = (ch: string) => ({ ":": "colon", ".": "dot" })[ch] ?? ch;
 
-/** The lit rectangles of a character (x0, z0, x1, z1), a character 1 high and 0.5 wide, centred: seven segments as an LED display's. */
-function segments(ch: string): [number, number, number, number][] {
-	const [w, h, t, g] = [0.19, 0.43, 0.075, 0.012];
-	const seg: Record<string, [number, number, number, number]> = {
-		a: [-w + g, h - t, w - g, h],
-		d: [-w + g, -h, w - g, -h + t],
-		g: [-w + g, -t / 2, w - g, t / 2],
-		f: [-w, g, -w + t, h - g],
-		b: [w - t, g, w, h - g],
-		e: [-w, -h + g, -w + t, -g],
-		c: [w - t, -h + g, w, -g],
-	};
-	const lit: Record<string, string> = {
-		"0": "abcdef",
-		"1": "bc",
-		"2": "abdeg",
-		"3": "abcdg",
-		"4": "bcfg",
-		"5": "acdfg",
-		"6": "acdefg",
-		"7": "abc",
-		"8": "abcdefg",
-		"9": "abcdfg",
-	};
-	if (ch in lit) return [...(lit[ch] as string)].map((s) => seg[s] as [number, number, number, number]);
-	const d = t * 0.9;
-	if (ch === ":")
-		return [
-			[-d / 2, 0.16 - d / 2, d / 2, 0.16 + d / 2],
-			[-d / 2, -0.16 - d / 2, d / 2, -0.16 + d / 2],
-		];
-	if (ch === ".") return [[-d / 2, -h, d / 2, -h + d]];
-	throw new Error(`no glyph ${ch}`);
-}
-
 /** A character's shape in its own axes: x across, z up, facing -y. */
-export function glyphMesh(ch: string, slant = 0.08): DaeMesh {
+export function glyphMesh(ch: string, slant = SLANT): DaeMesh {
 	const P: number[] = [];
 	const F: number[] = [];
 	for (const [x0, z0, x1, z1] of segments(ch)) {

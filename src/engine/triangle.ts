@@ -73,8 +73,8 @@ export class Triangle {
 				// gettimeofday
 				b: (ptr: number) => {
 					const now = Date.now();
-					i32()[ptr >> 2] = (now / 1000) | 0;
-					i32()[(ptr + 4) >> 2] = ((now % 1000) * 1000) | 0;
+					i32()[ptr >> 2] = Math.trunc(now / 1000);
+					i32()[(ptr + 4) >> 2] = Math.trunc((now % 1000) * 1000);
 					return 0;
 				},
 				// fd_write: what Triangle says (its errors), kept for the exception
@@ -115,62 +115,80 @@ export class Triangle {
 		return ptr;
 	}
 
+	/** A new triangulateio, its fields all 0. */
+	private io(): number {
+		const p = this.exports.i(IO_FIELDS * 4);
+		new Int32Array(this.memory.buffer, p, IO_FIELDS).fill(0);
+		return p;
+	}
+
+	/** A triangulateio's field. */
+	private field(base: number, k: number): number {
+		return new Int32Array(this.memory.buffer, base, IO_FIELDS)[k] as number;
+	}
+
+	/** A triangulateio's field given its value. */
+	private setField(base: number, k: number, v: number): void {
+		new Int32Array(this.memory.buffer, base, IO_FIELDS)[k] = v;
+	}
+
+	/** The input's points, segments and holes into a triangulateio. */
+	private give(inp: number, input: TriangleInput): void {
+		this.setField(inp, IO.pointlist, this.put(input.points, "f64"));
+		this.setField(inp, IO.numberofpoints, input.points.length >> 1);
+		if (input.segments?.length) {
+			this.setField(inp, IO.segmentlist, this.put(input.segments, "i32"));
+			this.setField(inp, IO.numberofsegments, input.segments.length >> 1);
+		}
+		if (input.holes?.length) {
+			this.setField(inp, IO.holelist, this.put(input.holes, "f64"));
+			this.setField(inp, IO.numberofholes, input.holes.length >> 1);
+		}
+	}
+
+	/** What Triangle made, and what was given it, freed (the holes' list is the input's, shared); the triangulateios and the switches with them. */
+	private free(inp: number, out: number, sp: number): void {
+		for (const k of [IO.pointlist, IO.pointmarkerlist, IO.trianglelist, IO.segmentlist, IO.segmentmarkerlist, IO.edgelist, IO.edgemarkerlist, IO.normlist]) {
+			const p = this.field(out, k);
+			if (p) this.exports.j(p);
+		}
+		for (const k of [IO.pointlist, IO.segmentlist, IO.holelist]) {
+			const p = this.field(inp, k);
+			if (p) this.exports.j(p);
+		}
+		this.exports.j(inp);
+		this.exports.j(out);
+		this.exports.j(sp);
+	}
+
 	/** Triangle's triangulate with its switches (as the Python passes them; 'z' added: indices from 0). */
 	triangulate(switches: string, input: TriangleInput): TriangleOutput {
 		const sw = switches.includes("z") ? switches : `z${switches}`;
-		const io = () => {
-			const p = this.exports.i(IO_FIELDS * 4);
-			new Int32Array(this.memory.buffer, p, IO_FIELDS).fill(0);
-			return p;
-		};
 		this.said = "";
 		try {
-			const inp = io();
-			const out = io();
-			const field = (base: number, k: number) => new Int32Array(this.memory.buffer, base, IO_FIELDS)[k] as number;
-			const set = (base: number, k: number, v: number) => {
-				new Int32Array(this.memory.buffer, base, IO_FIELDS)[k] = v;
-			};
-			set(inp, IO.pointlist, this.put(input.points, "f64"));
-			set(inp, IO.numberofpoints, input.points.length >> 1);
-			if (input.segments?.length) {
-				set(inp, IO.segmentlist, this.put(input.segments, "i32"));
-				set(inp, IO.numberofsegments, input.segments.length >> 1);
-			}
-			if (input.holes?.length) {
-				set(inp, IO.holelist, this.put(input.holes, "f64"));
-				set(inp, IO.numberofholes, input.holes.length >> 1);
-			}
+			const inp = this.io();
+			const out = this.io();
+			this.give(inp, input);
 			const s = new TextEncoder().encode(`${sw}\0`);
 			const sp = this.exports.i(s.length);
 			new Uint8Array(this.memory.buffer, sp, s.length).set(s);
 			this.exports.k(sp, inp, out, 0);
-			const np = field(out, IO.numberofpoints);
-			const nt = field(out, IO.numberoftriangles);
-			const corners = field(out, IO.numberofcorners) || 3;
+			const np = this.field(out, IO.numberofpoints);
+			const nt = this.field(out, IO.numberoftriangles);
+			const corners = this.field(out, IO.numberofcorners) || 3;
 			const points = new Float64Array(np * 2);
-			points.set(new Float64Array(this.memory.buffer, field(out, IO.pointlist), np * 2));
-			const tris = new Int32Array(this.memory.buffer, field(out, IO.trianglelist), nt * corners);
+			points.set(new Float64Array(this.memory.buffer, this.field(out, IO.pointlist), np * 2));
+			const tris = new Int32Array(this.memory.buffer, this.field(out, IO.trianglelist), nt * corners);
 			const triangles = new Int32Array(nt * 3);
 			for (let t = 0; t < nt; t++) for (let c = 0; c < 3; c++) triangles[t * 3 + c] = tris[t * corners + c] as number;
-			// (what Triangle made, and what was given it, freed; the holes' list is the input's, shared)
-			for (const k of [IO.pointlist, IO.pointmarkerlist, IO.trianglelist, IO.segmentlist, IO.segmentmarkerlist, IO.edgelist, IO.edgemarkerlist, IO.normlist]) {
-				const p = field(out, k);
-				if (p) this.exports.j(p);
-			}
-			for (const k of [IO.pointlist, IO.segmentlist, IO.holelist]) {
-				const p = field(inp, k);
-				if (p) this.exports.j(p);
-			}
-			this.exports.j(inp);
-			this.exports.j(out);
-			this.exports.j(sp);
+			this.free(inp, out, sp);
 			return { points, triangles };
 		} catch (e) {
 			// (stopped part way: its memory as it was left, so a new instance for the next)
 			const said = this.said.trim();
 			this.start();
-			throw new TriangleError(`${e instanceof Error ? e.message : String(e)}${said ? `: ${said}` : ""}`);
+			const why = said ? `: ${said}` : "";
+			throw new TriangleError(`${e instanceof Error ? e.message : String(e)}${why}`);
 		}
 	}
 }

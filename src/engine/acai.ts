@@ -73,25 +73,27 @@ export function readAiFile(b: Uint8Array): AiLine {
 		for (let i = 0; i < n * 18; i++) extra[i] = dv.getFloat32(p + 4 + i * 4, true);
 		p += 4 + n * 72;
 	}
-	let grid: AiGrid | null = null;
-	if (b.length >= p + 4 && dv.getInt32(p, true)) {
-		const fl = (k: number) => dv.getFloat32(p + 4 + k * 4, true);
-		const near = dv.getInt32(p + 28, true);
-		const cell = dv.getFloat32(p + 32, true);
-		const nx = dv.getInt32(p + 36, true);
-		let q = p + 40;
-		const nz = dv.getInt32(q, true);
-		const cells = new Int32Array(nx * nz * near);
-		for (let i = 0; i < nx; i++) {
-			q += 4;
-			for (let j = 0; j < nz; j++) {
-				q += 4;
-				for (let k = 0; k < near; k++, q += 4) cells[(i * nz + j) * near + k] = dv.getInt32(q, true);
-			}
-		}
-		grid = { hi: [fl(0), fl(1), fl(2)], lo: [fl(3), fl(4), fl(5)], near, cell, nx, nz, cells };
-	}
+	const grid = b.length >= p + 4 && dv.getInt32(p, true) ? readGrid(dv, p) : null;
 	return { version, points, along, extra, grid };
+}
+
+/** A lap's line's grid, as an AI file has it from p. */
+function readGrid(dv: DataView, p: number): AiGrid {
+	const fl = (k: number) => dv.getFloat32(p + 4 + k * 4, true);
+	const near = dv.getInt32(p + 28, true);
+	const cell = dv.getFloat32(p + 32, true);
+	const nx = dv.getInt32(p + 36, true);
+	let q = p + 40;
+	const nz = dv.getInt32(q, true);
+	const cells = new Int32Array(nx * nz * near);
+	for (let i = 0; i < nx; i++) {
+		q += 4;
+		for (let j = 0; j < nz; j++) {
+			q += 4;
+			for (let k = 0; k < near; k++, q += 4) cells[(i * nz + j) * near + k] = dv.getInt32(q, true);
+		}
+	}
+	return { hi: [fl(0), fl(1), fl(2)], lo: [fl(3), fl(4), fl(5)], near, cell, nx, nz, cells };
 }
 
 /** The grid of a lap's line (ac_ai.grid): its bounds GRID_MARGIN round its points (y 0), and in each GRID_CELL square, by columns of x then rows of z, the
@@ -128,28 +130,35 @@ export function aiGrid(points: ArrayLike<number>): AiGrid {
 	for (let i = 0; i < nx; i++) {
 		const cx = lo[0] + (i + 0.5) * GRID_CELL;
 		for (let j = 0; j < nz; j++) {
-			const cz = lo[2] + (j + 0.5) * GRID_CELL;
-			let have = 0;
-			for (let m = 0; m < n; m++) {
-				const d = Math.hypot((X[m] as number) - cx, (Z[m] as number) - cz);
-				if (have === k && d >= (bestD[k - 1] as number)) continue;
-				// (in order: a point as near as one kept goes after it, the earlier index first)
-				let at = have < k ? have : k - 1;
-				while (at > 0 && (bestD[at - 1] as number) > d) {
-					if (at < k) {
-						bestD[at] = bestD[at - 1] as number;
-						bestI[at] = bestI[at - 1] as number;
-					}
-					at--;
-				}
-				bestD[at] = d;
-				bestI[at] = m;
-				if (have < k) have++;
-			}
+			nearest(X, Z, cx, lo[2] + (j + 0.5) * GRID_CELL, bestD, bestI);
 			cells.set(bestI.subarray(0, k), (i * nz + j) * k);
 		}
 	}
 	return { hi, lo, near: k, cell: GRID_CELL, nx, nz, cells };
+}
+
+/** The points (X, Z) nearest a square's middle (cx, cz), as many as bestI holds, nearest first (the earlier index first where two are as near): their
+ * indices in bestI, their distances in bestD. */
+function nearest(X: Float64Array, Z: Float64Array, cx: number, cz: number, bestD: Float64Array, bestI: Int32Array): void {
+	const n = X.length;
+	const k = bestD.length;
+	let have = 0;
+	for (let m = 0; m < n; m++) {
+		const d = Math.hypot((X[m] as number) - cx, (Z[m] as number) - cz);
+		if (have === k && d >= (bestD[k - 1] as number)) continue;
+		// (in order: a point as near as one kept goes after it, the earlier index first)
+		let at = have < k ? have : k - 1;
+		while (at > 0 && (bestD[at - 1] as number) > d) {
+			if (at < k) {
+				bestD[at] = bestD[at - 1] as number;
+				bestI[at] = bestI[at - 1] as number;
+			}
+			at--;
+		}
+		bestD[at] = d;
+		bestI[at] = m;
+		if (have < k) have++;
+	}
 }
 
 /** An AI file's bytes (ac_ai.write): its points, how far along each is, its extra values (18 each) where given, and for a lap's line its grid (made from its
@@ -179,10 +188,13 @@ export function writeAiFile(
 		for (let i = 0; i < n * 18; i++) dv.setFloat32(p + 4 + i * 4, extra[i] as number, true);
 		p += 4 + n * 72;
 	}
-	if (!g) {
-		dv.setInt32(p, 0, true);
-		return out;
-	}
+	if (g) writeGrid(dv, p, g);
+	else dv.setInt32(p, 0, true);
+	return out;
+}
+
+/** A lap's line's grid written into an AI file from p. */
+function writeGrid(dv: DataView, p: number, g: AiGrid): void {
 	dv.setInt32(p, 1, true);
 	for (const [k, v] of [...g.hi, ...g.lo].entries()) dv.setFloat32(p + 4 + k * 4, v, true);
 	dv.setInt32(p + 28, g.near, true);
@@ -198,5 +210,4 @@ export function writeAiFile(
 			for (let k = 0; k < g.near; k++, q += 4) dv.setInt32(q, g.cells[(i * g.nz + j) * g.near + k] as number, true);
 		}
 	}
-	return out;
 }

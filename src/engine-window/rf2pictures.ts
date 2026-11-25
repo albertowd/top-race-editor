@@ -333,7 +333,7 @@ function fitText(g: G, text: string, x: number, y: number, most: number): void {
 	const was = g.font;
 	const width = g.measureText(text).width;
 	if (width > most) {
-		const px = Number(/(\d+(?:\.\d+)?)px/.exec(was)?.[1] ?? 30);
+		const px = Number(/(?<!\d)(\d+(?:\.\d+)?)px/.exec(was)?.[1] ?? 30);
 		font(g, (px * most) / width, 500);
 	}
 	g.fillText(text, x, y);

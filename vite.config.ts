@@ -20,8 +20,9 @@ export default defineConfig({
 	test: {
 		environment: "jsdom",
 		setupFiles: ["src/test/setup.ts"],
-		// (the page's tests drive whole dialogs; with the engine's beside them, 5 s is short on a busy computer)
-		testTimeout: 15_000,
+		// (the page's tests drive whole dialogs; with the engine's beside them, 5 s is short on a busy computer; with coverage, the geometry's run a few
+		// times slower)
+		testTimeout: process.argv.includes("--coverage") ? 60_000 : 15_000,
 		include: ["src/**/*.test.{ts,tsx}"],
 		// (the Velopark built whole: only when asked, TOP_RACE_VELOPARK=1)
 		exclude: ["**/node_modules/**", ...(process.env.TOP_RACE_VELOPARK === "1" ? [] : VELOPARK_CHECKS.map((f) => `src/engine/${f}`))],

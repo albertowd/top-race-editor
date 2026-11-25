@@ -63,7 +63,7 @@ function merged(copies: Copy[]): { V: Float64Array; F: number[] }[] {
 		let at = 0;
 		for (const [v, f] of r) {
 			V.set(v, at);
-			for (let j = 0; j < f.length; j++) F.push((f[j] as number) + at / 11);
+			for (const j of Array.from(f)) F.push(j + at / 11);
 			at += v.length;
 		}
 		return { V, F };
@@ -142,10 +142,10 @@ export function writeTrees(
 	let made = 0;
 	for (const tile of [...tiles.values()].sort(bySquare)) {
 		const [tx, tz] = tile.at;
-		for (const [part, g] of [...tile.parts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+		for (const [part, g] of [...tile.parts].sort(([a], [b]) => byCodePoint(a, b)))
 			merged(g.copies).forEach(({ V, F }, i) => {
 				const name = `${TREE_PREFIX}${part.toUpperCase()}_${tx}_${tz}_${i}`;
-				k.root.children.push(objectNode(k, name, V, F, g.material, materials, true, lods.get(part)));
+				k.root.children.push(objectNode(k, name, V, F, g.material, materials, { lod: lods.get(part) }));
 				made++;
 			});
 	}
@@ -153,7 +153,7 @@ export function writeTrees(
 	for (const w of [...walls.values()].sort(bySquare))
 		merged(w.copies).forEach(({ V, F }, i) => {
 			const name = `1WALL_${TREE_PREFIX}TRUNKS_${w.at[0]}_${w.at[1]}_${i}`;
-			k.root.children.push(objectNode(k, name, V, F, w.material, materials, false));
+			k.root.children.push(objectNode(k, name, V, F, w.material, materials, { seen: false }));
 			made++;
 		});
 	return { count, cleared: gone.size, offFloor, unknown: [...unknown].sort(byCodePoint), meshes: made, planted };

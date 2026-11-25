@@ -50,7 +50,7 @@ const onRoad = (x: number, z: number) => {
 	return Math.abs(Math.hypot(x, z - Math.sign(z) * 100) - 30) <= 4;
 };
 
-const layout: Pick<LayoutObjects, "grid" | "pits" | "timing"> = {
+const layout: Pick<LayoutObjects, "grid" | "pits" | "timing" | "safety_car"> = {
 	grid: [
 		{ x: 31, z: -8, heading: 0 },
 		{ x: 29, z: -14, heading: 0 },
@@ -159,6 +159,23 @@ describe("a layout's AIW", () => {
 	}));
 	const main = W.filter((w) => w.branch === 0);
 	const lap = headerValue(p, "lap_length")[0] as number;
+
+	it("waits the safety car where the layout says, on the floor; else on the pit lane", () => {
+		const aux = (t: string) =>
+			parse(t)
+				.body["[AUX]"]?.filter(([k]) => k === "Pos")
+				.map(([, v]) => nums(v)) ?? [];
+		// (in the paddock off the pit lane, facing +z: rFactor's z the track's turned round)
+		const own = aux(aiwText({ ...input(), layout: { ...layout, safety_car: { x: 12, z: -20, heading: 0 } } }));
+		expect(own).toHaveLength(2);
+		for (const [x, y, z] of own) {
+			expect(x).toBeCloseTo(12, 3);
+			expect(y).toBeCloseTo(floor(12), 3);
+			expect(z).toBeCloseTo(20, 3);
+		}
+		// (none: on the pit lane, x 21)
+		expect(aux(text)[0]?.[0]).toBeCloseTo(21, 0);
+	});
 
 	it("has the sections and fields in the samples’ order and syntax", () => {
 		expect(text.endsWith("\r\n\r\n")).toBe(true);
@@ -416,7 +433,7 @@ describe.skipIf(!existsSync(JOESVILLE))("Joesville Speedway's AIW", () => {
 		for (const s of ["[GRID]", "[TELEPORT]", "[PITS]", "[AUX]"]) expect(keys(s, ours)).toEqual(keys(s, sample));
 		// (its first lines as ours: the editor's, then the features)
 		expect(sample.lines[0]).toMatch(/^\/\/\[\[gMa1\.002f \(c\)\d{4} {4}\]\] \[\[ {12}\]\]$/);
-		expect(sample.lines.filter((l) => l.includes("//")).length).toBe(ours.lines.filter((l) => l.includes("//")).length);
+		expect(sample.lines.filter((l) => l.includes("//"))).toHaveLength(ours.lines.filter((l) => l.includes("//")).length);
 		// (its waypoints linked as ours: the last pointer its own branch; the main loop's scores its chords' length)
 		const S = sample.wps.map((wp) => ({
 			pos: value(wp, "wp_pos"),

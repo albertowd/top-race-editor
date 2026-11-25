@@ -45,7 +45,7 @@ function ramp(t: number): [number, number, number] {
 			return [ca[0] + (cb[0] - ca[0]) * u, ca[1] + (cb[1] - ca[1]) * u, ca[2] + (cb[2] - ca[2]) * u];
 		}
 	}
-	return RAMP[RAMP.length - 1][1];
+	return (RAMP.at(-1) as (typeof RAMP)[number])[1];
 }
 
 /** What a layer's picture is made from: its grid, whether it is a change (red up, blue down), the heights' range its colours go over. */
@@ -71,7 +71,8 @@ export function layerOf(s: Pick<TerrainState, "grids">, show: Show, made: Map<st
 			return grids.change ? { grid: grids.change, change: true, lo: 0, hi: 0 } : null;
 		case "removed": {
 			const o = grids.original;
-			if (!o || !f || o.v.length !== f.v.length) return null;
+			if (!o || !f) return null;
+			if (o.v.length !== f.v.length) return null;
 			let G = made.get("removed");
 			if (!G || made.get("removed-of-o") !== o || made.get("removed-of-f") !== f) {
 				const v = new Float32Array(o.v.length);
@@ -96,11 +97,53 @@ export function layerOf(s: Pick<TerrainState, "grids">, show: Show, made: Map<st
 	}
 }
 
+/** A change's colour at a point (red up, blue down) and how clear it is: fully coloured at m metres, clear where next to nothing. */
+function changeColour(y: number, m: number): [number, number, number, number] {
+	const t = Math.min(1, Math.abs(y) / m);
+	const [r, g, b] = y >= 0 ? UP : DOWN;
+	return [r, g, b, t < 0.02 ? 0 : Math.round(90 + 165 * t)];
+}
+
+/** What a layer's ground colours are worked out from: its heights at a point (the edge's beyond it), its cell, the range its colours go over, how it is shown. */
+interface GroundShade {
+	at: (i: number, j: number) => number;
+	cell: number;
+	lo: number;
+	span: number;
+	show: Show;
+}
+
+/** The ground's colour at a point of its grid: by its height (grey where not coloured), lit by the sun on its slope, darker on a contour. */
+function groundColour(L: GroundShade, i: number, j: number, y: number): [number, number, number] {
+	const { at, cell, lo, span } = L;
+	const { relief, colour, contours, exaggerate } = L.show;
+	let [r, g, b] = colour ? ramp((y - lo) / span) : [200, 200, 200];
+	if (relief) {
+		const dx = ((at(i + 1, j) - at(i - 1, j)) / (2 * cell)) * exaggerate;
+		const dz = ((at(i, j + 1) - at(i, j - 1)) / (2 * cell)) * exaggerate;
+		const n = Math.hypot(dx, 1, dz);
+		const lit = Math.max(0, (-dx * SUN[0] + SUN[1] - dz * SUN[2]) / n);
+		const k = 0.35 + 0.65 * (lit / SUN[1]);
+		r *= k;
+		g *= k;
+		b *= k;
+	}
+	if (contours > 0) {
+		const band = Math.floor(y / contours);
+		if (Math.floor(at(i + 1, j) / contours) !== band || Math.floor(at(i, j + 1) / contours) !== band) {
+			r *= 0.45;
+			g *= 0.45;
+			b *= 0.45;
+		}
+	}
+	return [r, g, b];
+}
+
 /** A layer's picture: one pixel a point of its grid, north up and west on the left; made again where painted. */
 class LayerImage {
 	canvas: HTMLCanvasElement | null = null;
-	private ctx: Ctx | null = null;
-	private data: ImageData | null = null;
+	private readonly ctx: Ctx | null = null;
+	private readonly data: ImageData | null = null;
 	key = "";
 
 	constructor(
@@ -126,44 +169,15 @@ class LayerImage {
 		if (!data || !ctx) return;
 		const { grid: G, change, lo, hi } = this.L;
 		const { nx, nz, v, cell } = G;
-		const { relief, colour, contours, exaggerate } = this.show;
 		const px = data.data;
 		const at = (i: number, j: number) => v[Math.min(nz - 1, Math.max(0, j)) * nx + Math.min(nx - 1, Math.max(0, i))];
 		const m = Math.max(CHANGE_FULL, Math.abs(G.lo), Math.abs(G.hi));
-		const span = Math.max(hi - lo, 1e-6);
+		const shade: GroundShade = { at, cell, lo, span: Math.max(hi - lo, 1e-6), show: this.show };
 		for (let j = j0; j <= j1; j++)
 			for (let i = i0; i <= i1; i++) {
 				const y = v[j * nx + i];
 				const o = ((nz - 1 - j) * nx + (nx - 1 - i)) * 4;
-				let r: number;
-				let g: number;
-				let b: number;
-				let a = 255;
-				if (change) {
-					const t = Math.min(1, Math.abs(y) / m);
-					[r, g, b] = y >= 0 ? UP : DOWN;
-					a = t < 0.02 ? 0 : Math.round(90 + 165 * t);
-				} else {
-					[r, g, b] = colour ? ramp((y - lo) / span) : [200, 200, 200];
-					if (relief) {
-						const dx = ((at(i + 1, j) - at(i - 1, j)) / (2 * cell)) * exaggerate;
-						const dz = ((at(i, j + 1) - at(i, j - 1)) / (2 * cell)) * exaggerate;
-						const n = Math.hypot(dx, 1, dz);
-						const lit = Math.max(0, (-dx * SUN[0] + SUN[1] - dz * SUN[2]) / n);
-						const k = 0.35 + 0.65 * (lit / SUN[1]);
-						r *= k;
-						g *= k;
-						b *= k;
-					}
-					if (contours > 0) {
-						const band = Math.floor(y / contours);
-						if (Math.floor(at(i + 1, j) / contours) !== band || Math.floor(at(i, j + 1) / contours) !== band) {
-							r *= 0.45;
-							g *= 0.45;
-							b *= 0.45;
-						}
-					}
-				}
+				const [r, g, b, a] = change ? changeColour(y, m) : [...groundColour(shade, i, j, y), 255];
 				px[o] = Math.min(255, r);
 				px[o + 1] = Math.min(255, g);
 				px[o + 2] = Math.min(255, b);
@@ -189,7 +203,7 @@ class LayerImage {
 /** What the terrain's drawing keeps between frames: the layer's picture, the wide picture of the ground. */
 export class TerrainRenderCache {
 	private layer: LayerImage | null = null;
-	private made = new Map<string, Grid>();
+	private readonly made = new Map<string, Grid>();
 	private picture: HTMLImageElement | null = null;
 	private pictureUrl = "";
 
@@ -199,7 +213,7 @@ export class TerrainRenderCache {
 		const L = layerOf(s, show, this.made);
 		if (!L) return null;
 		const key = `${show.layer} ${show.relief} ${show.colour} ${show.contours} ${show.exaggerate} ${L.lo} ${L.hi}`;
-		if (!this.layer || this.layer.L.grid !== L.grid || this.layer.key !== key) {
+		if (this.layer?.L.grid !== L.grid || this.layer.key !== key) {
 			this.layer = new LayerImage(L, show);
 			this.layer.key = key;
 		} else if (touched) this.layer.repaint(touched);

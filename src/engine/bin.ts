@@ -8,12 +8,12 @@ export function own(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 export const latin1 = {
 	decode(b: Uint8Array): string {
 		let s = "";
-		for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
+		for (let i = 0; i < b.length; i += 8192) s += String.fromCodePoint(...b.subarray(i, i + 8192));
 		return s;
 	},
 	encode(s: string): Uint8Array {
 		const out = new Uint8Array(s.length);
-		for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+		for (let i = 0; i < s.length; i++) out[i] = (s.codePointAt(i) ?? 0) & 0xff;
 		return out;
 	},
 };
@@ -64,7 +64,7 @@ export class Reader {
 
 /** Writes numbers and strings one after another. */
 export class Writer {
-	private parts: Uint8Array[] = [];
+	private readonly parts: Uint8Array[] = [];
 	private size = 0;
 
 	bytes(b: Uint8Array): this {
@@ -129,6 +129,14 @@ export function f32sOf(b: Uint8Array): Float32Array<ArrayBuffer> {
 
 const K = [0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6];
 
+/** SHA-1's round function for round i (of 80) of b, c and d: choice, parity, majority, then parity again. */
+function sha1F(i: number, b: number, c: number, d: number): number {
+	if (i < 20) return (b & c) | (~b & d);
+	if (i < 40) return b ^ c ^ d;
+	if (i < 60) return (b & c) | (b & d) | (c & d);
+	return b ^ c ^ d;
+}
+
 /** SHA-1 of some bytes, in hex: the hashes the track's tools keep (synchronous, so it runs anywhere). */
 export function sha1(...chunks: Uint8Array[]): string {
 	const n = chunks.reduce((a, c) => a + c.length, 0);
@@ -161,8 +169,8 @@ export function sha1(...chunks: Uint8Array[]): string {
 		let d = h3;
 		let e = h4;
 		for (let i = 0; i < 80; i++) {
-			const f = i < 20 ? (b & c) | (~b & d) : i < 40 ? b ^ c ^ d : i < 60 ? (b & c) | (b & d) | (c & d) : b ^ c ^ d;
-			const t = (((a << 5) | (a >>> 27)) + f + e + (K[(i / 20) | 0] as number) + (w[i] as number)) >>> 0;
+			const f = sha1F(i, b, c, d);
+			const t = (((a << 5) | (a >>> 27)) + f + e + (K[Math.trunc(i / 20)] as number) + (w[i] as number)) >>> 0;
 			e = d;
 			d = c;
 			c = ((b << 30) | (b >>> 2)) >>> 0;
@@ -191,7 +199,7 @@ const CRC_TABLE = (() => {
 /** CRC-32 (zip's and PNG's) of some bytes, on from a CRC before. */
 export function crc32(b: Uint8Array, crc = 0): number {
 	let c = ~crc >>> 0;
-	for (let i = 0; i < b.length; i++) c = (CRC_TABLE[(c ^ (b[i] as number)) & 0xff] as number) ^ (c >>> 8);
+	for (const x of b) c = (CRC_TABLE[(c ^ x) & 0xff] as number) ^ (c >>> 8);
 	return ~c >>> 0;
 }
 

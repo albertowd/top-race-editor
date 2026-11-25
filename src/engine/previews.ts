@@ -80,40 +80,53 @@ const SLIVER2 = (2 * THIN) / 1e-8;
 const LEAF = 20000;
 const LEAF_POINTS = 48;
 
+const cross = (a: Pt, b: Pt, c: Pt) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+const within = (p: Pt, a: Pt, b: Pt, c: Pt) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
+const d2 = (a: Pt, b: Pt) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+
+/** The place in the ring of its roundest ear (no sliver, no other point in it), or -1 for none. */
+function roundestEar(v: Pt[]): number {
+	let best = -1;
+	let quality = -1;
+	for (let i = 0; i < v.length; i++) {
+		const a = v[(i + v.length - 1) % v.length] as Pt;
+		const b = v[i] as Pt;
+		const c = v[(i + 1) % v.length] as Pt;
+		const area = cross(a, b, c);
+		if (area < SLIVER2) continue;
+		if (v.some((p) => p !== a && p !== b && p !== c && within(p, a, b, c))) continue;
+		const q = area / (d2(a, b) + d2(b, c) + d2(c, a));
+		if (q > quality) {
+			quality = q;
+			best = i;
+		}
+	}
+	return best;
+}
+
+/** The place in the ring of the point most nearly in line with the two beside it, as near as a sliver at the most, or -1 for none. */
+function flattestPoint(v: Pt[]): number {
+	let i = -1;
+	let least = SLIVER2;
+	v.forEach((b, j) => {
+		const c = Math.abs(cross(v[(j + v.length - 1) % v.length] as Pt, b, v[(j + 1) % v.length] as Pt));
+		if (c < least) {
+			least = c;
+			i = j;
+		}
+	});
+	return i;
+}
+
 /** A simple ring (grid points, anticlockwise) in triangles, ear by ear: of the ears, the roundest first; none a sliver. */
 function ears(r: Pt[]): [Pt, Pt, Pt][] {
 	const out: [Pt, Pt, Pt][] = [];
 	const v = [...r];
-	const cross = (a: Pt, b: Pt, c: Pt) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-	const within = (p: Pt, a: Pt, b: Pt, c: Pt) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
-	const d2 = (a: Pt, b: Pt) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
 	while (v.length > 3) {
-		let best = -1;
-		let quality = -1;
-		for (let i = 0; i < v.length; i++) {
-			const a = v[(i + v.length - 1) % v.length] as Pt;
-			const b = v[i] as Pt;
-			const c = v[(i + 1) % v.length] as Pt;
-			const area = cross(a, b, c);
-			if (area < SLIVER2) continue;
-			if (v.some((p) => p !== a && p !== b && p !== c && within(p, a, b, c))) continue;
-			const q = area / (d2(a, b) + d2(b, c) + d2(c, a));
-			if (q > quality) {
-				quality = q;
-				best = i;
-			}
-		}
+		const best = roundestEar(v);
 		if (best < 0) {
 			// (none but where three points lie in line, or as near as a sliver: the middle one of the nearest dropped)
-			let i = -1;
-			let least = SLIVER2;
-			v.forEach((b, j) => {
-				const c = Math.abs(cross(v[(j + v.length - 1) % v.length] as Pt, b, v[(j + 1) % v.length] as Pt));
-				if (c < least) {
-					least = c;
-					i = j;
-				}
-			});
+			const i = flattestPoint(v);
 			if (i < 0) break;
 			v.splice(i, 1);
 			continue;
@@ -157,10 +170,10 @@ function leaves(polys: Poly[], b: Bounds, out: { b: Bounds; polys: Poly[]; full:
 		leaves(polysOf(ClipType.Intersection, toPaths(polys), toPaths([boxPoly(q)])), q, out, depth + 1);
 }
 
-/** A level mesh (points x y z, faces) with the part under a shape cut out: the faces across its edge kept as their parts outside it (restyle_paddock's
- * clip_in), one mesh still. Its points (x, z) and faces. The shape cut in cells first: a face in none kept, one wholly in a cell it fills gone, any other
- * clipped by the cells' parts it meets. */
-function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F: number[] } {
+type Cell = { b: Bounds; polys: Poly[]; full: boolean };
+
+/** The box round a shape's outer rings (from Infinity to -Infinity for none). */
+function boundsOf(over: Poly[]): Bounds {
 	const all: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
 	for (const p of over)
 		for (const [x, z] of p.outer) {
@@ -169,12 +182,11 @@ function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F:
 			all[2] = Math.max(all[2], x);
 			all[3] = Math.max(all[3], z);
 		}
-	const cells: { b: Bounds; polys: Poly[]; full: boolean }[] = [];
-	if (Number.isFinite(all[0])) leaves(over, all, cells);
-	const index = new TileIndex<number>(LEAF * 2);
-	cells.forEach((c, i) => {
-		index.add({ x0: c.b[0], z0: c.b[1], x1: c.b[2], z1: c.b[3] }, i);
-	});
+	return all;
+}
+
+/** A mesh's own points (x, z) as they are, and each grid point to the first of them on it. */
+function ownPoints(P: Float64Array): { outP: number[]; ids: Map<string, number> } {
 	// (its own points as they are, each a grid point's too; the cut's new points after them)
 	const outP: number[] = [];
 	const ids = new Map<string, number>();
@@ -183,6 +195,69 @@ function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F:
 		const k = `${unit(P[i] as number)},${unit(P[i + 2] as number)}`;
 		if (!ids.has(k)) ids.set(k, i / 3);
 	}
+	return { outP, ids };
+}
+
+/** The box round a triangle of grid points. */
+const triangleBox = (t: [Pt, Pt, Pt]): Box => ({
+	x0: Math.min(t[0][0], t[1][0], t[2][0]),
+	z0: Math.min(t[0][1], t[1][1], t[2][1]),
+	x1: Math.max(t[0][0], t[1][0], t[2][0]),
+	z1: Math.max(t[0][1], t[1][1], t[2][1]),
+});
+
+/** The cells a box overlaps (more than touches). */
+function cellsNear(index: TileIndex<number>, cells: Cell[], { x0, z0, x1, z1 }: Box): Cell[] {
+	return index
+		.find({ x0, z0, x1, z1 })
+		.map((i) => cells[i] as Cell)
+		.filter(({ b }) => b[0] < x1 && b[2] > x0 && b[1] < z1 && b[3] > z0);
+}
+
+/** Whether a box lies wholly in one of the cells its part fills. */
+const inFullCell = (near: Cell[], { x0, z0, x1, z1 }: Box) => near.some(({ b, full }) => full && b[0] <= x0 && b[2] >= x1 && b[1] <= z0 && b[3] >= z1);
+
+/** A face's parts left outside the cut, in triangles onto the faces (a: the face's twice area, its sign the way it faces; id: a grid point's index in the
+ * points, added to them if new). */
+function pushPieces(left: Poly[], a: number, id: (x: number, z: number) => number, outP: number[], outF: number[]): void {
+	for (const piece of left)
+		for (const [p, q, r] of ears(piece.outer)) {
+			// (none a sliver, nor turned over, as its points are written: the face's own as they are, a hair off the grid)
+			const [i, j, k] = (a > 0 ? [p, q, r] : [p, r, q]).map((s) => id(s[0], s[1])) as [number, number, number];
+			const ux = (outP[j * 2] as number) - (outP[i * 2] as number);
+			const uz = (outP[j * 2 + 1] as number) - (outP[i * 2 + 1] as number);
+			const vx = (outP[k * 2] as number) - (outP[i * 2] as number);
+			const vz = (outP[k * 2 + 1] as number) - (outP[i * 2 + 1] as number);
+			if ((Math.sign(a) * (ux * vz - uz * vx)) / 2 >= THIN) outF.push(i, j, k);
+		}
+}
+
+/** The points (x, z) and faces with the points no face has left out, the faces on them renumbered. */
+function compact(outP: number[], outF: number[]): { P: number[]; F: number[] } {
+	const used = new Int32Array(outP.length / 2).fill(-1);
+	const P2: number[] = [];
+	const F2 = outF.map((v) => {
+		if ((used[v] as number) < 0) {
+			used[v] = P2.length / 2;
+			P2.push(outP[v * 2] as number, outP[v * 2 + 1] as number);
+		}
+		return used[v] as number;
+	});
+	return { P: P2, F: F2 };
+}
+
+/** A level mesh (points x y z, faces) with the part under a shape cut out: the faces across its edge kept as their parts outside it (restyle_paddock's
+ * clip_in), one mesh still. Its points (x, z) and faces. The shape cut in cells first: a face in none kept, one wholly in a cell it fills gone, any other
+ * clipped by the cells' parts it meets. */
+function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F: number[] } {
+	const all = boundsOf(over);
+	const cells: Cell[] = [];
+	if (Number.isFinite(all[0])) leaves(over, all, cells);
+	const index = new TileIndex<number>(LEAF * 2);
+	cells.forEach((c, i) => {
+		index.add({ x0: c.b[0], z0: c.b[1], x1: c.b[2], z1: c.b[3] }, i);
+	});
+	const { outP, ids } = ownPoints(P);
 	const outF: number[] = [];
 	const id = (x: number, z: number) => {
 		const k = `${x},${z}`;
@@ -197,20 +272,14 @@ function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F:
 	const keep = (f: number) => outF.push(F[f] as number, F[f + 1] as number, F[f + 2] as number);
 	for (let f = 0; f < F.length; f += 3) {
 		const t = [F[f], F[f + 1], F[f + 2]].map((v) => [unit(P[(v as number) * 3] as number), unit(P[(v as number) * 3 + 2] as number)] as Pt) as [Pt, Pt, Pt];
-		const x0 = Math.min(t[0][0], t[1][0], t[2][0]);
-		const x1 = Math.max(t[0][0], t[1][0], t[2][0]);
-		const z0 = Math.min(t[0][1], t[1][1], t[2][1]);
-		const z1 = Math.max(t[0][1], t[1][1], t[2][1]);
-		const near = index
-			.find({ x0, z0, x1, z1 })
-			.map((i) => cells[i] as (typeof cells)[number])
-			.filter(({ b }) => b[0] < x1 && b[2] > x0 && b[1] < z1 && b[3] > z0);
+		const box = triangleBox(t);
+		const near = cellsNear(index, cells, box);
 		const a = area2(t);
 		if (!near.length || a === 0) {
 			keep(f);
 			continue;
 		}
-		if (near.some(({ b, full }) => full && b[0] <= x0 && b[2] >= x1 && b[1] <= z0 && b[3] >= z1)) continue;
+		if (inFullCell(near, box)) continue;
 		const ring = a > 0 ? t : ([t[0], t[2], t[1]] as [Pt, Pt, Pt]);
 		const left = polysOf(ClipType.Difference, toPaths([{ outer: ring, holes: [] }]), toPaths(near.flatMap((c) => c.polys)));
 		if (Math.abs(polysArea(left) - Math.abs(a) / 2) < 1) {
@@ -218,28 +287,9 @@ function cutOut(P: Float64Array, F: Int32Array, over: Poly[]): { P: number[]; F:
 			continue;
 		}
 		// (its parts outside, each facing as the face did; a part with a hole would need a road above narrower than a face: none is)
-		for (const piece of left)
-			for (const [p, q, r] of ears(piece.outer)) {
-				// (none a sliver, nor turned over, as its points are written: the face's own as they are, a hair off the grid)
-				const [i, j, k] = (a > 0 ? [p, q, r] : [p, r, q]).map((s) => id(s[0], s[1])) as [number, number, number];
-				const ux = (outP[j * 2] as number) - (outP[i * 2] as number);
-				const uz = (outP[j * 2 + 1] as number) - (outP[i * 2 + 1] as number);
-				const vx = (outP[k * 2] as number) - (outP[i * 2] as number);
-				const vz = (outP[k * 2 + 1] as number) - (outP[i * 2 + 1] as number);
-				if ((Math.sign(a) * (ux * vz - uz * vx)) / 2 >= THIN) outF.push(i, j, k);
-			}
+		pushPieces(left, a, id, outP, outF);
 	}
-	// (the points no face has left out)
-	const used = new Int32Array(outP.length / 2).fill(-1);
-	const P2: number[] = [];
-	const F2 = outF.map((v) => {
-		if ((used[v] as number) < 0) {
-			used[v] = P2.length / 2;
-			P2.push(outP[v * 2] as number, outP[v * 2 + 1] as number);
-		}
-		return used[v] as number;
-	});
-	return { P: P2, F: F2 };
+	return compact(outP, outF);
 }
 
 const round = (x: number, n: number) => Math.round(x * 10 ** n) / 10 ** n;

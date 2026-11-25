@@ -57,6 +57,44 @@ const area2 = (r: Ring) => {
 	return s;
 };
 
+/** Whether a point of the ring left (idx) other than A, B and C lies in the triangle A B C, or on its edge (sign: the ring's turn). */
+function earBlocked(
+	ring: Ring,
+	idx: number[],
+	sign: number,
+	A: readonly [number, number],
+	B: readonly [number, number],
+	C: readonly [number, number],
+): boolean {
+	for (const j of idx) {
+		const P = ring[j] as readonly [number, number];
+		if (P === A || P === B || P === C) continue;
+		const d1 = (B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0]);
+		const d2 = (C[0] - B[0]) * (P[1] - B[1]) - (C[1] - B[1]) * (P[0] - B[0]);
+		const d3 = (A[0] - C[0]) * (P[1] - C[1]) - (A[1] - C[1]) * (P[0] - C[0]);
+		if (sign * d1 >= 0 && sign * d2 >= 0 && sign * d3 >= 0) return true;
+	}
+	return false;
+}
+
+/** The place in idx of the widest ear of the ring left (the most turn at its tip, no other point in it), or -1 for none. */
+function bestEar(ring: Ring, idx: number[], sign: number): number {
+	let best = -1;
+	let bi = -1;
+	for (let k = 0; k < idx.length; k++) {
+		const A = ring[idx[(k + idx.length - 1) % idx.length] as number] as readonly [number, number];
+		const B = ring[idx[k] as number] as readonly [number, number];
+		const C = ring[idx[(k + 1) % idx.length] as number] as readonly [number, number];
+		const cr = sign * ((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
+		if (cr <= 0) continue;
+		if (!earBlocked(ring, idx, sign, A, B, C) && cr > best) {
+			best = cr;
+			bi = k;
+		}
+	}
+	return bi;
+}
+
 /** A simple ring cut into triangles on its own points alone, ear by ear (a sliver, which a Delaunay fill cannot tell the sides of). */
 export function earClip(ring: Ring): number[] {
 	const idx = ring.map((_, i) => i);
@@ -65,31 +103,7 @@ export function earClip(ring: Ring): number[] {
 	const out: number[] = [];
 	let guard = 0;
 	while (idx.length > 3 && guard++ < 10 * ring.length * ring.length) {
-		let best = -1;
-		let bi = -1;
-		for (let k = 0; k < idx.length; k++) {
-			const A = ring[idx[(k + idx.length - 1) % idx.length] as number] as readonly [number, number];
-			const B = ring[idx[k] as number] as readonly [number, number];
-			const C = ring[idx[(k + 1) % idx.length] as number] as readonly [number, number];
-			const cr = sign * ((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
-			if (cr <= 0) continue;
-			let blocked = false;
-			for (const j of idx) {
-				const P = ring[j] as readonly [number, number];
-				if (P === A || P === B || P === C) continue;
-				const d1 = (B[0] - A[0]) * (P[1] - A[1]) - (B[1] - A[1]) * (P[0] - A[0]);
-				const d2 = (C[0] - B[0]) * (P[1] - B[1]) - (C[1] - B[1]) * (P[0] - B[0]);
-				const d3 = (A[0] - C[0]) * (P[1] - C[1]) - (A[1] - C[1]) * (P[0] - C[0]);
-				if (sign * d1 >= 0 && sign * d2 >= 0 && sign * d3 >= 0) {
-					blocked = true;
-					break;
-				}
-			}
-			if (!blocked && cr > best) {
-				best = cr;
-				bi = k;
-			}
-		}
+		const bi = bestEar(ring, idx, sign);
 		if (bi < 0) break;
 		out.push(idx[(bi + idx.length - 1) % idx.length] as number, idx[bi] as number, idx[(bi + 1) % idx.length] as number);
 		idx.splice(bi, 1);

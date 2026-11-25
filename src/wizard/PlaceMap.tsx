@@ -30,6 +30,24 @@ interface PlaceMapProps {
 const MIN_ZOOM = 2;
 const tiles = new Map<string, HTMLImageElement>();
 
+/** A tile's picture, kept once asked for: from its address, or what src shows it from; onLoad called when it comes. */
+function tileImage(url: string, src: ((url: string) => Promise<string>) | undefined, onLoad: () => void): HTMLImageElement {
+	const had = tiles.get(url);
+	if (had) return had;
+	const im = new Image();
+	im.onload = onLoad;
+	if (src)
+		src(url).then(
+			(u) => {
+				im.src = u;
+			},
+			() => tiles.delete(url),
+		);
+	else im.src = url;
+	tiles.set(url, im);
+	return im;
+}
+
 /** The map the track's place is picked on: the provider's tiles; drag to pan, the wheel (or + and -) to zoom, a click (or Enter) to put the track's origin
  * there (the middle with the keys); its area drawn round the origin, the editor's map picture inside it dashed. */
 export function PlaceMap(p: Readonly<PlaceMapProps>) {
@@ -62,28 +80,14 @@ export function PlaceMap(p: Readonly<PlaceMapProps>) {
 		const x0 = cx - w / 2 / k;
 		const y0 = cy - h / 2 / k;
 		const n = 2 ** z;
+		const loaded = () => {
+			if (!frame.current) frame.current = requestAnimationFrame(draw);
+		};
 		for (let ty = Math.floor(y0 / TILE); ty <= Math.floor((y0 + h / k) / TILE); ty++) {
 			if (ty < 0 || ty >= n) continue;
 			for (let tx = Math.floor(x0 / TILE); tx <= Math.floor((x0 + w / k) / TILE); tx++) {
 				const url = tileUrl(z, ((tx % n) + n) % n, ty);
-				let im = tiles.get(url);
-				if (!im) {
-					im = new Image();
-					im.onload = () => {
-						if (!frame.current) frame.current = requestAnimationFrame(draw);
-					};
-					const shown = im;
-					const src = props.current.tileSrc;
-					if (src)
-						src(url).then(
-							(u) => {
-								shown.src = u;
-							},
-							() => tiles.delete(url),
-						);
-					else im.src = url;
-					tiles.set(url, im);
-				}
+				const im = tileImage(url, props.current.tileSrc, loaded);
 				if (im.complete && im.naturalWidth) g.drawImage(im, (tx * TILE - x0) * k, (ty * TILE - y0) * k, size, size);
 			}
 		}

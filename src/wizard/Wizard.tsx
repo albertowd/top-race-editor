@@ -1,15 +1,20 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type SubmitEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import type { Estimate, JobInfo, Place, Plan, ProviderInfo, WizardApi, WizardInfo } from "./api";
 import { metresAPixel, zoomToShow } from "./geo";
 import { type MapView, PlaceMap } from "./PlaceMap";
 
+/** A text without the dashes it starts and ends with. */
+function trimDashes(s: string): string {
+	let a = 0;
+	let b = s.length;
+	while (a < b && s[a] === "-") a++;
+	while (b > a && s[b - 1] === "-") b--;
+	return s.slice(a, b);
+}
+
 /** The folder a track's name makes (as the engine's wizard.slug). */
-export const slug = (name: string): string =>
-	name
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "") || "new-track";
+export const slug = (name: string): string => trimDashes(name.toLowerCase().replace(/[^a-z0-9]+/g, "-")) || "new-track";
 
 const STEP_LABELS: Record<string, string> = {
 	place: "Place",
@@ -21,6 +26,12 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 const message = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
+
+/** Metres across a place found (the wider of its box's two ways), or the width given where it has no box. */
+const metresAcross = (p: Place, width: number): number =>
+	p.box
+		? Math.max(((p.box[1] - p.box[0]) * Math.PI * 6378137) / 180, ((p.box[3] - p.box[2]) * Math.PI * 6378137 * Math.cos((p.lat * Math.PI) / 180)) / 180)
+		: width;
 
 type Draft = Omit<Plan, "lat" | "lon"> & { lat: number | null; lon: number | null };
 
@@ -117,9 +128,7 @@ export function Wizard({ api, pollMs = 800, settleMs = 400 }: Readonly<WizardPro
 		return (
 			<div className="wizard">
 				<WizardBar />
-				<p className={failed ? "wizard-failed" : "empty-state"} role={failed ? "alert" : "status"}>
-					{failed ? `The engine's wizard is not there: ${failed}` : "Asking the engine…"}
-				</p>
+				{asking(failed)}
 			</div>
 		);
 
@@ -133,12 +142,7 @@ export function Wizard({ api, pollMs = 800, settleMs = 400 }: Readonly<WizardPro
 							api={api}
 							onPick={(p) => {
 								set({ lat: p.lat, lon: p.lon, name: plan.name || p.name.split(",")[0] });
-								const across = p.box
-									? Math.max(
-											((p.box[1] - p.box[0]) * Math.PI * 6378137) / 180,
-											((p.box[3] - p.box[2]) * Math.PI * 6378137 * Math.cos((p.lat * Math.PI) / 180)) / 180,
-										)
-									: plan.width;
+								const across = metresAcross(p, plan.width);
 								setView({ lat: p.lat, lon: p.lon, zoom: zoomToShow(p.lat, Math.max(across, plan.width) * 1.3, 700) });
 							}}
 						/>
@@ -175,7 +179,7 @@ export function Wizard({ api, pollMs = 800, settleMs = 400 }: Readonly<WizardPro
 						</div>
 						<label className="check">
 							<input type="checkbox" checked={plan.buildings} onChange={(e) => set({ buildings: e.target.checked })} />
-							Buildings from OpenStreetMap (their roofs are not the ground)
+							{"Buildings from OpenStreetMap (their roofs are not the ground)"}
 						</label>
 					</Section>
 
@@ -225,18 +229,13 @@ export function Wizard({ api, pollMs = 800, settleMs = 400 }: Readonly<WizardPro
 				</div>
 				<div className="wizard-map">
 					{mapProvider ? (
-						<PlaceMap
+						<WizardMap
+							api={api}
+							provider={mapProvider}
+							plan={plan}
 							view={view}
 							onView={setView}
-							origin={{ lat: plan.lat ?? view.lat, lon: plan.lon ?? view.lon }}
-							width={plan.lat === null ? 0 : plan.width}
-							depth={plan.lat === null ? 0 : plan.depth}
-							span={plan.lat === null ? 0 : plan.span}
 							onOrigin={(lat, lon) => set({ lat: round6(lat), lon: round6(lon) })}
-							tileUrl={(z, x, y) => api.tileUrl(mapProvider.id, z, x, y)}
-							tileSrc={(url) => api.tileSrc(url)}
-							attribution={mapProvider.attribution}
-							top={mapProvider.top}
 						/>
 					) : null}
 				</div>
@@ -246,6 +245,44 @@ export function Wizard({ api, pollMs = 800, settleMs = 400 }: Readonly<WizardPro
 }
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
+
+interface WizardMapProps {
+	api: WizardApi;
+	/** whose tiles the map shows */
+	provider: ProviderInfo;
+	plan: Draft;
+	view: MapView;
+	onView: (v: MapView) => void;
+	onOrigin: (lat: number, lon: number) => void;
+}
+
+/** The map the origin is put on: the area round it and the editor's map picture's square drawn once there is one, the view where there is not. */
+function WizardMap({ api, provider, plan, view, onView, onOrigin }: Readonly<WizardMapProps>) {
+	return (
+		<PlaceMap
+			view={view}
+			onView={onView}
+			origin={{ lat: plan.lat ?? view.lat, lon: plan.lon ?? view.lon }}
+			width={plan.lat === null ? 0 : plan.width}
+			depth={plan.lat === null ? 0 : plan.depth}
+			span={plan.lat === null ? 0 : plan.span}
+			onOrigin={onOrigin}
+			tileUrl={(z, x, y) => api.tileUrl(provider.id, z, x, y)}
+			tileSrc={(url) => api.tileSrc(url)}
+			attribution={provider.attribution}
+			top={provider.top}
+		/>
+	);
+}
+
+/** What the wizard says while the engine is asked what it offers: that it waits, or why it failed. */
+function asking(failed: string) {
+	return (
+		<p className={failed ? "wizard-failed" : "empty-state"} role={failed ? "alert" : "status"}>
+			{failed ? `The engine's wizard is not there: ${failed}` : "Asking the engine…"}
+		</p>
+	);
+}
 
 function WizardBar() {
 	return (
@@ -295,7 +332,7 @@ function Search({ api, onPick }: Readonly<{ api: WizardApi; onPick: (p: Place) =
 	const [text, setText] = useState("");
 	const [found, setFound] = useState<Place[] | null>(null);
 	const [error, setError] = useState("");
-	const go = async (e: FormEvent) => {
+	const go = async (e: SubmitEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		setError("");
 		try {
@@ -313,29 +350,31 @@ function Search({ api, onPick }: Readonly<{ api: WizardApi; onPick: (p: Place) =
 				</button>
 			</form>
 			{error ? <p className="wizard-failed">{error}</p> : null}
-			{found ? (
-				found.length ? (
-					<ul className="list places" aria-label="Places found">
-						{found.map((p) => (
-							<li key={`${p.lat},${p.lon},${p.name}`}>
-								<button
-									type="button"
-									className="row-button"
-									onClick={() => {
-										onPick(p);
-										setFound(null);
-									}}
-								>
-									<span className="row-title">{p.name}</span>
-								</button>
-							</li>
-						))}
-					</ul>
-				) : (
-					<p className="hint">Nothing found by that name.</p>
-				)
-			) : null}
+			{found ? <PlacesFound found={found} onPick={onPick} onPicked={() => setFound(null)} /> : null}
 		</>
+	);
+}
+
+/** The places a search found, each picked by a click; or that none was. */
+function PlacesFound({ found, onPick, onPicked }: Readonly<{ found: Place[]; onPick: (p: Place) => void; onPicked: () => void }>) {
+	if (!found.length) return <p className="hint">Nothing found by that name.</p>;
+	return (
+		<ul className="list places" aria-label="Places found">
+			{found.map((p) => (
+				<li key={`${p.lat},${p.lon},${p.name}`}>
+					<button
+						type="button"
+						className="row-button"
+						onClick={() => {
+							onPick(p);
+							onPicked();
+						}}
+					>
+						<span className="row-title">{p.name}</span>
+					</button>
+				</li>
+			))}
+		</ul>
 	);
 }
 
@@ -344,7 +383,10 @@ function Providers({ label, list, value, onChange }: Readonly<{ label: string; l
 		<fieldset className="providers">
 			<legend className="sr-only">{label}</legend>
 			{list.map((p) => (
-				<label key={p.id} className={p.id === value ? "provider on" : "provider"}>
+				<label // NOSONAR: its text is in its spans, the provider's name and about
+					key={p.id}
+					className={p.id === value ? "provider on" : "provider"}
+				>
 					<input type="radio" name={label} checked={p.id === value} onChange={() => onChange(p.id)} />
 					<span className="provider-text">
 						<span className="provider-name">

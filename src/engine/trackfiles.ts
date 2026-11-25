@@ -23,7 +23,7 @@ export const at = (s: TrackSettings, key: string, def: string): string =>
 	typeof s.track[key] === "string" && s.track[key] ? `${s.project}/${s.track[key]}` : def;
 
 export const settingsPaths = (s: TrackSettings) => ({
-	name: String(s.track.name ?? s.project.split("/").filter(Boolean).pop() ?? ""),
+	name: String((s.track.name as string | undefined) ?? s.project.split("/").findLast(Boolean) ?? ""),
 	roads: at(s, "roads", `${s.project}/tools/reference/roads.json`),
 	objects: at(s, "objects", `${s.project}/tools/reference/objects.json`),
 	drawings: at(s, "drawings", `${s.project}/tools/reference/road_drawings.json`),
@@ -36,9 +36,16 @@ export const settingsPaths = (s: TrackSettings) => ({
 	backups: `${s.cache}/roads_backup`,
 });
 
+/** A path without the slashes (either way) it ends with. */
+function trimSlashes(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
+}
+
 /** A track's settings from its project folder (its track file: tools/reference/track.json; its cache: build/cache). */
 export async function settingsOf(files: HostFiles, project: string, trackFile?: string): Promise<TrackSettings> {
-	const p = project.replace(/[\\/]+$/, "");
+	const p = trimSlashes(project);
 	const tf = trackFile ?? `${p}/tools/reference/track.json`;
 	const track = (await files.exists(tf)) ? (plain(readPyJson(new TextDecoder().decode(await files.read(tf)))) as Record<string, unknown>) : {};
 	return { project: p, trackFile: tf, track, cache: `${p}/build/cache` };
@@ -50,9 +57,9 @@ export async function settingsOf(files: HostFiles, project: string, trackFile?: 
  * CRLF, as Python's on Windows). */
 export async function writePyJsonFile(files: HostFiles, path: string, value: unknown, crlf?: boolean): Promise<void> {
 	let ends = crlf;
-	if (ends === undefined) ends = (await files.exists(path)) ? new TextDecoder().decode(await files.read(path)).includes("\r\n") : true;
+	ends ??= (await files.exists(path)) ? new TextDecoder().decode(await files.read(path)).includes("\r\n") : true;
 	const text = dumpPyJson(value, 1);
-	await files.write(path, new TextEncoder().encode(ends ? text.split("\n").join("\r\n") : text));
+	await files.write(path, new TextEncoder().encode(ends ? text.replaceAll("\n", "\r\n") : text));
 }
 
 /** time.strftime('%Y%m%d-%H%M%S') of the local time. */
@@ -127,15 +134,15 @@ function merged(pageRoad: Road, was: Road | undefined): [Road, boolean] {
 
 /** The roads to write and the names of those changed in shape: the page's, then those the page had not (added since it opened) unless deleted. */
 export function mergeRoads(oldRoads: Road[], pageRoads: Road[], deleted: string[] = []): [Road[], string[]] {
-	const old = new Map(oldRoads.map((r) => [String(r.name), r]));
+	const old = new Map(oldRoads.map((r) => [String(r.name as string), r]));
 	const out: Road[] = [];
 	const changed: string[] = [];
 	for (const pr of pageRoads) {
-		const [q, moved] = merged(pr, old.get(String(pr.was || pr.name)));
-		if (moved) changed.push(String(q.name));
+		const [q, moved] = merged(pr, old.get(String((pr.was || pr.name) as string)));
+		if (moved) changed.push(String(q.name as string));
 		out.push(q);
 	}
-	const have = new Set([...pageRoads.map((q) => String(q.was || q.name)), ...pageRoads.map((q) => String(q.name))]);
+	const have = new Set([...pageRoads.map((q) => String((q.was || q.name) as string)), ...pageRoads.map((q) => String(q.name as string))]);
 	const gone = new Set(deleted);
 	for (const [n, r] of old) if (!have.has(n) && !gone.has(n)) out.push(r);
 	return [out, changed];
@@ -182,40 +189,81 @@ export const pyRound4 = (x: number): number => pyRound(x, 4);
 /** metres a side of the cells points are filed in, for their nearest */
 const NEAR_CELL = 0.5;
 
+/** A cell's key in the map points are filed in. */
+const cellKey = (i: number, j: number) => i * 1_000_003 + j;
+
+/** The nearest to (x, z) of the points in one cell (their indices), or the nearest found before (its index, how far) where none is nearer. */
+function nearerInCell(B: number[][], ks: number[], x: number, z: number, found: [number, number]): [number, number] {
+	let [at, best] = found;
+	for (const k of ks) {
+		const b = B[k] as number[];
+		const d = Math.hypot((b[0] as number) - x, (b[1] as number) - z);
+		if (d < best || (d === best && k < at)) {
+			best = d;
+			at = k;
+		}
+	}
+	return [at, best];
+}
+
+/** The nearest to (x, z) of the points in the cells r rings out from cell (ci, cj), or the nearest found before where none is nearer. */
+function nearerInRing(
+	cells: Map<number, number[]>,
+	B: number[][],
+	x: number,
+	z: number,
+	[ci, cj]: [number, number],
+	r: number,
+	found: [number, number],
+): [number, number] {
+	let near = found;
+	for (let i = ci - r; i <= ci + r; i++)
+		for (let j = cj - r; j <= cj + r; j++) {
+			if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
+			near = nearerInCell(B, cells.get(cellKey(i, j)) ?? [], x, z, near);
+		}
+	return near;
+}
+
 /** Points (x, z first) filed in cells: a point's nearest of them (its index, how far), searched ring by ring out. */
 function nearestOf(B: number[][]): (x: number, z: number) => [number, number] {
 	const cells = new Map<number, number[]>();
-	const key = (i: number, j: number) => i * 1_000_003 + j;
 	B.forEach((b, k) => {
-		const c = key(Math.floor((b[0] as number) / NEAR_CELL), Math.floor((b[1] as number) / NEAR_CELL));
+		const c = cellKey(Math.floor((b[0] as number) / NEAR_CELL), Math.floor((b[1] as number) / NEAR_CELL));
 		const l = cells.get(c);
 		if (l) l.push(k);
 		else cells.set(c, [k]);
 	});
 	return (x, z) => {
-		const ci = Math.floor(x / NEAR_CELL);
-		const cj = Math.floor(z / NEAR_CELL);
-		let best = Infinity;
-		let at = 0;
+		const cell: [number, number] = [Math.floor(x / NEAR_CELL), Math.floor(z / NEAR_CELL)];
+		let near: [number, number] = [0, Infinity];
 		for (let r = 0; r < 1e6; r++) {
+			const best = near[1];
 			// (a point in a cell r rings out is at least (r - 1) cells away: none nearer past there)
 			if (best < (r - 1) * NEAR_CELL) break;
 			if (r > 0 && cells.size && best === Infinity && r > 4096) break;
-			for (let i = ci - r; i <= ci + r; i++)
-				for (let j = cj - r; j <= cj + r; j++) {
-					if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
-					for (const k of cells.get(key(i, j)) ?? []) {
-						const b = B[k] as number[];
-						const d = Math.hypot((b[0] as number) - x, (b[1] as number) - z);
-						if (d < best || (d === best && k < at)) {
-							best = d;
-							at = k;
-						}
-					}
-				}
+			near = nearerInRing(cells, B, x, z, cell, r, near);
 		}
-		return [at, best];
+		return near;
 	};
+}
+
+/** The span between two nodes (their indices) whose worst point is furthest past FIT of all, or null where none is. */
+function worstSpan(idx: number[], err: number[]): [number, number] | null {
+	let worst = 0;
+	let found: [number, number] | null = null;
+	for (let k = 0; k + 1 < idx.length; k++) {
+		const a = idx[k] as number;
+		const b = idx[k + 1] as number;
+		if (b - a < 3) continue;
+		let m = a + 1;
+		for (let i = a + 1; i < b; i++) if ((err[i] as number) > (err[m] as number)) m = i;
+		if ((err[m] as number) > FIT && (err[m] as number) > worst) {
+			worst = err[m] as number;
+			found = [a, b];
+		}
+	}
+	return found;
 }
 
 /** A road's middle as a curve of Bezier pieces: nodes where needed so it keeps within FIT of the road's middle and widths; each node's handles along the road's
@@ -234,7 +282,7 @@ export function fitCurve(road: Road): PyJson[] {
 		s,
 	);
 	const T = C.map((_, i) => {
-		const m = Math.max(Math.sqrt((gx[i] as number) ** 2 + (gz[i] as number) ** 2), 1e-9);
+		const m = Math.max(Math.hypot(gx[i] as number, gz[i] as number), 1e-9);
 		return [(gx[i] as number) / m, (gz[i] as number) / m] as const;
 	});
 	const nodesOf = (idx: number[]): PyJson[] =>
@@ -261,19 +309,7 @@ export function fitCurve(road: Road): PyJson[] {
 			const b = B[j] as number[];
 			return Math.max(best, Math.abs((b[2] as number) - (q[2] as number)), Math.abs((b[3] as number) - (q[3] as number)));
 		});
-		let worst = 0;
-		let found: [number, number] | null = null;
-		for (let k = 0; k + 1 < idx.length; k++) {
-			const a = idx[k] as number;
-			const b = idx[k + 1] as number;
-			if (b - a < 3) continue;
-			let m = a + 1;
-			for (let i = a + 1; i < b; i++) if ((err[i] as number) > (err[m] as number)) m = i;
-			if ((err[m] as number) > FIT && (err[m] as number) > worst) {
-				worst = err[m] as number;
-				found = [a, b];
-			}
-		}
+		const found = worstSpan(idx, err);
 		if (!found) break;
 		const [a, b] = found;
 		const half = ((s[a] as number) + (s[b] as number)) / 2;

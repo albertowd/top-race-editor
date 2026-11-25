@@ -9,6 +9,20 @@ type Lay = {
 	lines?: { fast?: { curve?: unknown[] }; pit?: { curve?: unknown[] } };
 };
 
+/** What one layout lacks, in the order they are said. */
+function layoutLacks(L: Lay): string[] {
+	const grid = L.grid?.length ?? 0;
+	const pits = L.pits?.length ?? 0;
+	const lacks: string[] = [];
+	if ((L.lines?.fast?.curve?.length ?? 0) < 3) lacks.push("no fast line");
+	if (pits && (L.lines?.pit?.curve?.length ?? 0) < 2) lacks.push("no pit lane line");
+	if (!grid) lacks.push("no grid slot");
+	if (pits < grid) lacks.push(pits ? `${pits} pit boxes for ${grid} grid slots` : "no pit boxes");
+	if (!L.timing?.length) lacks.push("no timing gate");
+	if (!L.hotlap) lacks.push("no hotlap start");
+	return lacks;
+}
+
 /** What the layouts lack ("vp_1500: no fast line, no hotlap start"), one line each; none if nothing (no layouts: said so). */
 export function layoutsMissing(objects: unknown): string[] {
 	const layouts = ((objects ?? {}) as { layouts?: Record<string, Lay> }).layouts ?? {};
@@ -16,16 +30,7 @@ export function layoutsMissing(objects: unknown): string[] {
 	if (!names.length) return ["the track has no layouts: add one with its grid, pits and timing"];
 	const out: string[] = [];
 	for (const name of names) {
-		const L = layouts[name] as Lay;
-		const grid = L.grid?.length ?? 0;
-		const pits = L.pits?.length ?? 0;
-		const lacks: string[] = [];
-		if ((L.lines?.fast?.curve?.length ?? 0) < 3) lacks.push("no fast line");
-		if (pits && (L.lines?.pit?.curve?.length ?? 0) < 2) lacks.push("no pit lane line");
-		if (!grid) lacks.push("no grid slot");
-		if (pits < grid) lacks.push(pits ? `${pits} pit boxes for ${grid} grid slots` : "no pit boxes");
-		if (!L.timing?.length) lacks.push("no timing gate");
-		if (!L.hotlap) lacks.push("no hotlap start");
+		const lacks = layoutLacks(layouts[name] as Lay);
 		if (lacks.length) out.push(`${name}: ${lacks.join(", ")}`);
 	}
 	return out;

@@ -51,8 +51,9 @@ export function coverOf(r: number, g: number, b: number): number {
 
 /** A hash of a lattice point to 0..1. */
 function hash(i: number, j: number, k: number): number {
-	let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(k, 1274126177)) | 0;
-	h = Math.imul(h ^ (h >>> 13), 1103515245);
+	// (the sum made 32 bits by the ^ and >>> on it)
+	const s = Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(k, 1274126177);
+	let h = Math.imul(s ^ (s >>> 13), 1103515245);
 	h ^= h >>> 16;
 	return (h >>> 0) / 4294967296;
 }
@@ -131,7 +132,13 @@ export function shrunk(rgba: Uint8Array, photoSize: number, size: number): Uint8
 export function coversOf(rgb: Uint8Array, size: number): Uint8Array {
 	const c = new Uint8Array(size * size);
 	for (let i = 0; i < c.length; i++) c[i] = coverOf(rgb[i * 3] as number, rgb[i * 3 + 1] as number, rgb[i * 3 + 2] as number);
-	// (the unknown the cover of the known nearest them: filled outwards from the known, a ring at a time)
+	fillUnknown(c, size);
+	simplify(c, size);
+	return c;
+}
+
+/** Covers (size a side) with the unknown the cover of the known nearest them: filled outwards from the known, a ring at a time (none known: all grass). */
+function fillUnknown(c: Uint8Array, size: number): void {
 	const queue = new Int32Array(c.length);
 	let tail = 0;
 	for (let i = 0; i < c.length; i++) if (c[i] !== UNKNOWN) queue[tail++] = i;
@@ -150,15 +157,23 @@ export function coversOf(rgb: Uint8Array, size: number): Uint8Array {
 		if (i >= size) reach(i - size);
 		if (i < c.length - size) reach(i + size);
 	}
-	// (simplified: each cover's share round each pixel, the most of them its cover)
+}
+
+/** A cover's share of each pixel (into share): 1 where it is, else 0, blurred over radius pixels. */
+function shareOf(c: Uint8Array, k: number, share: Float32Array, size: number, radius: number): void {
+	for (let i = 0; i < c.length; i++) share[i] = c[i] === k ? 1 : 0;
+	boxBlur(share, size, radius);
+}
+
+/** Covers (size a side) simplified, twice: each cover's share round each pixel (within SIMPLIFY), the most of them its cover. */
+function simplify(c: Uint8Array, size: number): void {
 	const most = new Float32Array(size * size);
 	const share = new Float32Array(size * size);
 	for (let round = 0; round < 2; round++) {
 		most.fill(-1);
 		const next = c.slice();
 		for (let k = 0; k < COVERS; k++) {
-			for (let i = 0; i < c.length; i++) share[i] = c[i] === k ? 1 : 0;
-			boxBlur(share, size, SIMPLIFY);
+			shareOf(c, k, share, size, SIMPLIFY);
 			for (let i = 0; i < c.length; i++)
 				if ((share[i] as number) > (most[i] as number)) {
 					most[i] = share[i] as number;
@@ -167,7 +182,6 @@ export function coversOf(rgb: Uint8Array, size: number): Uint8Array {
 		}
 		c.set(next);
 	}
-	return c;
 }
 
 /** Each cover's colour block by block (TONE_BLOCK pixels a side): its pixels' mean in the picture; a block with few of them its neighbours', a cover with none
@@ -196,49 +210,64 @@ export function tonesOf(rgb: Uint8Array, size: number): Tones {
 			s[at + 3] = (s[at + 3] as number) + 1;
 		}
 	const least = TONE_BLOCK * TONE_BLOCK * 0.04;
-	const rgbs = sum.map((s, k) => {
-		const t = new Float32Array(n * n * 3);
-		const known = new Uint8Array(n * n);
-		let any = false;
-		for (let b = 0; b < n * n; b++)
-			if ((s[b * 4 + 3] as number) >= least) {
-				for (let ch = 0; ch < 3; ch++) t[b * 3 + ch] = (s[b * 4 + ch] as number) / (s[b * 4 + 3] as number);
-				known[b] = 1;
-				any = true;
-			}
-		if (!any) {
-			for (let b = 0; b < n * n; b++) t.set((LOOK[k] as (typeof LOOK)[number]).rgb, b * 3);
-			return t;
-		}
-		// (the blocks without it their known neighbours' mean, ring after ring)
-		for (let left = true; left; ) {
-			left = false;
-			const was = known.slice();
-			for (let by = 0; by < n; by++)
-				for (let bx = 0; bx < n; bx++) {
-					const b = by * n + bx;
-					if (was[b]) continue;
-					const m = [0, 0, 0];
-					let c = 0;
-					for (let dy = -1; dy <= 1; dy++)
-						for (let dx = -1; dx <= 1; dx++) {
-							const xx = bx + dx;
-							const yy = by + dy;
-							if (xx < 0 || yy < 0 || xx >= n || yy >= n || !was[yy * n + xx]) continue;
-							for (let ch = 0; ch < 3; ch++) m[ch] = (m[ch] as number) + (t[(yy * n + xx) * 3 + ch] as number);
-							c++;
-						}
-					if (!c) {
-						left = true;
-						continue;
-					}
-					for (let ch = 0; ch < 3; ch++) t[b * 3 + ch] = (m[ch] as number) / c;
-					known[b] = 1;
-				}
-		}
-		return t;
-	});
+	const rgbs = sum.map((s, k) => coverTones(s, k, n, least));
 	return { n, rgb: rgbs };
+}
+
+/** A cover's tones from its sums (n x n blocks of RGB and a count): each block with least pixels at least their mean, the others their known neighbours';
+ * none with enough, its LOOK. */
+function coverTones(s: Float32Array, k: number, n: number, least: number): Float32Array {
+	const t = new Float32Array(n * n * 3);
+	const known = new Uint8Array(n * n);
+	let any = false;
+	for (let b = 0; b < n * n; b++)
+		if ((s[b * 4 + 3] as number) >= least) {
+			for (let ch = 0; ch < 3; ch++) t[b * 3 + ch] = (s[b * 4 + ch] as number) / (s[b * 4 + 3] as number);
+			known[b] = 1;
+			any = true;
+		}
+	if (!any) {
+		for (let b = 0; b < n * n; b++) t.set((LOOK[k] as (typeof LOOK)[number]).rgb, b * 3);
+		return t;
+	}
+	// (the blocks without it their known neighbours' mean, ring after ring)
+	for (let left = true; left; ) left = spreadTones(t, known, n);
+	return t;
+}
+
+/** One ring of blocks without a tone given their known neighbours' mean (those known before the ring only); whether some are left with none known near. */
+function spreadTones(t: Float32Array, known: Uint8Array, n: number): boolean {
+	let left = false;
+	const was = known.slice();
+	const m = [0, 0, 0];
+	for (let by = 0; by < n; by++)
+		for (let bx = 0; bx < n; bx++) {
+			const b = by * n + bx;
+			if (was[b]) continue;
+			const c = neighboursSum(t, was, n, bx, by, m);
+			if (!c) {
+				left = true;
+				continue;
+			}
+			for (let ch = 0; ch < 3; ch++) t[b * 3 + ch] = (m[ch] as number) / c;
+			known[b] = 1;
+		}
+	return left;
+}
+
+/** The sum of a block's known neighbours' tones (into m) and how many they are. */
+function neighboursSum(t: Float32Array, was: Uint8Array, n: number, bx: number, by: number, m: number[]): number {
+	m.fill(0);
+	let c = 0;
+	for (let dy = -1; dy <= 1; dy++)
+		for (let dx = -1; dx <= 1; dx++) {
+			const xx = bx + dx;
+			const yy = by + dy;
+			if (xx < 0 || yy < 0 || xx >= n || yy >= n || !was[yy * n + xx]) continue;
+			for (let ch = 0; ch < 3; ch++) m[ch] = (m[ch] as number) + (t[(yy * n + xx) * 3 + ch] as number);
+			c++;
+		}
+	return c;
 }
 
 /** A cover's colour at a pixel (into out): its blocks' colours bilinearly between their middles. */
@@ -260,37 +289,60 @@ function toneAt(t: Float32Array, n: number, x: number, y: number, out: number[])
 	}
 }
 
+/** The ground's picture being painted: its size, the covers' tones, metres as pixels (px), each channel's colour summed (acc) and the shares summed (w), the
+ * mask, the cover's share being painted and its tone at a pixel. */
+interface Painting {
+	size: number;
+	tones: Tones;
+	px: (m: number) => number;
+	acc: Float32Array[];
+	w: Float32Array;
+	mask: Uint8Array;
+	share: Float32Array;
+	tone: number[];
+}
+
+/** A cover painted by its share: its channel of the mask, and where it has a share its tone varied by noise at three scales, summed with the others'. */
+function paintCover(p: Painting, k: number): void {
+	const { size, tones, px, acc, w, mask, share, tone } = p;
+	const L = LOOK[k] as (typeof LOOK)[number];
+	const t = tones.rgb[k] as Float32Array;
+	for (let y = 0; y < size; y++)
+		for (let x = 0; x < size; x++) {
+			const i = y * size + x;
+			const s = share[i] as number;
+			mask[i * 4 + k] = Math.round(s * 255);
+			if (s <= 0.001) continue;
+			toneAt(t, tones.n, x, y, tone);
+			const shade =
+				s * (1 + L.vary[0] * noise(x, y, px(0.3), k * 8 + 1) + L.vary[1] * noise(x, y, px(1.2), k * 8 + 2) + L.vary[2] * noise(x, y, px(5), k * 8 + 3));
+			for (let ch = 0; ch < 3; ch++) {
+				const a = acc[ch] as Float32Array;
+				a[i] = (a[i] as number) + shade * (tone[ch] as number);
+			}
+			w[i] = (w[i] as number) + s;
+		}
+}
+
 /** The ground's picture painted from its covers (size pixels a side, metres a pixel) in their tones: each cover's share of each pixel blurred over BLEND pixels
  * (soft borders), its colour there varied by noise at three scales; RGBA. */
 export function paintCovers(c: Uint8Array, tones: Tones, size: number, metres: number): { picture: Uint8Array; mask: Uint8Array } {
-	const px = (m: number) => Math.max(1, m / metres);
-	const acc = [new Float32Array(size * size), new Float32Array(size * size), new Float32Array(size * size)];
-	const w = new Float32Array(size * size);
-	// (each cover's share, a channel of the mask: red grass, green earth, blue paving)
-	const mask = new Uint8Array(size * size * 4);
-	const share = new Float32Array(size * size);
-	const tone = [0, 0, 0];
+	const p: Painting = {
+		size,
+		tones,
+		px: (m: number) => Math.max(1, m / metres),
+		acc: [new Float32Array(size * size), new Float32Array(size * size), new Float32Array(size * size)],
+		w: new Float32Array(size * size),
+		// (each cover's share, a channel of the mask: red grass, green earth, blue paving)
+		mask: new Uint8Array(size * size * 4),
+		share: new Float32Array(size * size),
+		tone: [0, 0, 0],
+	};
 	for (let k = 0; k < COVERS; k++) {
-		for (let i = 0; i < c.length; i++) share[i] = c[i] === k ? 1 : 0;
-		boxBlur(share, size, BLEND);
-		const L = LOOK[k] as (typeof LOOK)[number];
-		const t = tones.rgb[k] as Float32Array;
-		for (let y = 0; y < size; y++)
-			for (let x = 0; x < size; x++) {
-				const i = y * size + x;
-				const s = share[i] as number;
-				mask[i * 4 + k] = Math.round(s * 255);
-				if (s <= 0.001) continue;
-				toneAt(t, tones.n, x, y, tone);
-				const shade =
-					s * (1 + L.vary[0] * noise(x, y, px(0.3), k * 8 + 1) + L.vary[1] * noise(x, y, px(1.2), k * 8 + 2) + L.vary[2] * noise(x, y, px(5), k * 8 + 3));
-				for (let ch = 0; ch < 3; ch++) {
-					const a = acc[ch] as Float32Array;
-					a[i] = (a[i] as number) + shade * (tone[ch] as number);
-				}
-				w[i] = (w[i] as number) + s;
-			}
+		shareOf(c, k, p.share, size, BLEND);
+		paintCover(p, k);
 	}
+	const { acc, w, mask } = p;
 	const out = new Uint8Array(size * size * 4);
 	for (let i = 0; i < size * size; i++) {
 		const d = (w[i] as number) || 1;
@@ -324,61 +376,80 @@ function tiled(x: number, y: number, cells: number, size: number, k: number): nu
 	return ((h(i, j) * (1 - su) + h(i + 1, j) * su) * (1 - sv) + (h(i, j + 1) * (1 - su) + h(i + 1, j + 1) * su) * sv) * 2 - 1;
 }
 
-/** A detail's picture (RGBA, tiling): grey round the middle (128: the ground's picture's own colour where the material doubles it), its grain lighter and
- * darker about it, so far off (its mipmaps) the ground is its picture's colour. Grass: blades, short streaks every way, and clumps; sand: fine grains, pebbles,
- * faint ripples; gravel: stones. */
-export function detailPicture(kind: Detail, size = DETAIL_SIZE): Uint8Array {
+/** Tiling noise over octaves from cells a side (each twice as many cells, 0.55 as strong), a picture size pixels a side. */
+function fbm(x: number, y: number, k: number, from: number, octaves: number, size: number): number {
+	let s = 0;
+	let a = 0.5;
+	let cells = from;
+	for (let o = 0; o < octaves; o++) {
+		s += a * tiled(x, y, cells, size, k + o);
+		a *= 0.55;
+		cells *= 2;
+	}
+	return s;
+}
+
+/** A detail's grain about 0 (size pixels a side): grass, clumps; sand, fine grains and faint ripples; gravel, coarser grains. */
+function grainOf(kind: Detail, size: number): Float32Array {
 	const v = new Float32Array(size * size);
-	const fbm = (x: number, y: number, k: number, from: number, octaves: number) => {
-		let s = 0;
-		let a = 0.5;
-		let cells = from;
-		for (let o = 0; o < octaves; o++) {
-			s += a * tiled(x, y, cells, size, k + o);
-			a *= 0.55;
-			cells *= 2;
-		}
-		return s;
-	};
 	for (let y = 0; y < size; y++)
 		for (let x = 0; x < size; x++) {
 			const i = y * size + x;
 			const fine = hash(x, y, kind.length) * 2 - 1;
-			if (kind === "grass") v[i] = 0.16 * fbm(x, y, 3, 8, 4) + 0.1 * fine;
-			else if (kind === "sand") v[i] = 0.12 * fbm(x, y, 13, 16, 5) + 0.16 * fine + 0.05 * Math.sin((y / size) * Math.PI * 2 * 9 + 3 * tiled(x, y, 4, size, 17));
-			else v[i] = 0.1 * fbm(x, y, 23, 32, 3) + 0.08 * fine;
+			if (kind === "grass") v[i] = 0.16 * fbm(x, y, 3, 8, 4, size) + 0.1 * fine;
+			else if (kind === "sand")
+				v[i] = 0.12 * fbm(x, y, 13, 16, 5, size) + 0.16 * fine + 0.05 * Math.sin((y / size) * Math.PI * 2 * 9 + 3 * tiled(x, y, 4, size, 17));
+			else v[i] = 0.1 * fbm(x, y, 23, 32, 3, size) + 0.08 * fine;
 		}
+	return v;
+}
+
+/** a detail's blades or stones, for each pixel of its side */
+const SPECKS: Record<Detail, number> = { grass: 40, sand: 3, gravel: 12 };
+
+/** The nth blade's or stone's draw of k, 0..1. */
+const rnd = (n: number, k: number) => hash(n, k, 977);
+
+/** A picture's pixel (size a side, wrapping round). */
+const wrapped = (x: number, y: number, size: number) => (((y % size) + size) % size) * size + (((x % size) + size) % size);
+
+/** The nth blade of grass at (cx, cy): a short streak, darker or lighter. */
+function blade(v: Float32Array, size: number, n: number, cx: number, cy: number): void {
+	const a = rnd(n, 3) * Math.PI;
+	const len = 4 + rnd(n, 4) * 10;
+	const d = (rnd(n, 5) - 0.45) * 0.5;
+	for (let t = 0; t < len; t++) {
+		const i = wrapped(Math.round(cx + Math.cos(a) * t), Math.round(cy + Math.sin(a) * t), size);
+		v[i] = (v[i] as number) * 0.4 + d;
+	}
+}
+
+/** The nth stone at (cx, cy), sand's or gravel's: a round speck, lit from the top left, a shadow at its bottom right edge. */
+function stone(v: Float32Array, size: number, sand: boolean, n: number, cx: number, cy: number): void {
+	const r = sand ? 1 + rnd(n, 3) * 2.5 : 2 + rnd(n, 3) * 5;
+	const d = (rnd(n, 4) - 0.5) * (sand ? 0.5 : 0.4);
+	for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++)
+		for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
+			const q = Math.hypot(dx, dy) / r;
+			if (q > 1) continue;
+			const i = wrapped(Math.round(cx + dx), Math.round(cy + dy), size);
+			const light = q > 0.7 && dx + dy > 0 ? -0.18 : (-(dx + dy) / (2 * r)) * 0.1;
+			v[i] = d + light;
+		}
+}
+
+/** A detail's picture (RGBA, tiling): grey round the middle (128: the ground's picture's own colour where the material doubles it), its grain lighter and
+ * darker about it, so far off (its mipmaps) the ground is its picture's colour. Grass: blades, short streaks every way, and clumps; sand: fine grains, pebbles,
+ * faint ripples; gravel: stones. */
+export function detailPicture(kind: Detail, size = DETAIL_SIZE): Uint8Array {
+	const v = grainOf(kind, size);
 	// (grass: blades, a short streak each; sand and gravel: stones, a round speck each, a lit and a shaded side)
-	const rnd = (n: number, k: number) => hash(n, k, 977);
-	const count = kind === "grass" ? size * 40 : kind === "sand" ? size * 3 : size * 12;
+	const count = size * SPECKS[kind];
 	for (let n = 0; n < count; n++) {
 		const cx = rnd(n, 1) * size;
 		const cy = rnd(n, 2) * size;
-		if (kind === "grass") {
-			const a = rnd(n, 3) * Math.PI;
-			const len = 4 + rnd(n, 4) * 10;
-			const d = (rnd(n, 5) - 0.45) * 0.5;
-			for (let t = 0; t < len; t++) {
-				const x = Math.round(cx + Math.cos(a) * t);
-				const y = Math.round(cy + Math.sin(a) * t);
-				const i = (((y % size) + size) % size) * size + (((x % size) + size) % size);
-				v[i] = (v[i] as number) * 0.4 + d;
-			}
-		} else {
-			const r = kind === "sand" ? 1 + rnd(n, 3) * 2.5 : 2 + rnd(n, 3) * 5;
-			const d = (rnd(n, 4) - 0.5) * (kind === "sand" ? 0.5 : 0.4);
-			for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++)
-				for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
-					const q = Math.hypot(dx, dy) / r;
-					if (q > 1) continue;
-					const x = Math.round(cx + dx);
-					const y = Math.round(cy + dy);
-					const i = (((y % size) + size) % size) * size + (((x % size) + size) % size);
-					// (lit from the top left, a shadow at its bottom right edge)
-					const light = q > 0.7 && dx + dy > 0 ? -0.18 : (-(dx + dy) / (2 * r)) * 0.1;
-					v[i] = d + light;
-				}
-		}
+		if (kind === "grass") blade(v, size, n, cx, cy);
+		else stone(v, size, kind === "sand", n, cx, cy);
 	}
 	const out = new Uint8Array(size * size * 4);
 	for (let i = 0; i < size * size; i++) {
@@ -439,8 +510,7 @@ export async function generatedGround(
 	};
 	const was = (await files.exists(meta)) ? (JSON.parse(new TextDecoder().decode(await files.read(meta))) as typeof made & { file?: string }) : null;
 	const fresh =
-		was &&
-		was.version === made.version &&
+		was?.version === made.version &&
 		was.photo === made.photo &&
 		was.size === made.size &&
 		was.file &&
@@ -469,11 +539,13 @@ export async function generatedGround(
 	for (const d of DETAILS) await files.write(`${dir}/${detailFile(d)}`, await pngRgba(detailPicture(d), DETAIL_SIZE, DETAIL_SIZE));
 	// (its material: the photo's, its picture this one; in AC its covers' details over it up close (ksMultilayer: the picture times the details its mask mixes,
 	// doubled), each tiled its own metres)
-	const base = JSON.parse(JSON.stringify(doc.materials[material] ?? {})) as Record<string, unknown>;
+	const base = structuredClone(doc.materials[material] ?? {}) as Record<string, unknown>;
 	base.colour = file;
 	const ac = (base.targets as { ac?: AcTarget } | undefined)?.ac;
 	if (ac) {
-		const keep = (ac.props ?? []).filter(([n]) => ["ksAmbient", "ksDiffuse", "ksSpecular", "ksSpecularEXP", "ksEmissive", "ksAlphaRef"].includes(String(n)));
+		const keep = (ac.props ?? []).filter(
+			([n]) => typeof n === "string" && ["ksAmbient", "ksDiffuse", "ksSpecular", "ksSpecularEXP", "ksEmissive", "ksAlphaRef"].includes(n),
+		);
 		const tile = (d: Detail) => span / DETAIL_METRES[d];
 		ac.shader = "ksMultilayer";
 		ac.props = [...keep, ["multR", tile("grass")], ["multG", tile("sand")], ["multB", tile("gravel")], ["multA", tile("gravel")], ["magicMult", 2], ["boh", 0]];

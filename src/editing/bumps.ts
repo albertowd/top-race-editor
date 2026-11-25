@@ -59,18 +59,22 @@ function changed(b: Bumps, x: number, z: number, radius: number, change: (i: num
 			if (d > radius) continue;
 			const v = at(b, i, j);
 			const w = change(i, j, v, d);
-			if (w === v) continue;
-			const ti = Math.floor(i / b.tile);
-			const tj = Math.floor(j / b.tile);
-			const k = keyOf(ti, tj);
-			if (!fresh.has(k)) {
-				const old = tiles[k];
-				tiles[k] = old ? old.slice() : new Float32Array(b.tile * b.tile);
-				fresh.add(k);
-			}
-			(tiles[k] as Float32Array)[(j - tj * b.tile) * b.tile + (i - ti * b.tile)] = w;
+			if (w !== v) setIn(b, tiles, fresh, i, j, w);
 		}
 	return fresh.size ? { ...b, tiles } : b;
+}
+
+/** Point (i, j) set to w in tiles, its tile copied first the first time it changes (fresh: the tiles copied so far). */
+function setIn(b: Bumps, tiles: Record<string, Float32Array>, fresh: Set<string>, i: number, j: number, w: number) {
+	const ti = Math.floor(i / b.tile);
+	const tj = Math.floor(j / b.tile);
+	const k = keyOf(ti, tj);
+	if (!fresh.has(k)) {
+		const old = tiles[k];
+		tiles[k] = old ? old.slice() : new Float32Array(b.tile * b.tile);
+		fresh.add(k);
+	}
+	(tiles[k] as Float32Array)[(j - tj * b.tile) * b.tile + (i - ti * b.tile)] = w;
 }
 
 const smoothstep = (t: number) => {
@@ -158,14 +162,14 @@ export interface BumpsJson {
 
 function base64Of(bytes: Uint8Array): string {
 	let bin = "";
-	for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCodePoint(...bytes.subarray(i, i + 0x8000));
 	return btoa(bin);
 }
 
 function bytesOf(s: string): Uint8Array<ArrayBuffer> {
 	const bin = atob(s);
 	const out = new Uint8Array(bin.length);
-	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+	for (let i = 0; i < bin.length; i++) out[i] = bin.codePointAt(i) as number;
 	return out;
 }
 

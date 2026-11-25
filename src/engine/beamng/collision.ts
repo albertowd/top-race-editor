@@ -125,30 +125,37 @@ function normal(P: Float64Array, a: number, b: number, c: number): [number, numb
 	return l > 1e-12 ? [x / l, y / l, z / l] : null;
 }
 
-/** A welded mesh made coarse (step 2): its faces, on its own points. */
-export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Array {
-	const { P } = mesh;
-	const F = Int32Array.from(mesh.F);
-	const nv = P.length / 3;
+/** Each point's faces. */
+function pointFaces(F: Int32Array, nv: number): number[][] {
 	const nf = F.length / 3;
-	const alive = new Uint8Array(nf).fill(1);
-	// (each point's faces)
 	const faces: number[][] = Array.from({ length: nv }, () => []);
 	for (let f = 0; f < nf; f++) for (let j = 0; j < 3; j++) (faces[F[f * 3 + j] as number] as number[]).push(f);
-	// (a point on an edge of one face, or of more than two, stays: a neighbour in other than two of its faces)
+	return faces;
+}
+
+/** The points that stay: a point on an edge of one face, or of more than two (a neighbour in other than two of its faces). */
+function lockedPoints(F: Int32Array, faces: number[][], nv: number): Uint8Array {
 	const locked = new Uint8Array(nv);
 	const count = new Uint32Array(nv);
-	for (let u = 0; u < nv; u++) {
-		const fs = faces[u] as number[];
-		for (const f of fs) for (let j = 0; j < 3; j++) count[F[f * 3 + j] as number] = 0;
-		for (const f of fs) for (let j = 0; j < 3; j++) count[F[f * 3 + j] as number] = (count[F[f * 3 + j] as number] as number) + 1;
-		for (const f of fs)
-			for (let j = 0; j < 3; j++) {
-				const w = F[f * 3 + j] as number;
-				if (w !== u && count[w] !== 2) locked[u] = 1;
-			}
-	}
-	// (each point's quadric: its faces' planes', the sum of their squared distances to a point)
+	for (let u = 0; u < nv; u++) if (stays(F, faces[u] as number[], u, count)) locked[u] = 1;
+	return locked;
+}
+
+/** Whether point u stays: a neighbour of it in other than two of its faces fs (count: a slot a point, those of u's neighbours used here). */
+function stays(F: Int32Array, fs: number[], u: number, count: Uint32Array): boolean {
+	for (const f of fs) for (let j = 0; j < 3; j++) count[F[f * 3 + j] as number] = 0;
+	for (const f of fs) for (let j = 0; j < 3; j++) count[F[f * 3 + j] as number] = (count[F[f * 3 + j] as number] as number) + 1;
+	for (const f of fs)
+		for (let j = 0; j < 3; j++) {
+			const w = F[f * 3 + j] as number;
+			if (w !== u && count[w] !== 2) return true;
+		}
+	return false;
+}
+
+/** Each point's quadric: its faces' planes', the sum of their squared distances to a point. */
+function quadrics(P: Float64Array, F: Int32Array, nv: number): Float64Array {
+	const nf = F.length / 3;
 	const Q = new Float64Array(nv * 10);
 	for (let f = 0; f < nf; f++) {
 		const a = F[f * 3] as number;
@@ -161,7 +168,48 @@ export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Ar
 		const q = [x * x, x * y, x * z, x * d, y * y, y * z, y * d, z * z, z * d, d * d];
 		for (const v of [a, b, c]) for (let i = 0; i < 10; i++) Q[v * 10 + i] = (Q[v * 10 + i] as number) + (q[i] as number);
 	}
-	const cost = (u: number, v: number) => {
+	return Q;
+}
+
+/** A welded mesh's points folded away, cheapest first, as long as one folds within the error leaving the mesh whole (step 2): its faces as they are folded,
+ * which are alive. */
+class Folding {
+	readonly alive: Uint8Array;
+	private readonly faces: number[][];
+	private readonly locked: Uint8Array;
+	private readonly Q: Float64Array;
+	private readonly mark: Uint32Array;
+	private stamp = 0;
+	/** u's neighbours as its cheapest fold is looked for, v's, and the faces both have */
+	private readonly nu: number[] = [];
+	private readonly nw: number[] = [];
+	private readonly shared: number[] = [];
+	private readonly cand: [number, number][] = [];
+	private readonly limit: number;
+	private readonly queued: Uint8Array;
+	private readonly dead: Uint8Array;
+	private readonly heap = new Heap();
+
+	constructor(
+		private readonly P: Float64Array,
+		private readonly F: Int32Array,
+		error: number,
+		private readonly longest: number,
+	) {
+		const nv = P.length / 3;
+		this.alive = new Uint8Array(F.length / 3).fill(1);
+		this.faces = pointFaces(F, nv);
+		this.locked = lockedPoints(F, this.faces, nv);
+		this.Q = quadrics(P, F, nv);
+		this.mark = new Uint32Array(nv);
+		this.limit = error * error;
+		this.queued = new Uint8Array(nv);
+		this.dead = new Uint8Array(nv);
+	}
+
+	/** what folding u into v costs: the squared distances of v to both points' planes */
+	private cost(u: number, v: number): number {
+		const { P, Q } = this;
 		const x = P[v * 3] as number;
 		const y = P[v * 3 + 1] as number;
 		const z = P[v * 3 + 2] as number;
@@ -171,51 +219,66 @@ export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Ar
 		return (
 			q(0) * x * x + 2 * q(1) * x * y + 2 * q(2) * x * z + 2 * q(3) * x + q(4) * y * y + 2 * q(5) * y * z + 2 * q(6) * y + q(7) * z * z + 2 * q(8) * z + q(9)
 		);
-	};
-	// (a point's neighbours, into a list reused, marked with a stamp of their own)
-	const mark = new Uint32Array(nv);
-	let stamp = 0;
-	const around = (u: number, out: number[]) => {
+	}
+
+	/** a point's neighbours, into a list reused, marked with a stamp of their own */
+	private around(u: number, out: number[]): number[] {
+		const { F, mark } = this;
 		out.length = 0;
-		stamp++;
-		mark[u] = stamp;
-		for (const f of faces[u] as number[])
+		this.stamp++;
+		mark[u] = this.stamp;
+		for (const f of this.faces[u] as number[])
 			for (let j = 0; j < 3; j++) {
 				const w = F[f * 3 + j] as number;
-				if (mark[w] !== stamp) {
-					mark[w] = stamp;
+				if (mark[w] !== this.stamp) {
+					mark[w] = this.stamp;
 					out.push(w);
 				}
 			}
 		return out;
-	};
-	const nu: number[] = [];
-	const nw: number[] = [];
-	const shared: number[] = [];
+	}
+
 	/** Whether u folds into v leaving the mesh whole: the points both are next to only the faces' across their edge, no face turning over or lying flat, no edge
 	 * longer than longest (nu: u's neighbours). */
-	const folds = (u: number, v: number) => {
+	private folds(u: number, v: number): boolean {
+		const { F, shared } = this;
 		shared.length = 0;
-		for (const f of faces[u] as number[]) if (F[f * 3] === v || F[f * 3 + 1] === v || F[f * 3 + 2] === v) shared.push(f);
+		for (const f of this.faces[u] as number[]) if (F[f * 3] === v || F[f * 3 + 1] === v || F[f * 3 + 2] === v) shared.push(f);
 		if (!shared.length) return false;
-		around(v, nw);
-		stamp++;
-		for (const w of nw) mark[w] = stamp;
+		return this.onlySharedCommon(v) && this.withinLongest(v) && this.noneTurns(u, v);
+	}
+
+	/** whether the points u (nu) and v are both next to are as many as the faces they share */
+	private onlySharedCommon(v: number): boolean {
+		this.around(v, this.nw);
+		this.stamp++;
+		for (const w of this.nw) this.mark[w] = this.stamp;
 		let common = 0;
-		for (const w of nu) if (mark[w] === stamp) common++;
-		if (common !== shared.length) return false;
-		for (const w of nu)
+		for (const w of this.nu) if (this.mark[w] === this.stamp) common++;
+		return common === this.shared.length;
+	}
+
+	/** whether no edge from v to u's other neighbours (nu) is longer than longest */
+	private withinLongest(v: number): boolean {
+		const { P } = this;
+		for (const w of this.nu)
 			if (
 				w !== v &&
 				Math.hypot(
 					(P[v * 3] as number) - (P[w * 3] as number),
 					(P[v * 3 + 1] as number) - (P[w * 3 + 1] as number),
 					(P[v * 3 + 2] as number) - (P[w * 3 + 2] as number),
-				) > longest
+				) > this.longest
 			)
 				return false;
-		for (const f of faces[u] as number[]) {
-			if (shared.includes(f)) continue;
+		return true;
+	}
+
+	/** whether none of u's faces but the shared turns over or lies flat with u at v */
+	private noneTurns(u: number, v: number): boolean {
+		const { P, F } = this;
+		for (const f of this.faces[u] as number[]) {
+			if (this.shared.includes(f)) continue;
 			const a = F[f * 3] as number;
 			const b = F[f * 3 + 1] as number;
 			const c = F[f * 3 + 2] as number;
@@ -224,56 +287,43 @@ export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Ar
 			if (!before || !after || before[0] * after[0] + before[1] * after[1] + before[2] * after[2] < TURN) return false;
 		}
 		return true;
-	};
-	const limit = error * error;
-	const queued = new Uint8Array(nv);
-	const dead = new Uint8Array(nv);
-	const heap = new Heap();
+	}
+
 	/** u's cheapest fold within the error that leaves the mesh whole: its cost, the point it folds into */
-	const cand: [number, number][] = [];
-	const best = (u: number): [number, number] | null => {
-		around(u, nu);
+	private best(u: number): [number, number] | null {
+		const { cand } = this;
+		this.around(u, this.nu);
 		cand.length = 0;
-		for (const v of nu) {
-			const c = cost(u, v);
-			if (c <= limit) cand.push([c, v]);
+		for (const v of this.nu) {
+			const c = this.cost(u, v);
+			if (c <= this.limit) cand.push([c, v]);
 		}
 		cand.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-		for (const c of cand) if (folds(u, c[1])) return c;
+		for (const c of cand) if (this.folds(u, c[1])) return c;
 		return null;
-	};
+	}
+
 	/** u queued at its cheapest fold's cost (what it would cost at least), if it has one and is not queued already */
-	const offer = (u: number) => {
-		if (locked[u] || dead[u] || queued[u]) return;
+	private offer(u: number): void {
+		if (this.locked[u] || this.dead[u] || this.queued[u]) return;
 		let least = Infinity;
-		for (const f of faces[u] as number[])
+		for (const f of this.faces[u] as number[])
 			for (let j = 0; j < 3; j++) {
-				const v = F[f * 3 + j] as number;
-				if (v !== u) least = Math.min(least, cost(u, v));
+				const v = this.F[f * 3 + j] as number;
+				if (v !== u) least = Math.min(least, this.cost(u, v));
 			}
-		if (least > limit) return;
-		heap.push(least, u);
-		queued[u] = 1;
-	};
-	for (let u = 0; u < nv; u++) offer(u);
-	while (heap.size) {
-		const [c, u] = heap.pop();
-		queued[u] = 0;
-		if (dead[u]) continue;
-		// (costs only grow as points fold: one queued at less is costed again and waits its turn; one with no fold left queued again when its neighbours change)
-		const b = best(u);
-		if (!b) continue;
-		if (b[0] > c) {
-			heap.push(b[0], u);
-			queued[u] = 1;
-			continue;
-		}
-		const touched = [...nu];
-		const v = b[1];
-		// (fold u into v; its faces across their edge gone, the rest v's)
+		if (least > this.limit) return;
+		this.heap.push(least, u);
+		this.queued[u] = 1;
+	}
+
+	/** u folded into v: its faces across their edge gone, the rest v's; its neighbours (nu) offered again */
+	private fold(u: number, v: number): void {
+		const { F, Q, faces, alive } = this;
+		const touched = [...this.nu];
 		const vf = faces[v] as number[];
 		for (const f of faces[u] as number[]) {
-			if (shared.includes(f)) {
+			if (this.shared.includes(f)) {
 				alive[f] = 0;
 				continue;
 			}
@@ -283,11 +333,38 @@ export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Ar
 		faces[v] = vf.filter((f) => alive[f]);
 		faces[u] = [];
 		for (let i = 0; i < 10; i++) Q[v * 10 + i] = (Q[v * 10 + i] as number) + (Q[u * 10 + i] as number);
-		dead[u] = 1;
-		for (const w of touched) offer(w);
+		this.dead[u] = 1;
+		for (const w of touched) this.offer(w);
 	}
+
+	/** every point offered, then folded cheapest first until none is left to fold */
+	run(): void {
+		const nv = this.P.length / 3;
+		for (let u = 0; u < nv; u++) this.offer(u);
+		while (this.heap.size) {
+			const [c, u] = this.heap.pop();
+			this.queued[u] = 0;
+			if (this.dead[u]) continue;
+			// (costs only grow as points fold: one queued at less is costed again and waits its turn; one with no fold left queued again when its neighbours change)
+			const b = this.best(u);
+			if (!b) continue;
+			if (b[0] > c) {
+				this.heap.push(b[0], u);
+				this.queued[u] = 1;
+				continue;
+			}
+			this.fold(u, b[1]);
+		}
+	}
+}
+
+/** A welded mesh made coarse (step 2): its faces, on its own points. */
+export function coarsen(mesh: Welded, error: number, longest = LONGEST): Int32Array {
+	const F = Int32Array.from(mesh.F);
+	const folding = new Folding(mesh.P, F, error, longest);
+	folding.run();
 	const out: number[] = [];
-	for (let f = 0; f < nf; f++) if (alive[f]) out.push(F[f * 3] as number, F[f * 3 + 1] as number, F[f * 3 + 2] as number);
+	for (let f = 0; f < F.length / 3; f++) if (folding.alive[f]) out.push(F[f * 3] as number, F[f * 3 + 1] as number, F[f * 3 + 2] as number);
 	return Int32Array.from(out);
 }
 
@@ -385,7 +462,7 @@ export function collisionTiles(solids: Solid[], tile = TILE): DaeMesh[][] {
 				const map = new Map<number, number>();
 				const P: number[] = [];
 				const F: number[] = [];
-				for (const f of fs.sort((a, b) => a - b))
+				for (const f of fs.toSorted((a, b) => a - b))
 					for (let j = 0; j < 3; j++) {
 						const v = p.F[f * 3 + j] as number;
 						let i = map.get(v);

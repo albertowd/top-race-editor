@@ -147,7 +147,7 @@ describe("a GMT made from nothing", () => {
 		const b = writeGmt(g);
 		const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
 		// (as xfinish.gmt: the same counts, so the same places and size)
-		expect(b.length).toBe(1964);
+		expect(b).toHaveLength(1964);
 		expect(dv.getUint32(0, true)).toBe(1516);
 		const table = Array.from({ length: 12 }, (_, i) => dv.getUint32(0x13c + i * 4, true));
 		expect(table).toEqual([4, 0x460, 6, 0x5e0, 1, 0x374, 2, 0x410, 1, 0x450, 0, 0x460]);
@@ -199,8 +199,8 @@ describe.skipIf(!existsSync(MODDEV))("ModDev's GMTs", () => {
 		expect(g.layout).toBe("new");
 		expect(g.bits).toBe(32);
 		expect(g.meshes.map((m) => [m.vertices.length, m.indices.length, m.flags])).toEqual([[4, 6, 0x4080]]);
-		expect(g.faces.length).toBe(2);
-		expect(g.planes.length).toBe(1);
+		expect(g.faces).toHaveLength(2);
+		expect(g.planes).toHaveLength(1);
 		const [m] = g.materials;
 		expect(m?.name).toBe("SWHEEL_TRACKMAP");
 		expect(m?.shaders.map((s) => [s.name, s.textures.map((t) => t.name)])).toEqual([["L2DIFFUSET0", ["SWHEEL_TRACKMAP.DDS"]]]);

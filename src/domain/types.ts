@@ -168,6 +168,8 @@ export interface LayoutObjects {
 	pits: Spot[];
 	/** the hotlap's start (AC_HOTLAP_START_0) */
 	hotlap: Spot | null;
+	/** where rFactor 2's safety car waits for its start (its AIW's AUX spots; none: on the pit lane before its exit, rf2/aiw.ts) */
+	safety_car?: Spot | null;
 	timing: Gate[];
 	/** its racing lines (TRACK_FORMAT's "Racing lines"; editing/lines.ts) */
 	lines?: RacingLines;
@@ -325,7 +327,7 @@ export interface TrackObjects {
 
 /** The kinds of model (the catalogue's): what the sidebar sorts the objects by. */
 export type ModelKind = "cones" | "boards" | "poles" | "tyres" | "trees" | "fences" | "sheds" | "statics" | "gantries" | "karts";
-export type LayoutKind = "grid" | "pits" | "hotlap" | "timing";
+export type LayoutKind = "grid" | "pits" | "hotlap" | "safety_car" | "timing";
 export type TrackKind = "marks" | "rubber" | "areas";
 /** the kinds laid along a curve on the roads: paint marks, rubber marks */
 export type MarkKind = "marks" | "rubber";

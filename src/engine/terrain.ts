@@ -36,8 +36,8 @@ import { pyRound, settingsOf, stamp, writePyJsonFile } from "./trackfiles";
 /** the terrain's folder, from the project's root (terrain.py's TERRAIN) */
 export const TERRAIN = "tools/reference/terrain";
 const EDIT_TYPES = ["raster", "offset", "flat", "smooth"];
-const AREA_KINDS = ["ground", "not_ground"];
-const RASTER_FILE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.npz$/;
+const AREA_KINDS = new Set(["ground", "not_ground"]);
+const RASTER_FILE = /^\w[\w.-]*\.npz$/;
 const TREE_RULES = ["picture_trees", "photo_trees"];
 const FILTER_NUMBERS = ["tree_near_m", "tree_share", "over_m", "opening_m", "wide_over_m", "wide_opening_m", "enough_a_cell"];
 /** the filters' work kept for this many sets of rules */
@@ -67,7 +67,7 @@ const F = (x: number) => new PyNumber(x, pyFloat(x));
 /** Bytes in base64. */
 export function base64Of(b: Uint8Array): string {
 	let s = "";
-	for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+	for (let i = 0; i < b.length; i += 0x8000) s += String.fromCodePoint(...b.subarray(i, i + 0x8000));
 	return btoa(s);
 }
 
@@ -149,7 +149,7 @@ function decodeF4(s: string, count: number): Float64Array {
 	if (t.length % 4) throw new TerrainError("buffer size must be a multiple of element size");
 	if (t.length / 4 !== count) throw new TerrainError(`${t.length / 4} values where ${count} were meant`);
 	const b = new Uint8Array(t.length);
-	for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i);
+	for (let i = 0; i < t.length; i++) b[i] = t.codePointAt(i) as number;
 	return Float64Array.from(new Float32Array(b.buffer));
 }
 
@@ -162,7 +162,7 @@ function rasterIn(r: unknown, what: string): Raster {
 	const [nx, nz] = [bare(r.nx), bare(r.nz)];
 	if (![nx, nz].every((n) => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= MAX_RASTER))
 		throw new TerrainError(`${what}: 1 to ${MAX_RASTER} cells a side`);
-	const d = decodeF4(String(r.d ?? ""), (nx as number) * (nz as number));
+	const d = decodeF4(String((r.d ?? "") as string), (nx as number) * (nz as number));
 	if (!d.every(Number.isFinite)) throw new TerrainError(`${what}: its values all numbers, please`);
 	return { x0, z0, cell, d: grid(nz as number, nx as number, d) };
 }
@@ -196,7 +196,7 @@ function filtersIn(f: unknown): J {
 	const areas = "areas" in f ? f.areas : [];
 	if (!Array.isArray(areas)) throw new TerrainError("the areas: a list, please");
 	out.areas = areas.map((a, i) => {
-		if (!isDict(a) || !AREA_KINDS.includes(bare(a.kind) as string)) throw new TerrainError(`area ${i + 1}: its kind ground or not_ground, please`);
+		if (!isDict(a) || !AREA_KINDS.has(bare(a.kind) as string)) throw new TerrainError(`area ${i + 1}: its kind ground or not_ground, please`);
 		return {
 			...(copyOf(a) as J),
 			name: pyStr(truthy(a.name) ? a.name : `area ${i + 1}`),
@@ -216,24 +216,35 @@ function editIn(e: unknown, i: number, rasters: Map<string, Raster>): J {
 		if (typeof e.off !== "boolean") throw new TerrainError(`${what}: off true or false, please`);
 		if (!e.off) delete out.off;
 	}
+	if (e.type === "raster") rasterEditIn(e, what, rasters);
+	else ringEditIn(e, what, out);
+	return out;
+}
+
+/** A raster edit's file checked; its raster kept by it where it came with data. */
+function rasterEditIn(e: Record<string, unknown>, what: string, rasters: Map<string, Raster>) {
+	if (typeof e.file !== "string" || !RASTER_FILE.test(e.file)) throw new TerrainError(`${what}: its file a plain name ending .npz, please`);
+	if ("data" in e) rasters.set(e.file, rasterIn(e.data, what));
+}
+
+/** An edit over a ring (offset, flat, smooth) checked into out: its ring, its ease and what it does there. */
+function ringEditIn(e: Record<string, unknown>, what: string, out: J) {
 	const t = e.type;
-	if (t === "raster") {
-		if (typeof e.file !== "string" || !RASTER_FILE.test(e.file)) throw new TerrainError(`${what}: its file a plain name ending .npz, please`);
-		if ("data" in e) rasters.set(e.file, rasterIn(e.data, what));
-		return out;
-	}
 	out.ring = ring(e.ring, what);
 	out.ease_m = F(num("ease_m" in e ? e.ease_m : 0, `${what}'s ease_m`, 0));
 	if (t === "offset") out.by = F(num(e.by, `${what}'s by`));
-	else if (t === "flat") {
-		if ("at" in e) {
-			out.at = pair(e.at, `${what}'s at`).map(F);
-			out.plus = F(num("plus" in e ? e.plus : 0, `${what}'s plus`));
-			delete out.height;
-		} else out.height = F(num(e.height, `${what}'s height`));
-		if ("slope" in e) out.slope = pair(e.slope, `${what}'s slope`).map(F);
-	} else out.sigma_m = F(num(e.sigma_m, `${what}'s sigma_m`, undefined, 0));
-	return out;
+	else if (t === "flat") flatEditIn(e, what, out);
+	else out.sigma_m = F(num(e.sigma_m, `${what}'s sigma_m`, undefined, 0));
+}
+
+/** A flat edit's own checked into out: its height (or a point's height and plus), its slope. */
+function flatEditIn(e: Record<string, unknown>, what: string, out: J) {
+	if ("at" in e) {
+		out.at = pair(e.at, `${what}'s at`).map(F);
+		out.plus = F(num("plus" in e ? e.plus : 0, `${what}'s plus`));
+		delete out.height;
+	} else out.height = F(num(e.height, `${what}'s height`));
+	if ("slope" in e) out.slope = pair(e.slope, `${what}'s slope`).map(F);
 }
 
 /** A terrain's description checked (check): as it is saved (its rasters' data out of it), and the rasters that came with data (not saved
@@ -284,22 +295,26 @@ const fromRoot = (project: string, p: string) => (absolute(p) ? p : `${project}/
 export function imageSize(b: Uint8Array): [number, number] | null {
 	const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
 	if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return [dv.getUint32(16), dv.getUint32(20)];
-	if (b[0] === 0xff && b[1] === 0xd8) {
-		let p = 2;
-		while (p + 9 < b.length) {
-			if (b[p] !== 0xff) {
-				p++;
-				continue;
-			}
-			const marker = b[p + 1] as number;
-			// (a start of frame, any kind but the DHT, JPG and DAC markers among them)
-			if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return [dv.getUint16(p + 7), dv.getUint16(p + 5)];
-			if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
-				p += 2;
-				continue;
-			}
-			p += 2 + dv.getUint16(p + 2);
+	if (b[0] === 0xff && b[1] === 0xd8) return jpegSize(b, dv);
+	return null;
+}
+
+/** A JPEG's size from its start of frame, its markers walked from the first after its start of image: [width, height], null if it has none. */
+function jpegSize(b: Uint8Array, dv: DataView): [number, number] | null {
+	let p = 2;
+	while (p + 9 < b.length) {
+		if (b[p] !== 0xff) {
+			p++;
+			continue;
 		}
+		const marker = b[p + 1] as number;
+		// (a start of frame, any kind but the DHT, JPG and DAC markers among them)
+		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return [dv.getUint16(p + 7), dv.getUint16(p + 5)];
+		if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+			p += 2;
+			continue;
+		}
+		p += 2 + dv.getUint16(p + 2);
 	}
 	return null;
 }
@@ -426,27 +441,7 @@ export async function terrainLayers(host: PlaceHost, project: string, given?: un
 	if (w.has("ground") || w.has("change")) {
 		const { G, Xg, Zg } = await groundGrid(host, project, c, L);
 		if (w.has("ground")) grids.ground = gridOut(G, Xg[0] as number, Zg[0] as number, GROUND_CELL);
-		if (w.has("change")) {
-			const base = sampler(L.filtered, c.doc, 3);
-			const C = new Float64Array(G.data.length);
-			let [i0, i1, j0, j1] = [Infinity, -Infinity, Infinity, -Infinity];
-			for (let i = 0; i < Zg.length; i++)
-				for (let j = 0; j < Xg.length; j++) {
-					const k = i * Xg.length + j;
-					C[k] = (G.data[k] as number) - base(Xg[j] as number, Zg[i] as number);
-					if (Math.abs(C[k] as number) > 1e-4) {
-						i0 = Math.min(i0, i);
-						i1 = Math.max(i1, i + 1);
-						j0 = Math.min(j0, j);
-						j1 = Math.max(j1, j + 1);
-					}
-				}
-			if (i1 > i0) {
-				const cut = grid(i1 - i0, j1 - j0);
-				for (let i = i0; i < i1; i++) cut.data.set(C.subarray(i * Xg.length + j0, i * Xg.length + j1), (i - i0) * cut.cols);
-				grids.change = gridOut(cut, Xg[j0] as number, Zg[i0] as number, GROUND_CELL);
-			} else grids.change = null;
-		}
+		if (w.has("change")) grids.change = changeGrid(G, Xg, Zg, sampler(L.filtered, c.doc, 3));
 	}
 	const out: Record<string, unknown> = { grids };
 	if (w.has("points")) {
@@ -462,6 +457,27 @@ export async function terrainLayers(host: PlaceHost, project: string, given?: un
 	}
 	out.seconds = pyRound((performance.now() - t0) / 1000, 3);
 	return out;
+}
+
+/** The ground less the filtered heights (base), cut to where the edits change it, as the page reads it; null where they change nothing. */
+function changeGrid(G: Grid, Xg: ArrayLike<number>, Zg: ArrayLike<number>, base: (x: number, z: number) => number) {
+	const C = new Float64Array(G.data.length);
+	let [i0, i1, j0, j1] = [Infinity, -Infinity, Infinity, -Infinity];
+	for (let i = 0; i < Zg.length; i++)
+		for (let j = 0; j < Xg.length; j++) {
+			const k = i * Xg.length + j;
+			C[k] = (G.data[k] as number) - base(Xg[j] as number, Zg[i] as number);
+			if (Math.abs(C[k] as number) > 1e-4) {
+				i0 = Math.min(i0, i);
+				i1 = Math.max(i1, i + 1);
+				j0 = Math.min(j0, j);
+				j1 = Math.max(j1, j + 1);
+			}
+		}
+	if (i1 <= i0) return null;
+	const cut = grid(i1 - i0, j1 - j0);
+	for (let i = i0; i < i1; i++) cut.data.set(C.subarray(i * Xg.length + j0, i * Xg.length + j1), (i - i0) * cut.cols);
+	return gridOut(cut, Xg[j0] as number, Zg[i0] as number, GROUND_CELL);
 }
 
 // ---- saved -------------------------------------------------------------------------------------------------------
@@ -492,7 +508,7 @@ async function backupTerrain(files: HostFiles, project: string, backups: string,
 /** A path as relpath from the root gives it ('.' and '..' taken out, '/' between). */
 const normal = (p: string) => {
 	const out: string[] = [];
-	for (const s of p.replace(/\\/g, "/").split("/"))
+	for (const s of p.replaceAll("\\", "/").split("/"))
 		if (s === "..") out.pop();
 		else if (s && s !== ".") out.push(s);
 	return out.join("/");

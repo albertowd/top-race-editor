@@ -20,7 +20,7 @@ export function hull(P: ArrayLike<number>): number[] {
 	const chain = (list: P2[]) => {
 		const out: P2[] = [];
 		for (const p of list) {
-			while (out.length >= 2 && cross(out[out.length - 2] as P2, out[out.length - 1] as P2, p) <= 0) out.pop();
+			while (out.length >= 2 && cross(out.at(-2) as P2, out.at(-1) as P2, p) <= 0) out.pop();
 			out.push(p);
 		}
 		return out;
@@ -34,7 +34,7 @@ export function hull(P: ArrayLike<number>): number[] {
 export async function footprintOf(files: HostFiles, path: string, library?: MaterialLibrary, textures?: string): Promise<number[][]> {
 	const size = await files.size(path);
 	const was = kept.get(path);
-	if (was && was.size === size) return was.rings;
+	if (was?.size === size) return was.rings;
 	const k = await loadKn5(files, path, library, textures);
 	const rings: number[][] = [];
 	for (const [n, m] of meshes(k)) {

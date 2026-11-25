@@ -155,7 +155,8 @@ export function treeShare(lum: Grey, both: boolean, lumMax: number, sdMax: numbe
 		const spread = Math.sqrt(Math.max((sq.data[i] as number) - m * m, 0));
 		const dark = m < lumMax;
 		const rough = spread > sdMax;
-		tree.data[i] = (both ? rough && dark : rough || dark) ? 1 : 0;
+		const isTree = both ? rough && dark : rough || dark;
+		tree.data[i] = isTree ? 1 : 0;
 	}
 	return uniformFilter(tree, Math.trunc(2 * near) + 1);
 }
@@ -321,7 +322,8 @@ export function sampler(G: Grid, doc: TerrainDoc, order: 1 | 3 = 3): Height {
 /** 1 inside the ring, easing to 0 over ease metres out of it. */
 function weight(ring: number[][], ease: number, x: number, z: number): number {
 	const d = distance(ring as Ring, x, z);
-	return ease > 0 ? 1 - smoothstep(d / ease) : d <= 0 ? 1 : 0;
+	if (ease > 0) return 1 - smoothstep(d / ease);
+	return d <= 0 ? 1 : 0;
 }
 
 /** A raster edit's values: metres added on a grid from x0, z0 (rows along z), cell metres a side. */
@@ -360,6 +362,51 @@ function ringBox(ring: number[][], ease: number): Box {
 	};
 }
 
+/** A raster edit's step, its values read from its file. */
+async function rasterFileStep(e: Extract<Edit, { type: "raster" }>, src: PlaceSource): Promise<Step> {
+	const d = await readNpz(await src.read(`${src.folder}/${e.file}`));
+	const D = d.d;
+	if (!D) throw new Error(`${e.file}: no d`);
+	const on = onRaster({
+		x0: d.x0?.data[0] as number,
+		z0: d.z0?.data[0] as number,
+		cell: d.cell?.data[0] as number,
+		d: grid(D.shape[0] as number, D.shape[1] as number, D.data),
+	});
+	return { box: on.box, apply: (y, x, z) => y + on.at(x, z) };
+}
+
+/** A flat edit's step: to a height (given, or the ground's at a point plus some), sloping as it says, eased metres out of its ring. */
+function flatStep(e: Extract<Edit, { type: "flat" }>, ease: number, before: Height): Step {
+	const a = e.at ?? [0, 0];
+	const h0 = e.at ? before(a[0], a[1]) + (e.plus ?? 0) : (e.height ?? 0);
+	const [gx, gz] = e.slope ?? [0, 0];
+	return {
+		box: ringBox(e.ring, ease),
+		apply: (y, x, z) => y + (h0 + gx * (x - a[0]) + gz * (z - a[1]) - y) * weight(e.ring, ease, x, z),
+	};
+}
+
+/** A smooth edit's step: the ground before it blurred over sigma metres, as a raster of the change, weighted to the ring eased metres out. */
+function smoothStep(e: Extract<Edit, { type: "smooth" }>, ease: number, before: Height): Step {
+	const s = e.sigma_m;
+	const xs = e.ring.map((p) => p[0] as number);
+	const zs = e.ring.map((p) => p[1] as number);
+	const X = arange(Math.min(...xs) - ease - 3 * s, Math.max(...xs) + ease + 3 * s + SMOOTH_CELL, SMOOTH_CELL);
+	const Z = arange(Math.min(...zs) - ease - 3 * s, Math.max(...zs) + ease + 3 * s + SMOOTH_CELL, SMOOTH_CELL);
+	const Y = grid(Z.length, X.length);
+	for (let i = 0; i < Z.length; i++) for (let j = 0; j < X.length; j++) Y.data[i * X.length + j] = before(X[j] as number, Z[i] as number);
+	const B = gaussianFilter(Y, s / SMOOTH_CELL, "nearest");
+	const D = grid(Y.rows, Y.cols);
+	for (let i = 0; i < Z.length; i++)
+		for (let j = 0; j < X.length; j++) {
+			const k = i * X.length + j;
+			D.data[k] = ((B.data[k] as number) - (Y.data[k] as number)) * weight(e.ring, ease, X[j] as number, Z[i] as number);
+		}
+	const on = onRaster({ x0: X[0] as number, z0: Z[0] as number, cell: SMOOTH_CELL, d: D });
+	return { box: on.box, apply: (y, x, z) => y + on.at(x, z) };
+}
+
 /** One edit as a step, on the ground the steps before it make (before: that ground's height, for the edits that read it as they are made: a flat at a point, a
  * smooth); a raster edit's values given (not saved yet), or from its file. */
 export async function step(e: Edit, before: Height, src: PlaceSource, given?: Raster): Promise<Step> {
@@ -367,47 +414,11 @@ export async function step(e: Edit, before: Height, src: PlaceSource, given?: Ra
 		const on = onRaster(given);
 		return { box: on.box, apply: (y, x, z) => y + on.at(x, z) };
 	}
-	if (e.type === "raster") {
-		const d = await readNpz(await src.read(`${src.folder}/${e.file}`));
-		const D = d.d;
-		if (!D) throw new Error(`${e.file}: no d`);
-		const on = onRaster({
-			x0: d.x0?.data[0] as number,
-			z0: d.z0?.data[0] as number,
-			cell: d.cell?.data[0] as number,
-			d: grid(D.shape[0] as number, D.shape[1] as number, D.data),
-		});
-		return { box: on.box, apply: (y, x, z) => y + on.at(x, z) };
-	}
+	if (e.type === "raster") return rasterFileStep(e, src);
 	const ease = e.ease_m ?? 0;
 	if (e.type === "offset") return { box: ringBox(e.ring, ease), apply: (y, x, z) => y + e.by * weight(e.ring, ease, x, z) };
-	if (e.type === "flat") {
-		const a = e.at ?? [0, 0];
-		const h0 = e.at ? before(a[0], a[1]) + (e.plus ?? 0) : (e.height ?? 0);
-		const [gx, gz] = e.slope ?? [0, 0];
-		return {
-			box: ringBox(e.ring, ease),
-			apply: (y, x, z) => y + (h0 + gx * (x - a[0]) + gz * (z - a[1]) - y) * weight(e.ring, ease, x, z),
-		};
-	}
-	if (e.type === "smooth") {
-		const s = e.sigma_m;
-		const xs = e.ring.map((p) => p[0] as number);
-		const zs = e.ring.map((p) => p[1] as number);
-		const X = arange(Math.min(...xs) - ease - 3 * s, Math.max(...xs) + ease + 3 * s + SMOOTH_CELL, SMOOTH_CELL);
-		const Z = arange(Math.min(...zs) - ease - 3 * s, Math.max(...zs) + ease + 3 * s + SMOOTH_CELL, SMOOTH_CELL);
-		const Y = grid(Z.length, X.length);
-		for (let i = 0; i < Z.length; i++) for (let j = 0; j < X.length; j++) Y.data[i * X.length + j] = before(X[j] as number, Z[i] as number);
-		const B = gaussianFilter(Y, s / SMOOTH_CELL, "nearest");
-		const D = grid(Y.rows, Y.cols);
-		for (let i = 0; i < Z.length; i++)
-			for (let j = 0; j < X.length; j++) {
-				const k = i * X.length + j;
-				D.data[k] = ((B.data[k] as number) - (Y.data[k] as number)) * weight(e.ring, ease, X[j] as number, Z[i] as number);
-			}
-		const on = onRaster({ x0: X[0] as number, z0: Z[0] as number, cell: SMOOTH_CELL, d: D });
-		return { box: on.box, apply: (y, x, z) => y + on.at(x, z) };
-	}
+	if (e.type === "flat") return flatStep(e, ease, before);
+	if (e.type === "smooth") return smoothStep(e, ease, before);
 	throw new Error(`an edit of no type known: ${JSON.stringify((e as { type: unknown }).type)}`);
 }
 

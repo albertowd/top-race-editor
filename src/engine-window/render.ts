@@ -195,22 +195,33 @@ function times(a: M4, b: M4): M4 {
 function inverse(m: M4): M4 {
 	const a = Array.from({ length: 4 }, (_, r) => Array.from({ length: 8 }, (_, c) => (c < 4 ? (m[c * 4 + r] as number) : +(c - 4 === r))));
 	for (let c = 0; c < 4; c++) {
-		let p = c;
-		for (let r = c + 1; r < 4; r++) if (Math.abs((a[r] as number[])[c] as number) > Math.abs((a[p] as number[])[c] as number)) p = r;
+		const p = pivotRow(a, c);
 		[a[c], a[p]] = [a[p] as number[], a[c] as number[]];
 		const row = a[c] as number[];
 		const d = (row[c] as number) || 1e-12;
 		for (let k = 0; k < 8; k++) row[k] = (row[k] as number) / d;
-		for (let r = 0; r < 4; r++) {
-			if (r === c) continue;
-			const o = a[r] as number[];
-			const f = o[c] as number;
-			for (let k = 0; k < 8; k++) o[k] = (o[k] as number) - f * (row[k] as number);
-		}
+		eliminate(a, c, row);
 	}
 	const out = new Float32Array(16);
 	for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) out[c * 4 + r] = (a[r] as number[])[4 + c] as number;
 	return out;
+}
+
+/** The row, from c down, of the largest value (by its size) in column c: the first of them where two are as large. */
+function pivotRow(a: number[][], c: number): number {
+	let p = c;
+	for (let r = c + 1; r < 4; r++) if (Math.abs((a[r] as number[])[c] as number) > Math.abs((a[p] as number[])[c] as number)) p = r;
+	return p;
+}
+
+/** Column c of every other row made 0 by taking row c (its value there 1) from it. */
+function eliminate(a: number[][], c: number, row: number[]): void {
+	for (let r = 0; r < 4; r++) {
+		if (r === c) continue;
+		const o = a[r] as number[];
+		const f = o[c] as number;
+		for (let k = 0; k < 8; k++) o[k] = (o[k] as number) - f * (row[k] as number);
+	}
 }
 
 // ---- the models on the GPU -----------------------------------------------------------------------------------------
@@ -270,24 +281,7 @@ async function decode(data: Uint8Array): Promise<{ rgba: Uint8Array; w: number; 
 	if (dds) return { rgba: dds.data, w: dds.width, h: dds.height };
 	if (isPng(data)) {
 		try {
-			let p = convert(await readPng(data), "RGBA");
-			let rgba = p.data;
-			let [w, h] = [p.width, p.height];
-			while (Math.max(w, h) > MAX_TEXTURE) {
-				const nw = Math.max(1, w >> 1);
-				const nh = Math.max(1, h >> 1);
-				const half = new Uint8Array(nw * nh * 4);
-				for (let y = 0; y < nh; y++)
-					for (let x = 0; x < nw; x++)
-						for (let c = 0; c < 4; c++) {
-							const at = (yy: number, xx: number) => rgba[(Math.min(yy, h - 1) * w + Math.min(xx, w - 1)) * 4 + c] as number;
-							half[(y * nw + x) * 4 + c] = (at(2 * y, 2 * x) + at(2 * y, 2 * x + 1) + at(2 * y + 1, 2 * x) + at(2 * y + 1, 2 * x + 1)) >> 2;
-						}
-				rgba = half;
-				[w, h] = [nw, nh];
-			}
-			p = { width: w, height: h, mode: "RGBA", data: rgba };
-			return { rgba: p.data, w, h };
+			return await pngPixels(data);
 		} catch {
 			// (one this reader cannot: the browser's)
 		}
@@ -309,6 +303,32 @@ async function decode(data: Uint8Array): Promise<{ rgba: Uint8Array; w: number; 
 	g.drawImage(bmp, 0, 0, w, h);
 	bmp.close();
 	return { rgba: new Uint8Array(g.getImageData(0, 0, w, h).data.buffer), w, h };
+}
+
+/** A PNG's pixels (RGBA), its colour kept where it is see-through, made half as large until no side is over MAX_TEXTURE. */
+async function pngPixels(data: Uint8Array): Promise<{ rgba: Uint8Array; w: number; h: number }> {
+	const p = convert(await readPng(data), "RGBA");
+	let rgba = p.data;
+	let [w, h] = [p.width, p.height];
+	while (Math.max(w, h) > MAX_TEXTURE) {
+		rgba = halved(rgba, w, h);
+		[w, h] = [Math.max(1, w >> 1), Math.max(1, h >> 1)];
+	}
+	return { rgba, w, h };
+}
+
+/** Pixels (RGBA, w by h) half as large each way (a side of one kept), each the mean of the four it covers. */
+function halved(rgba: Uint8Array, w: number, h: number): Uint8Array {
+	const nw = Math.max(1, w >> 1);
+	const nh = Math.max(1, h >> 1);
+	const half = new Uint8Array(nw * nh * 4);
+	for (let y = 0; y < nh; y++)
+		for (let x = 0; x < nw; x++)
+			for (let c = 0; c < 4; c++) {
+				const at = (yy: number, xx: number) => rgba[(Math.min(yy, h - 1) * w + Math.min(xx, w - 1)) * 4 + c] as number;
+				half[(y * nw + x) * 4 + c] = (at(2 * y, 2 * x) + at(2 * y, 2 * x + 1) + at(2 * y + 1, 2 * x) + at(2 * y + 1, 2 * x + 1)) >> 2;
+			}
+	return half;
 }
 
 /** A texture of a picture's bytes, and the mean colour of a few of its pixels. */
@@ -389,7 +409,7 @@ async function lookOf(m: Kn5Material, tex: (name: string | undefined) => Promise
 		mask = await tex(slot("txMask"));
 		details = await Promise.all(["R", "G", "B", "A"].map((c) => tex(slot(`txDetail${c}`))));
 		mult = ["multR", "multG", "multB", "multA"].map((p) => prop(m, p, 1)) as Look["mult"];
-		if (mask && details.every((d) => d)) detail = 2;
+		if (mask && details.every(Boolean)) detail = 2;
 	} else if (prop(m, "useDetail", 0) > 0 && slot("txDetail")) {
 		details = [await tex(slot("txDetail"))];
 		mult = [prop(m, "detailUVMultiplier", 1), 1, 1, 1];
@@ -495,6 +515,8 @@ function trisOf(p: NonNullable<Part["from"]>, x0: number, z0: number, side: numb
 	return { P: new Float32Array(P), ...(uv ? { UV: new Float32Array(U) } : {}) };
 }
 
+type Pixels = { rgba: Uint8Array; w: number; h: number };
+
 /** The grass of a shot (rendergrass.ts) on the GPU, of the parts it draws: none where it asks for none, the track grows none or none grows there. */
 async function grassOf(
 	gl: GL,
@@ -502,32 +524,12 @@ async function grassOf(
 	seen: Part[],
 	shot: Shot,
 	blades: Texture,
-	pictures: Map<Uint8Array, Promise<{ rgba: Uint8Array; w: number; h: number } | null>>,
+	pictures: Map<Uint8Array, Promise<Pixels | null>>,
 ): Promise<Part | null> {
 	const cfg = scene.grass;
 	if (!cfg || !shot.grass) return null;
 	const { at, radius } = shot.grass;
-	const x0 = at[0] - radius;
-	const z0 = at[1] - radius;
-	const near = (p: Part) => Math.hypot(p.centre[0] - at[0], p.centre[2] - at[1]) < radius + p.radius;
-	const ground: { tris: Tris; colourAt: (u: number, v: number) => V3 }[] = [];
-	const over: Tris[] = [];
-	for (const p of seen) {
-		if (!p.from || !near(p)) continue;
-		if (cfg.meshes.includes(p.from.name) && p.from.picture) {
-			const bytes = p.from.picture;
-			if (!pictures.has(bytes)) pictures.set(bytes, decode(bytes));
-			const pic = await pictures.get(bytes);
-			if (!pic) continue;
-			const colourAt = (u: number, v: number): V3 => {
-				const x = Math.min(pic.w - 1, Math.floor((u - Math.floor(u)) * pic.w));
-				const y = Math.min(pic.h - 1, Math.floor((v - Math.floor(v)) * pic.h));
-				const i = (y * pic.w + x) * 4;
-				return [srgbToLinear(pic.rgba[i] as number), srgbToLinear(pic.rgba[i + 1] as number), srgbToLinear(pic.rgba[i + 2] as number)];
-			};
-			ground.push({ tris: trisOf(p.from, x0, z0, 2 * radius, true), colourAt });
-		} else if (cfg.occluding.includes(p.from.material)) over.push(trisOf(p.from, x0, z0, 2 * radius, false));
-	}
+	const { ground, over } = await groundOf(cfg, seen, pictures, at, radius);
 	if (!ground.length) return null;
 	const made = grassAround(ground, over, at, radius);
 	if (!made.clumps) return null;
@@ -558,6 +560,47 @@ async function grassOf(
 	};
 }
 
+/** What the grass of a shot grows on, of the parts it draws near enough (round at, so many metres): the meshes it grows on, each with its colour picture's
+ * colour, and those that keep it off. */
+async function groundOf(
+	cfg: NonNullable<TrackScene["grass"]>,
+	seen: Part[],
+	pictures: Map<Uint8Array, Promise<Pixels | null>>,
+	at: [number, number],
+	radius: number,
+): Promise<{ ground: { tris: Tris; colourAt: (u: number, v: number) => V3 }[]; over: Tris[] }> {
+	const x0 = at[0] - radius;
+	const z0 = at[1] - radius;
+	const near = (p: Part) => Math.hypot(p.centre[0] - at[0], p.centre[2] - at[1]) < radius + p.radius;
+	const ground: { tris: Tris; colourAt: (u: number, v: number) => V3 }[] = [];
+	const over: Tris[] = [];
+	for (const p of seen) {
+		if (!p.from || !near(p)) continue;
+		if (cfg.meshes.includes(p.from.name) && p.from.picture) {
+			const pic = await pictureOf(pictures, p.from.picture);
+			if (!pic) continue;
+			ground.push({ tris: trisOf(p.from, x0, z0, 2 * radius, true), colourAt: colourIn(pic) });
+		} else if (cfg.occluding.includes(p.from.material)) over.push(trisOf(p.from, x0, z0, 2 * radius, false));
+	}
+	return { ground, over };
+}
+
+/** A picture's pixels, read once for every shot. */
+function pictureOf(pictures: Map<Uint8Array, Promise<Pixels | null>>, bytes: Uint8Array): Promise<Pixels | null> | undefined {
+	if (!pictures.has(bytes)) pictures.set(bytes, decode(bytes));
+	return pictures.get(bytes);
+}
+
+/** A picture's colour (linear) at a point of it (u, v), the picture repeated. */
+function colourIn(pic: Pixels): (u: number, v: number) => V3 {
+	return (u: number, v: number): V3 => {
+		const x = Math.min(pic.w - 1, Math.floor((u - Math.floor(u)) * pic.w));
+		const y = Math.min(pic.h - 1, Math.floor((v - Math.floor(v)) * pic.h));
+		const i = (y * pic.w + x) * 4;
+		return [srgbToLinear(pic.rgba[i] as number), srgbToLinear(pic.rgba[i + 1] as number), srgbToLinear(pic.rgba[i + 2] as number)];
+	};
+}
+
 // ---- drawing -------------------------------------------------------------------------------------------------------
 
 /** A program drawn with from now on (GL's useProgram, which is no React hook). */
@@ -583,13 +626,9 @@ function program(gl: GL, vs: string, fs: string): WebGLProgram {
 	return p;
 }
 
-/** The shots of a scene, each its picture's bytes (PNG or JPEG as it asks). */
-export async function render(scene: TrackScene, shots: Shot[]): Promise<Uint8Array[]> {
-	if (!shots.length) return [];
-	const big = Math.max(...shots.map((s) => Math.max(s.size[0], s.size[1]))) * K;
-	const canvas = new OffscreenCanvas(big, big);
-	const gl = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true, alpha: false }) as GL | null;
-	if (!gl) throw new Error("no WebGL 2 here to render the track with");
+/** What the shots are drawn with: the GL, its programs (the models', the shadows', the sky's), a white picture for a material's missing one, and the shadows'
+ * map (depth, compared as it is read) with its framebuffer. */
+function drawingOf(gl: GL) {
 	const main = program(gl, MAIN_VS, MAIN_FS);
 	const shade = program(gl, SHADOW_VS, SHADOW_FS);
 	const sky = program(gl, SKY_VS, SKY_FS);
@@ -611,51 +650,175 @@ export async function render(scene: TrackScene, shots: Shot[]): Promise<Uint8Arr
 	gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depth, 0);
 	gl.drawBuffers([gl.NONE]);
 	gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	return { gl, main, shade, sky, white, depth, fb };
+}
+
+type Drawing = ReturnType<typeof drawingOf>;
+
+const loc = (d: Drawing, p: WebGLProgram, n: string) => d.gl.getUniformLocation(p, n);
+
+/** A texture bound to a unit: the white one where there is none. */
+function bindTex(d: Drawing, unit: number, t: Texture | null | undefined): void {
+	d.gl.activeTexture(d.gl.TEXTURE0 + unit);
+	d.gl.bindTexture(d.gl.TEXTURE_2D, t?.t ?? d.white);
+}
+
+/** The parts drawn where AC would draw them from this far (from eye), by their distances. */
+const seenFrom = (drawn: Part[], eye: V3) =>
+	drawn.filter((p) => {
+		const d = Math.hypot(...sub(p.centre, eye));
+		return d + p.radius >= p.lod[0] && (!p.lod[1] || d - p.radius <= p.lod[1]);
+	});
+
+/** The shadows' map of a shot: the solid parts as the sun sees them (light). */
+function drawShadows(d: Drawing, seen: Part[], light: M4): void {
+	const { gl, shade } = d;
+	gl.bindFramebuffer(gl.FRAMEBUFFER, d.fb);
+	gl.viewport(0, 0, SHADOW, SHADOW);
+	gl.enable(gl.DEPTH_TEST);
+	gl.depthMask(true);
+	gl.disable(gl.CULL_FACE);
+	gl.clear(gl.DEPTH_BUFFER_BIT);
+	gl.enable(gl.POLYGON_OFFSET_FILL);
+	gl.polygonOffset(1.5, 3);
+	bindProgram(gl, shade);
+	gl.uniformMatrix4fv(loc(d, shade, "uLight"), false, light);
+	gl.uniform1i(loc(d, shade, "tDiffuse"), 0);
+	for (const p of seen) {
+		if (p.look.blend) continue;
+		gl.uniformMatrix4fv(loc(d, shade, "uModel"), false, p.model);
+		gl.uniform1f(loc(d, shade, "uCut"), p.look.cut);
+		bindTex(d, 0, p.look.diffuse);
+		gl.bindVertexArray(p.vao);
+		gl.drawElements(gl.TRIANGLES, p.count, p.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+	}
+	gl.disable(gl.POLYGON_OFFSET_FILL);
+}
+
+/** The sky of a shot, over the whole picture (view its camera's). */
+function drawSky(d: Drawing, view: M4): void {
+	const { gl, sky } = d;
+	gl.disable(gl.DEPTH_TEST);
+	bindProgram(gl, sky);
+	gl.uniformMatrix4fv(loc(d, sky, "uInverse"), false, inverse(view));
+	gl.uniform3fv(loc(d, sky, "uTop"), SKY_TOP);
+	gl.uniform3fv(loc(d, sky, "uLow"), SKY_LOW);
+	gl.bindVertexArray(null);
+	gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/** The models' program made ready for a shot: its camera (view), its sun and its shadows' map (light, round the target r metres), its light and haze. */
+function readyMain(d: Drawing, shot: Shot, view: M4, light: M4, r: number): void {
+	const { gl, main } = d;
+	gl.enable(gl.DEPTH_TEST);
+	bindProgram(gl, main);
+	gl.uniformMatrix4fv(loc(d, main, "uView"), false, view);
+	gl.uniformMatrix4fv(loc(d, main, "uLight"), false, light);
+	gl.uniform3fv(loc(d, main, "uEye"), shot.eye);
+	gl.uniform3fv(loc(d, main, "uSun"), shot.sun);
+	gl.uniform3fv(
+		loc(d, main, "uSunColour"),
+		SUN.map((c) => c * 1.15),
+	);
+	gl.uniform3fv(
+		loc(d, main, "uAmbient"),
+		AMBIENT.map((c) => c * 0.3),
+	);
+	gl.uniform3fv(loc(d, main, "uSkyLow"), SKY_LOW);
+	gl.uniform1f(loc(d, main, "uHaze"), 1 / 9000);
+	gl.uniform1f(loc(d, main, "uTexel"), 1 / SHADOW);
+	// (a texel and a half of the sun's map, in its depth's range)
+	gl.uniform1f(loc(d, main, "uBias"), (((2 * r) / SHADOW) * 1.5) / (r * 6 - 1));
+	["tDiffuse", "tMask", "tDetail0", "tDetail1", "tDetail2", "tDetail3"].forEach((n, i) => {
+		gl.uniform1i(loc(d, main, n), i);
+	});
+	gl.uniform1i(loc(d, main, "tShadow"), 6);
+	gl.activeTexture(gl.TEXTURE6);
+	gl.bindTexture(gl.TEXTURE_2D, d.depth);
+}
+
+/** A part drawn with the models' program, as its material looks. */
+function drawPart(d: Drawing, p: Part): void {
+	const { gl, main } = d;
+	const l = p.look;
+	gl.uniformMatrix4fv(loc(d, main, "uModel"), false, p.model);
+	bindTex(d, 0, l.diffuse);
+	bindTex(d, 1, l.mask);
+	for (let i = 0; i < 4; i++) bindTex(d, 2 + i, l.details[i]);
+	gl.uniform1i(loc(d, main, "uDetail"), l.detail);
+	gl.uniform4fv(loc(d, main, "uMult"), l.mult);
+	for (let i = 0; i < 4; i++) gl.uniform3fv(loc(d, main, `uMean${i}`), l.details[i]?.mean ?? [1, 1, 1]);
+	gl.uniform1f(loc(d, main, "uCut"), l.cut);
+	gl.uniform1f(loc(d, main, "uBlend"), l.blend ? 1 : 0);
+	gl.uniform1f(loc(d, main, "uKa"), l.ka);
+	gl.uniform1f(loc(d, main, "uKd"), l.kd);
+	gl.uniform1f(loc(d, main, "uKs"), l.ks);
+	gl.uniform1f(loc(d, main, "uExp"), l.exp);
+	gl.uniform1i(loc(d, main, "uTinted"), l.tinted ? 1 : 0);
+	gl.bindVertexArray(p.vao);
+	gl.drawElements(gl.TRIANGLES, p.count, p.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
+}
+
+/** A shot's grass drawn (where the track grows it, blades its blades' picture), and let go of. */
+async function drawGrass(
+	d: Drawing,
+	scene: TrackScene,
+	seen: Part[],
+	shot: Shot,
+	blades: Texture | null,
+	grounds: Map<Uint8Array, Promise<Pixels | null>>,
+): Promise<void> {
+	const grass = blades ? await grassOf(d.gl, scene, seen, shot, blades, grounds) : null;
+	if (!grass) return;
+	drawPart(d, grass);
+	d.gl.deleteVertexArray(grass.vao);
+	for (const b of grass.buffers) d.gl.deleteBuffer(b);
+}
+
+/** A shot's blended parts drawn over the rest, far to near. */
+function drawBlended(d: Drawing, seen: Part[], eye: V3): void {
+	const { gl } = d;
+	gl.enable(gl.BLEND);
+	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+	gl.depthMask(false);
+	gl.enable(gl.POLYGON_OFFSET_FILL);
+	gl.polygonOffset(-1, -2);
+	const far = (p: Part) => Math.hypot(...sub(p.centre, eye));
+	for (const p of seen.filter((q) => q.look.blend).sort((a, b) => far(b) - far(a))) drawPart(d, p);
+	gl.disable(gl.POLYGON_OFFSET_FILL);
+	gl.depthMask(true);
+	gl.disable(gl.BLEND);
+	gl.bindVertexArray(null);
+}
+
+/** The shots of a scene, each its picture's bytes (PNG or JPEG as it asks). */
+export async function render(scene: TrackScene, shots: Shot[]): Promise<Uint8Array[]> {
+	if (!shots.length) return [];
+	const big = Math.max(...shots.map((s) => Math.max(s.size[0], s.size[1]))) * K;
+	const canvas = new OffscreenCanvas(big, big);
+	const gl = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true, alpha: false }) as GL | null;
+	if (!gl) throw new Error("no WebGL 2 here to render the track with");
+	const d = drawingOf(gl);
 	const { parts, free } = await uploadScene(gl, scene);
 	// (the grass's blades, the ground's pictures read once for every shot)
 	const blades = scene.grass ? await upload(gl, (await bladesTexture()).png, 0) : null;
-	const grounds = new Map<Uint8Array, Promise<{ rgba: Uint8Array; w: number; h: number } | null>>();
-	const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
-	const bindTex = (unit: number, t: Texture | null | undefined) => {
-		gl.activeTexture(gl.TEXTURE0 + unit);
-		gl.bindTexture(gl.TEXTURE_2D, t?.t ?? white);
-	};
+	const grounds = new Map<Uint8Array, Promise<Pixels | null>>();
 	const out: Uint8Array[] = [];
 	try {
 		for (const shot of shots) {
 			const w = shot.size[0] * K;
 			const h = shot.size[1] * K;
 			const reach = Math.hypot(...sub(shot.target, shot.eye));
-			const drawn = shot.models.flatMap((f) => parts.get(f) ?? []);
 			// (each part drawn where AC would draw it from this far)
-			const seen = drawn.filter((p) => {
-				const d = Math.hypot(...sub(p.centre, shot.eye));
-				return d + p.radius >= p.lod[0] && (!p.lod[1] || d - p.radius <= p.lod[1]);
-			});
+			const seen = seenFrom(
+				shot.models.flatMap((f) => parts.get(f) ?? []),
+				shot.eye,
+			);
 			// (the sun's view of round the target, its shadows' map)
 			const r = shot.shadow;
 			const sunAt: V3 = [shot.target[0] + shot.sun[0] * r * 3, shot.target[1] + shot.sun[1] * r * 3, shot.target[2] + shot.sun[2] * r * 3];
 			const light = times(ortho(r, 1, r * 6), lookAt(sunAt, shot.target));
-			gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-			gl.viewport(0, 0, SHADOW, SHADOW);
-			gl.enable(gl.DEPTH_TEST);
-			gl.depthMask(true);
-			gl.disable(gl.CULL_FACE);
-			gl.clear(gl.DEPTH_BUFFER_BIT);
-			gl.enable(gl.POLYGON_OFFSET_FILL);
-			gl.polygonOffset(1.5, 3);
-			bindProgram(gl, shade);
-			gl.uniformMatrix4fv(loc(shade, "uLight"), false, light);
-			gl.uniform1i(loc(shade, "tDiffuse"), 0);
-			for (const p of seen) {
-				if (p.look.blend) continue;
-				gl.uniformMatrix4fv(loc(shade, "uModel"), false, p.model);
-				gl.uniform1f(loc(shade, "uCut"), p.look.cut);
-				bindTex(0, p.look.diffuse);
-				gl.bindVertexArray(p.vao);
-				gl.drawElements(gl.TRIANGLES, p.count, p.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
-			}
-			gl.disable(gl.POLYGON_OFFSET_FILL);
+			drawShadows(d, seen, light);
 			// (the picture: the sky, then the solid parts, then the blended ones far to near)
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 			gl.viewport(0, 0, w, h);
@@ -663,76 +826,12 @@ export async function render(scene: TrackScene, shots: Shot[]): Promise<Uint8Arr
 			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 			const near = Math.max(0.3, reach * 0.02);
 			const view = times(perspective(shot.fov, w / h, near, Math.max(8000, reach * 20)), lookAt(shot.eye, shot.target));
-			gl.disable(gl.DEPTH_TEST);
-			bindProgram(gl, sky);
-			gl.uniformMatrix4fv(loc(sky, "uInverse"), false, inverse(view));
-			gl.uniform3fv(loc(sky, "uTop"), SKY_TOP);
-			gl.uniform3fv(loc(sky, "uLow"), SKY_LOW);
-			gl.bindVertexArray(null);
-			gl.drawArrays(gl.TRIANGLES, 0, 3);
-			gl.enable(gl.DEPTH_TEST);
-			bindProgram(gl, main);
-			gl.uniformMatrix4fv(loc(main, "uView"), false, view);
-			gl.uniformMatrix4fv(loc(main, "uLight"), false, light);
-			gl.uniform3fv(loc(main, "uEye"), shot.eye);
-			gl.uniform3fv(loc(main, "uSun"), shot.sun);
-			gl.uniform3fv(
-				loc(main, "uSunColour"),
-				SUN.map((c) => c * 1.15),
-			);
-			gl.uniform3fv(
-				loc(main, "uAmbient"),
-				AMBIENT.map((c) => c * 0.3),
-			);
-			gl.uniform3fv(loc(main, "uSkyLow"), SKY_LOW);
-			gl.uniform1f(loc(main, "uHaze"), 1 / 9000);
-			gl.uniform1f(loc(main, "uTexel"), 1 / SHADOW);
-			// (a texel and a half of the sun's map, in its depth's range)
-			gl.uniform1f(loc(main, "uBias"), (((2 * r) / SHADOW) * 1.5) / (r * 6 - 1));
-			["tDiffuse", "tMask", "tDetail0", "tDetail1", "tDetail2", "tDetail3"].forEach((n, i) => {
-				gl.uniform1i(loc(main, n), i);
-			});
-			gl.uniform1i(loc(main, "tShadow"), 6);
-			gl.activeTexture(gl.TEXTURE6);
-			gl.bindTexture(gl.TEXTURE_2D, depth);
-			const draw = (p: Part) => {
-				const l = p.look;
-				gl.uniformMatrix4fv(loc(main, "uModel"), false, p.model);
-				bindTex(0, l.diffuse);
-				bindTex(1, l.mask);
-				for (let i = 0; i < 4; i++) bindTex(2 + i, l.details[i]);
-				gl.uniform1i(loc(main, "uDetail"), l.detail);
-				gl.uniform4fv(loc(main, "uMult"), l.mult);
-				for (let i = 0; i < 4; i++) gl.uniform3fv(loc(main, `uMean${i}`), l.details[i]?.mean ?? [1, 1, 1]);
-				gl.uniform1f(loc(main, "uCut"), l.cut);
-				gl.uniform1f(loc(main, "uBlend"), l.blend ? 1 : 0);
-				gl.uniform1f(loc(main, "uKa"), l.ka);
-				gl.uniform1f(loc(main, "uKd"), l.kd);
-				gl.uniform1f(loc(main, "uKs"), l.ks);
-				gl.uniform1f(loc(main, "uExp"), l.exp);
-				gl.uniform1i(loc(main, "uTinted"), l.tinted ? 1 : 0);
-				gl.bindVertexArray(p.vao);
-				gl.drawElements(gl.TRIANGLES, p.count, p.wide ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
-			};
+			drawSky(d, view);
+			readyMain(d, shot, view, light, r);
 			gl.disable(gl.BLEND);
-			for (const p of seen) if (!p.look.blend) draw(p);
-			const grass = blades ? await grassOf(gl, scene, seen, shot, blades, grounds) : null;
-			if (grass) {
-				draw(grass);
-				gl.deleteVertexArray(grass.vao);
-				for (const b of grass.buffers) gl.deleteBuffer(b);
-			}
-			gl.enable(gl.BLEND);
-			gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-			gl.depthMask(false);
-			gl.enable(gl.POLYGON_OFFSET_FILL);
-			gl.polygonOffset(-1, -2);
-			const far = (p: Part) => Math.hypot(...sub(p.centre, shot.eye));
-			for (const p of seen.filter((q) => q.look.blend).sort((a, b) => far(b) - far(a))) draw(p);
-			gl.disable(gl.POLYGON_OFFSET_FILL);
-			gl.depthMask(true);
-			gl.disable(gl.BLEND);
-			gl.bindVertexArray(null);
+			for (const p of seen) if (!p.look.blend) drawPart(d, p);
+			await drawGrass(d, scene, seen, shot, blades, grounds);
+			drawBlended(d, seen, shot.eye);
 			// (the drawn corner of the canvas made the picture's size)
 			const cut = new OffscreenCanvas(w, h);
 			(cut.getContext("2d") as OffscreenCanvasRenderingContext2D).drawImage(canvas, 0, big - h, w, h, 0, 0, w, h);

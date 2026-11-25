@@ -2,6 +2,7 @@
 // and its models (the track file's: the page's `lists`), in a game the layout's own folder. A layout made from another starts as a copy of it: its spots, gates
 // and lines, the objects in it, its models (its own model the other's, as its own), its AC files the other's (`from`) until it has its own.
 
+import { current, type Draft, isDraft } from "immer";
 import type { TrackObjects } from "../domain/types";
 import { emptyLayout } from "./objects";
 
@@ -14,12 +15,15 @@ function badName(o: TrackObjects, name: string): string | null {
 	return null;
 }
 
+/** A copy of its own of a value: out of the store's draft where it is one (immer's current copies it), else cloned. */
+const ownCopy = <T extends object>(v: T): T => (isDraft(v) ? (current(v as Draft<T>) as T) : structuredClone(v));
+
 /** A layout named name made as from is; what is wrong with it if it cannot be (null: made). */
 export function addLayout(o: TrackObjects, name: string, from: string): string | null {
 	const bad = badName(o, name);
 	if (bad) return bad;
 	const src = o.layouts[from];
-	o.layouts[name] = src ? (JSON.parse(JSON.stringify(src)) as typeof src) : emptyLayout();
+	o.layouts[name] = src ? ownCopy(src) : emptyLayout();
 	if (src) for (const it of o.objects) if (it.layouts?.includes(from)) it.layouts.push(name);
 	const base = o.lists?.[from];
 	o.lists ??= {};

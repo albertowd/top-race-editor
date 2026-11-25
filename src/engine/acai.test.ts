@@ -26,7 +26,7 @@ describe("AC’s AI files", () => {
 		expect(writeAiFile(back.points, back.along, back.extra, aiGrid(back.points))).toEqual(lap);
 		const pit = writeAiFile(P, along, null, false);
 		expect(readAiFile(pit).grid).toBeNull();
-		expect(pit.length).toBe(16 + n * 20 + 4);
+		expect(pit).toHaveLength(16 + n * 20 + 4);
 	});
 
 	it.skipIf(!existsSync(`${AI}/ai/fast_lane.ai`))(

@@ -146,6 +146,8 @@ the layout at the top of the panel. **with the same** changes every layout that 
 - **Lay Out Along a Line** puts a whole grid or row of pit boxes down at once: how many, in rows of 1, 2 or 3, how far
   apart, and which way they face. Click where the first one stands, then the way the rest go.
 - **Timing gates** are two posts; drag either.
+- **Safety car start** (rFactor 2 only, optional) is where its safety car waits. Without one it waits on the pit lane
+  just before the pit exit, which a narrow pit lane may have no room for.
 - **The racing line and the pit lane** are curves like a road's middle. The games' AI drives these lines. The pit
   lane leaves and joins the racing line at its two diamonds; drag them along the line to move where the cars go in
   and come out.
@@ -221,7 +223,10 @@ build is quicker.
 - **BeamNG.drive:** one map with every layout's races; **Install in BeamNG's mods too** puts it in your mods
   folder. You can spawn at every layout's start, or only at those the track file lists in `beamng.spawns`; every
   layout keeps its races either way.
-- **rFactor 2:** one location, each layout its own, with its cones and boards knocked about as in the other games.
+- **rFactor 2:** one location, each layout its own, with its cones and boards knocked about as in the other games and its
+  gantry's start lights counting the start down. rFactor 2 runs no scripts on a track, so its screens are still
+  pictures: the gantry's board shows the track's and the layout's names, and the fuel prices are drawn in seven
+  segments as in the other games.
   **Copy into rFactor 2's ModDev too** puts it there to try in Mod Mode (close rFactor 2 first).
 
 Each layout's pictures are renders of the built track, as the games' own tracks have, with the grass AC grows near

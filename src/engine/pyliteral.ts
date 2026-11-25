@@ -3,6 +3,11 @@
 
 export type PyValue = null | boolean | number | string | PyValue[] | { [k: string]: PyValue };
 
+/** A number's text at the start: its sign, its digits (with a point, or from one) and its exponent. */
+const NUMBER = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/;
+/** inf or nan at the start, signed or not. */
+const NOT_A_NUMBER = /^[-+]?(?:inf|nan)/;
+
 export function parsePyLiteral(text: string): PyValue {
 	let p = 0;
 	const fail = (what: string): never => {
@@ -26,7 +31,8 @@ export function parsePyLiteral(text: string): PyValue {
 				p += word.length;
 				return v;
 			}
-		const m = /^[-+]?(\d+\.?\d*([eE][-+]?\d+)?|\.\d+([eE][-+]?\d+)?|inf|nan)/.exec(text.slice(p));
+		const rest = text.slice(p);
+		const m = NUMBER.exec(rest) ?? NOT_A_NUMBER.exec(rest);
 		if (!m) return fail("no value");
 		p += m[0].length;
 		return Number(m[0].replace("inf", "Infinity").replace("nan", "NaN"));
@@ -56,7 +62,7 @@ export function parsePyLiteral(text: string): PyValue {
 			space();
 			if (text[p] !== ":") fail("no :");
 			p++;
-			out[String(k)] = value();
+			out[String(k as string | number | boolean | null)] = value();
 		});
 		return out;
 	};
@@ -71,7 +77,8 @@ export function parsePyLiteral(text: string): PyValue {
 				const e = text[p++] as string;
 				if (e === "x" || e === "u") {
 					const n = e === "x" ? 2 : 4;
-					s += String.fromCharCode(Number.parseInt(text.slice(p, p + n), 16));
+					// (its 16 bits, as one UTF-16 unit: what is no hex, 0)
+					s += String.fromCodePoint(Number.parseInt(text.slice(p, p + n), 16) & 0xffff);
 					p += n;
 				} else s += ESC[e] ?? `\\${e}`;
 			}

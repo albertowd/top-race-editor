@@ -74,31 +74,34 @@ export class TerrainInteractions {
 		}
 	}
 
+	/** A press on the picked ring: its points first (Alt takes one out), its sides then (Shift adds one there); true if it took the press. */
+	private pressPicked(pick: TerrainPick, at: Vec2, tol: number, p: Pointer): boolean {
+		const ring = this.t.ringOf(pick);
+		if (!ring) return false;
+		const j = pointNear(ring, at[0], at[1], tol);
+		if (j >= 0) {
+			if (p.alt) this.t.removePoint(pick, j);
+			else {
+				this.t.remember();
+				this.drag = { kind: "point", pick, j, moved: false };
+			}
+			return true;
+		}
+		const side = p.shift ? sideNear(ring, at[0], at[1], tol) : null;
+		if (side) {
+			this.t.addPoint(pick, side.i, side.p);
+			this.drag = { kind: "point", pick, j: side.i + 1, moved: true };
+			return true;
+		}
+		return false;
+	}
+
 	private pickAt(at: Vec2, tol: number, p: Pointer): boolean {
 		const s = this.t.get();
 		const doc = s.doc;
 		if (!doc) return false;
 		// (the picked ring's points first: Alt takes one out; its sides then: Shift adds one there)
-		if (s.pick) {
-			const ring = this.t.ringOf(s.pick);
-			if (ring) {
-				const j = pointNear(ring, at[0], at[1], tol);
-				if (j >= 0) {
-					if (p.alt) this.t.removePoint(s.pick, j);
-					else {
-						this.t.remember();
-						this.drag = { kind: "point", pick: s.pick, j, moved: false };
-					}
-					return true;
-				}
-				const side = p.shift ? sideNear(ring, at[0], at[1], tol) : null;
-				if (side) {
-					this.t.addPoint(s.pick, side.i, side.p);
-					this.drag = { kind: "point", pick: s.pick, j: side.i + 1, moved: true };
-					return true;
-				}
-			}
-		}
+		if (s.pick && this.pressPicked(s.pick, at, tol, p)) return true;
 		const hit = ringAt(doc, s.pick, at[0], at[1]);
 		if (!hit) {
 			if (s.pick) this.t.pickThing(null);

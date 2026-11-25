@@ -7,7 +7,14 @@ import type { HostFiles } from "./placehost";
 import { backup } from "./trackfiles";
 
 /** The bumps' file, in a track's folder. */
-export const bumpsPath = (project: string) => `${project.replace(/[\\/]+$/, "")}/source/bumps.json`;
+export const bumpsPath = (project: string) => `${trimSlashes(project)}/source/bumps.json`;
+
+/** A path without the slashes (either way) it ends with. */
+function trimSlashes(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
+}
 
 /** The track's bumps (none: no file). */
 export async function loadBumps(files: HostFiles, project: string): Promise<Bumps> {

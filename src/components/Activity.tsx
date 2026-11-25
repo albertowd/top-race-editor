@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { BuildJob, TrackEntry } from "../api/types";
 import { useEditorShallow } from "../store/EditorContext";
 import type { Task } from "../store/state";
 import { useTerrainMaybe } from "../terrain/TerrainContext";
@@ -52,6 +53,38 @@ function useTerrainTasks(): Task[] {
 	return out;
 }
 
+/** A build for Assetto Corsa going on with its dialog closed, as a task's label: how far it is, the stage it is at, the minutes it may still take. */
+function buildLabel(build: BuildJob): string {
+	const stage = build.activity?.stage ? `, ${build.activity.stage}` : "";
+	const left = build.left ? `, about ${Math.ceil(build.left / 60)} min left` : "";
+	return `Building for Assetto Corsa: ${Math.round((build.fraction ?? 0) * 100)}%${stage}${left}`;
+}
+
+type Screen = { title: string; detail: string; since: number };
+
+/** The loading screen, if the window must wait: another track opening, this one opening, or a task that blocks it. */
+function loadingScreen(
+	at: Readonly<{ opening: TrackEntry | null; openedAt: number; booting: boolean; track?: string; tasks: Task[]; waiting?: Task; now: number }>,
+): Screen | null {
+	const { opening, openedAt, booting, track, tasks, waiting, now } = at;
+	if (opening)
+		return {
+			title: `Opening ${opening.name}`,
+			detail: "The engine opens it; the editor loads again on it.",
+			since: openedAt || now,
+		};
+	if (booting) {
+		const first = tasks.find((t) => t.blocking);
+		return {
+			title: track ? `Opening ${track}` : "Opening the track",
+			detail: "Its roads, objects and drawings.",
+			since: first?.since ?? now,
+		};
+	}
+	if (waiting) return { title: `${waiting.label}…`, detail: "", since: waiting.since };
+	return null;
+}
+
 /** What the editor waits on: a loading screen while the window must wait (the track opening, saving, a road brought in, another track opened), a note at the
  * top while it can go on (the track's models read, the surface checked). */
 export function Activity() {
@@ -73,9 +106,7 @@ export function Activity() {
 		? [
 				{
 					id: -10,
-					label: `Building for Assetto Corsa: ${Math.round((build.fraction ?? 0) * 100)}%${
-						build.activity?.stage ? `, ${build.activity.stage}` : ""
-					}${build.left ? `, about ${Math.ceil(build.left / 60)} min left` : ""}`,
+					label: buildLabel(build),
 					blocking: false,
 					since: buildSince - build.seconds * 1000,
 				},
@@ -87,21 +118,7 @@ export function Activity() {
 	const waiting = shown.find((t) => t.blocking);
 	const going = shown.filter((t) => !t.blocking);
 
-	let screen: { title: string; detail: string; since: number } | null = null;
-	if (opening)
-		screen = {
-			title: `Opening ${opening.name}`,
-			detail: "The engine opens it; the editor loads again on it.",
-			since: openedAt || now,
-		};
-	else if (booting) {
-		const first = tasks.find((t) => t.blocking);
-		screen = {
-			title: track ? `Opening ${track}` : "Opening the track",
-			detail: "Its roads, objects and drawings.",
-			since: first?.since ?? now,
-		};
-	} else if (waiting) screen = { title: `${waiting.label}…`, detail: "", since: waiting.since };
+	const screen = loadingScreen({ opening, openedAt, booting, track, tasks, waiting, now });
 
 	return (
 		<>

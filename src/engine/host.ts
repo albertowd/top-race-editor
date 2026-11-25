@@ -22,7 +22,7 @@ export interface HostEnv {
 	apiHost?: ApiHost;
 	/** what fills the merge's faces and makes its outlines (the engine window's workers) */
 	filler?: Filler;
-	outliner?: MergeOptions["outliner"];
+	outliner?: NonNullable<MergeOptions["outliner"]>;
 	/** the track open (its folder), where the engine keeps it (the desktop app's engine window): another opened */
 	project?: { get(): string | null; set(folder: string): void };
 }

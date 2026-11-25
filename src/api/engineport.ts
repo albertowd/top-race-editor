@@ -29,7 +29,7 @@ export class EngineChannel {
 			this.waiting.push(done);
 		});
 	}
-	private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+	private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
 	/** The port to call on (a newer one in place of the last: the window loaded again). */
 	connect(port: PortLike): void {

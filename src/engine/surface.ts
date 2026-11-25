@@ -52,11 +52,12 @@ export class Surface {
 		const cy = T[o + 7] as number;
 		const cz = T[o + 8] as number;
 		const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-		if (!(Math.abs(d) >= 1e-12)) return Number.NaN;
+		if (Number.isNaN(d) || Math.abs(d) < 1e-12) return Number.NaN;
 		const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
 		const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
 		const l3 = 1 - l1 - l2;
-		if (!(Math.min(Math.min(l1, l2), l3) >= -1e-6)) return Number.NaN;
+		const least = Math.min(Math.min(l1, l2), l3);
+		if (Number.isNaN(least) || least < -1e-6) return Number.NaN;
 		return l1 * ay + l2 * by + l3 * cy;
 	}
 
@@ -65,7 +66,7 @@ export class Surface {
 		let best = Number.NaN;
 		for (const k of this.over(x, z)) {
 			const h = this.heightIn(k, x, z);
-			if (!Number.isNaN(h) && !(h <= best)) best = h;
+			if (!Number.isNaN(h) && (Number.isNaN(best) || h > best)) best = h;
 		}
 		return best;
 	}

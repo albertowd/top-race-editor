@@ -62,7 +62,7 @@ function curveOf(o: { curve: PlacedObject["curve"]; closed?: boolean }) {
 	for (let i = 1; i < P.length; i++) {
 		const [ax, az] = P[i - 1] as [number, number];
 		const [bx, bz] = P[i] as [number, number];
-		s.push((s[i - 1] as number) + Math.sqrt((bx - ax) ** 2 + (bz - az) ** 2));
+		s.push((s[i - 1] as number) + Math.hypot(bx - ax, bz - az));
 	}
 	return { P, s };
 }
@@ -76,7 +76,7 @@ export function wallStacks(w: PlacedObject & { spacing?: number }): Place[] {
 		return [[p[0], p[1], w.heading ?? 0]];
 	}
 	const { P, s } = curveOf(w);
-	const L = s[s.length - 1] as number;
+	const L = s.at(-1) as number;
 	const sp = Math.max(w.spacing ?? SPACING, 0.05);
 	const n = Math.max(Math.ceil(L / sp - 1e-9), 1);
 	const S = w.closed ? Array.from({ length: n }, (_, i) => i * (L / n)) : linspace(0, L, n + 1);
@@ -133,7 +133,7 @@ export function shaped(o: PlacedObject, parts: TemplatePart[], size: number[]): 
 				const x = V[i + a] as number;
 				const y = V[i + a + 1] as number;
 				const z = V[i + a + 2] as number;
-				const m = Math.max(Math.sqrt(x * x + y * y + z * z), 1e-12);
+				const m = Math.max(Math.hypot(x, y, z), 1e-12);
 				V[i + a] = x / m;
 				V[i + a + 1] = y / m;
 				V[i + a + 2] = z / m;
@@ -169,6 +169,11 @@ function baseCorners(parts: TemplatePart[]): [number, number][][] {
 	let low = Infinity;
 	for (const p of own) for (let i = 1; i < p.V.length; i += 11) low = Math.min(low, p.V[i] as number);
 	low += BASE;
+	return feetJoined(basePieces(own, low));
+}
+
+/** The pieces of parts' faces with every corner under low, those sharing a corner (to the millimetre) one piece: each piece's corners (x, z), by its root. */
+function basePieces(own: TemplatePart[], low: number): Map<string, [number, number][]> {
 	const parent = new Map<string, string>();
 	const root = (a: string): string => {
 		if (!parent.has(a)) parent.set(a, a);
@@ -201,7 +206,11 @@ function baseCorners(parts: TemplatePart[]): [number, number][][] {
 		l.push([x, z]);
 		pieces.set(r, l);
 	}
-	// (pieces nearer each other than a tenth of the base's width (FOOT_GAP at least) one foot: a leg's posts and the tyres round them)
+	return pieces;
+}
+
+/** A base's pieces as feet: those nearer each other than a tenth of the base's width (FOOT_GAP at least) one foot, a leg's posts and the tyres round them. */
+function feetJoined(pieces: Map<string, [number, number][]>): [number, number][][] {
 	const all = [...pieces.values()].flat();
 	const span = Math.max(
 		Math.max(...all.map((v) => v[0])) - Math.min(...all.map((v) => v[0])),
@@ -287,7 +296,7 @@ export function objectPlaced(o: PlacedObject, parts: TemplatePart[], places: Pla
 export function objectBent(o: PlacedObject, parts: TemplatePart[], size: number[], floor: Floor): TemplatePart[] {
 	const { P, s } = curveOf(o);
 	const T = gradient2(P).map(([a, b]) => {
-		const m = Math.max(Math.sqrt((a as number) ** 2 + (b as number) ** 2), 1e-12);
+		const m = Math.max(Math.hypot(a as number, b as number), 1e-12);
 		return [(a as number) / m, (b as number) / m];
 	});
 	const px = P.map((q) => q[0] as number);
@@ -303,47 +312,86 @@ export function objectBent(o: PlacedObject, parts: TemplatePart[], size: number[
 			z1 = Math.max(z1, p.V[i] as number);
 		}
 	const Lm = Math.max(z1 - z0, 1e-6);
-	const L = s[s.length - 1] as number;
+	const L = s.at(-1) as number;
 	const n = Math.max(roundEven(L / Lm), 1);
-	const k = L / (n * Lm);
-	const sink = SINKS[o.model] ?? 0;
-	const rows = Math.max(Math.trunc(o.rows ?? 1), 1);
-	const across = o.spacing || (size[0] as number);
-	return vis.map((p) => {
-		const nv = p.V.length / 11;
-		const V = new Float64Array(p.V.length * rows * n);
-		const F = new Int32Array(p.F.length * rows * n);
-		let c = 0;
-		for (let r = 0; r < rows; r++)
-			for (let i = 0; i < n; i++) {
-				for (let v = 0; v < nv; v++) {
-					const o0 = v * 11;
-					const at = (i * L) / n + ((p.V[o0 + 2] as number) - z0) * k;
-					const fx = interp(at, s, tX);
-					const fz = interp(at, s, tZ);
-					const rx = fz;
-					const rz = -fx;
-					const off = (p.V[o0] as number) + r * across;
-					const d = (c * nv + v) * 11;
-					for (let j = 0; j < 11; j++) V[d + j] = p.V[o0 + j] as number;
-					V[d] = interp(at, s, px) + rx * off;
-					V[d + 2] = interp(at, s, pz) + rz * off;
-					V[d + 1] = floor(V[d] as number, V[d + 2] as number) + (p.V[o0 + 1] as number) - sink;
-					for (const [a, b] of [
-						[3, 5],
-						[8, 10],
-					] as const) {
-						const va = p.V[o0 + a] as number;
-						const vb = p.V[o0 + b] as number;
-						V[d + a] = rx * va + fx * vb;
-						V[d + b] = rz * va + fz * vb;
-					}
-				}
-				for (let f = 0; f < p.F.length; f++) F[c * p.F.length + f] = (p.F[f] as number) + c * nv;
-				c++;
-			}
-		return { ...p, V, F };
-	});
+	const bend: Bend = {
+		s,
+		px,
+		pz,
+		tX,
+		tZ,
+		L,
+		n,
+		z0,
+		k: L / (n * Lm),
+		sink: SINKS[o.model] ?? 0,
+		rows: Math.max(Math.trunc(o.rows ?? 1), 1),
+		across: o.spacing || (size[0] as number),
+		floor,
+	};
+	return vis.map((p) => bentPart(bend, p));
+}
+
+/** A model bent along a curve: the curve's length to each point (s), its points and ways along (px, pz, tX, tZ), its length, the copies along it and the
+ * model's front (z0), how much each is stretched (k), the model's sink, its rows, metres between them and the floor. */
+interface Bend {
+	s: number[];
+	px: number[];
+	pz: number[];
+	tX: number[];
+	tZ: number[];
+	L: number;
+	n: number;
+	z0: number;
+	k: number;
+	sink: number;
+	rows: number;
+	across: number;
+	floor: Floor;
+}
+
+/** A part's copies bent along the curve, row after row, end to end along each. */
+function bentPart(b: Bend, p: TemplatePart): TemplatePart {
+	const nv = p.V.length / 11;
+	const V = new Float64Array(p.V.length * b.rows * b.n);
+	const F = new Int32Array(p.F.length * b.rows * b.n);
+	let c = 0;
+	for (let r = 0; r < b.rows; r++)
+		for (let i = 0; i < b.n; i++) {
+			bentCopy(b, p, V, c * nv, r, i);
+			for (let f = 0; f < p.F.length; f++) F[c * p.F.length + f] = (p.F[f] as number) + c * nv;
+			c++;
+		}
+	return { ...p, V, F };
+}
+
+/** A part's ith copy along the curve in row r, its points into V from point first: each along at its share, out to its right, on the floor there. */
+function bentCopy(b: Bend, p: TemplatePart, V: Float64Array, first: number, r: number, i: number): void {
+	const { s, L, n, z0, k } = b;
+	const nv = p.V.length / 11;
+	for (let v = 0; v < nv; v++) {
+		const o0 = v * 11;
+		const at = (i * L) / n + ((p.V[o0 + 2] as number) - z0) * k;
+		const fx = interp(at, s, b.tX);
+		const fz = interp(at, s, b.tZ);
+		const rx = fz;
+		const rz = -fx;
+		const off = (p.V[o0] as number) + r * b.across;
+		const d = (first + v) * 11;
+		for (let j = 0; j < 11; j++) V[d + j] = p.V[o0 + j] as number;
+		V[d] = interp(at, s, b.px) + rx * off;
+		V[d + 2] = interp(at, s, b.pz) + rz * off;
+		V[d + 1] = b.floor(V[d] as number, V[d + 2] as number) + (p.V[o0 + 1] as number) - b.sink;
+		for (const [ia, ib] of [
+			[3, 5],
+			[8, 10],
+		] as const) {
+			const va = p.V[o0 + ia] as number;
+			const vb = p.V[o0 + ib] as number;
+			V[d + ia] = rx * va + fx * vb;
+			V[d + ib] = rz * va + fz * vb;
+		}
+	}
 }
 
 /** A wall's collision: one closed solid round its stacks (from half out of the outermost rows on one side to half out of them on the other), from WALL_DOWN
@@ -372,7 +420,7 @@ export function wallBand(w: PlacedObject, stacks: Place[], half: number, high: n
 			})
 		: gradient2(line);
 	const t = ways.map(([a, b]) => {
-		const m = Math.max(Math.sqrt((a as number) ** 2 + (b as number) ** 2), 1e-12);
+		const m = Math.max(Math.hypot(a as number, b as number), 1e-12);
 		return [(a as number) / m, (b as number) / m];
 	});
 	const sp = w.spacing ?? SPACING;
@@ -471,33 +519,37 @@ export function layObject(o: PlacedObject, meta: CatalogueModel, template: Templ
 	const laid = o.fit === "bend" && !single ? objectBent(o, parts, size, floor) : objectPlaced(o, parts, places, floor);
 	out.parts = laid.map((p) => ({ ...p, lod: meta.lods?.[p.part] ?? meta.draw }));
 	if (coll === "wall" && !single) out.wall = wallBand(o, places, (size[0] as number) / 2, (size[1] as number) + COLLISION_OVER, floor);
-	else if (coll === "static" || coll === "wall") {
-		const hull = parts.find((p) => p.part === "hull");
-		const lo = [Infinity, Infinity, Infinity];
-		const hi = [-Infinity, -Infinity, -Infinity];
-		for (const p of hull ? [hull] : parts)
-			for (let i = 0; i < p.V.length; i += 11)
-				for (let c = 0; c < 3; c++) {
-					lo[c] = Math.min(lo[c] as number, p.V[i + c] as number);
-					hi[c] = Math.max(hi[c] as number, p.V[i + c] as number);
-				}
-		hi[1] = (hi[1] as number) + COLLISION_OVER;
-		const { P } = box(lo, hi);
-		const W = new Float64Array(8 * 11);
-		for (let i = 0; i < 8; i++) {
-			W.set(P.slice(i * 3, i * 3 + 3), i * 11);
-			W[i * 11 + 4] = 1;
-		}
-		// (as high as the copies rest)
-		const ys = restHeights(parts, places, floor);
-		out.boxes = places.map(([x, z, h], k) => {
-			const B = world(W, x, z, ys[k] as number, h);
-			const pts: number[] = [];
-			for (let i = 0; i < 8; i++) pts.push(B[i * 11] as number, B[i * 11 + 1] as number, B[i * 11 + 2] as number);
-			return pts;
-		});
-	}
+	else if (coll === "static" || coll === "wall") out.boxes = staticBoxes(parts, places, floor);
 	return out;
+}
+
+/** A static object's boxes: round its hull (its parts where it has none), COLLISION_OVER higher, at each place as high as its copy rests; eight points (x, y, z)
+ * each in the world. */
+function staticBoxes(parts: TemplatePart[], places: Place[], floor: Floor): number[][] {
+	const hull = parts.find((p) => p.part === "hull");
+	const lo = [Infinity, Infinity, Infinity];
+	const hi = [-Infinity, -Infinity, -Infinity];
+	for (const p of hull ? [hull] : parts)
+		for (let i = 0; i < p.V.length; i += 11)
+			for (let c = 0; c < 3; c++) {
+				lo[c] = Math.min(lo[c] as number, p.V[i + c] as number);
+				hi[c] = Math.max(hi[c] as number, p.V[i + c] as number);
+			}
+	hi[1] = (hi[1] as number) + COLLISION_OVER;
+	const { P } = box(lo, hi);
+	const W = new Float64Array(8 * 11);
+	for (let i = 0; i < 8; i++) {
+		W.set(P.slice(i * 3, i * 3 + 3), i * 11);
+		W[i * 11 + 4] = 1;
+	}
+	// (as high as the copies rest)
+	const ys = restHeights(parts, places, floor);
+	return places.map(([x, z, h], k) => {
+		const B = world(W, x, z, ys[k] as number, h);
+		const pts: number[] = [];
+		for (let i = 0; i < 8; i++) pts.push(B[i * 11] as number, B[i * 11 + 1] as number, B[i * 11 + 2] as number);
+		return pts;
+	});
 }
 
 /** metres round a solid object (a static box, a wall) no tree stands */

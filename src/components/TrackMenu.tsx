@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type SubmitEvent, useEffect, useRef, useState } from "react";
 import type { TrackEntry, TracksResponse } from "../api/types";
 import { useEditor } from "../store/EditorContext";
 
@@ -32,11 +32,11 @@ export function TrackMenu({ name }: Readonly<{ name: string }>) {
 		setOpen(false);
 		void ed.openTrack(t);
 	};
-	const byFolder = (e: FormEvent) => {
+	const byFolder = (e: SubmitEvent) => {
 		e.preventDefault();
 		const f = folder.trim().replace(/^"|"$/g, "");
 		if (!f) return;
-		go({ name: f.split(/[\\/]/).filter(Boolean).pop() ?? f, folder: f });
+		go({ name: f.split(/[\\/]/).findLast(Boolean) ?? f, folder: f });
 	};
 	return (
 		<div className="menu track-menu" ref={box}>

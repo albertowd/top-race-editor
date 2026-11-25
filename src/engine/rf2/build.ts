@@ -35,6 +35,7 @@ import {
 	onCards,
 } from "../boardfaces";
 import { acDds, convert, ddsChain, ddsOf, isDds, isPng, readPicture, resizeLanczos, type TextureAc } from "../dds";
+import { FLAG } from "../gantries";
 import { layoutTitle } from "../layoutmap";
 import type { HostFiles } from "../placehost";
 import type { PhysicsObject, PlacesDoc } from "../places";
@@ -60,6 +61,8 @@ import {
 	startOn,
 	venueIconFile,
 } from "./pictures";
+import { type BoardPainter, type BoardScreen, boardLines, boardScreens, canvasBoard, type PriceScreen, priceScreens, pricesPicture } from "./screens";
+import { LAMP_TEXTURE, lampMaterial, lampPictures, START_LAMP, START_LIGHT, startingLights } from "./startlights";
 import { type Ground, gdbText, groundOf, type Instance, type Light, MAX_VEHICLES, materialName, scnText, tdfText, wetText } from "./text";
 
 /** a GMT's corners at most (its faces name them by 16-bit numbers) */
@@ -94,6 +97,8 @@ export interface Rf2Options {
 	editorModels?: string;
 	/** the boards' cards drawn (by default on Chromium's canvas) */
 	cards?: CardPainter;
+	/** the gantries' boards lettered with each layout's name (by default on Chromium's canvas where there is one; none: the boards' pictures as they are) */
+	boards?: BoardPainter;
 	/** what draws the location's pictures, and renders the track under some (none: no pictures) */
 	pictures?: Rf2PictureHost;
 	/** the AC build's track, its models rendered under the pictures */
@@ -115,6 +120,14 @@ export interface Rf2Built {
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array) => new TextDecoder().decode(b);
 const fileName = (t: string) => t.replace(/[^A-Za-z0-9_.-]/g, "_");
+/** a file's name without its extension */
+const withoutExtension = (t: string) => t.replace(/\.[^.]*$/, "");
+/** a path without the slashes and backslashes it ends in */
+function trimSlashes(p: string): string {
+	let end = p.length;
+	while (end > 0 && (p[end - 1] === "/" || p[end - 1] === "\\")) end--;
+	return p.slice(0, end);
+}
 const words = (...xs: number[]) => xs.map(floatWord);
 
 /** How a material shows what is behind it: not at all; through the holes its texture's alpha cuts (leaves, wire: its texture's flag 0x80, as LochDrummond's
@@ -339,6 +352,13 @@ export function beamGmt(beam: Beam): Gmt {
 }
 
 const pow2 = (v: number) => v > 0 && (v & (v - 1)) === 0;
+type Picture = Awaited<ReturnType<typeof readPicture>>;
+
+/** A picture as it is where its sides are powers of two, else resized to them (each the next up, at most 4096). */
+function powerOfTwoSized(img: Picture): Picture {
+	const up = (n: number) => Math.min(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 4))));
+	return pow2(img.width) && pow2(img.height) ? img : resizeLanczos(img, up(img.width), up(img.height));
+}
 
 /** Whether a DDS's sides are powers of two (as every texture of rFactor's own tracks is). */
 export function powerOfTwoDds(dds: Uint8Array): boolean {
@@ -349,9 +369,7 @@ export function powerOfTwoDds(dds: Uint8Array): boolean {
 /** A picture (PNG, or a JPEG by the browser's decoder) made a DDS of sides powers of two (each the next up, at most 4096), with its mips: in the library's DXT
  * format, else DXT5. */
 export async function squareDds(pic: Uint8Array, fmt: string): Promise<Uint8Array> {
-	const img = await readPicture(pic);
-	const up = (n: number) => Math.min(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 4))));
-	const sized = pow2(img.width) && pow2(img.height) ? img : resizeLanczos(img, up(img.width), up(img.height));
+	const sized = powerOfTwoSized(await readPicture(pic));
 	return ddsChain(sized, fmt === "DXT1" || fmt === "DXT3" || fmt === "DXT5" ? fmt : "DXT5");
 }
 
@@ -367,7 +385,7 @@ export function nightLights(data: LightsData, axes: Axes = TRACK_TO_RF2): Light[
 	type Lamp = { at: V3; strength: number; range: number; colour: V3; n: number };
 	const lamps: Lamp[] = [];
 	for (const l of data.lights) {
-		const s = (data.series[String(l.series)] ?? {}) as Record<string, unknown>;
+		const s = (data.series[String(l.series as string | number | undefined)] ?? {}) as Record<string, unknown>;
 		const pick = <T>(k: string, d: T): T => (l[k] ?? s[k] ?? d) as T;
 		if (l.on === false) continue;
 		// (numbers as the track's JSON reads them: made plain)
@@ -419,20 +437,47 @@ interface Group {
 
 /** metres a tile's side, by how far its meshes are drawn: a mesh drawn only near (a tyre stack's detail) in small tiles, so only those near are drawn; the rest
  * in larger */
-export const tileSize = (far: number): number => (far <= 100 ? 50 : far <= 600 ? 150 : 250);
+export const tileSize = (far: number): number => {
+	if (far <= 100) return 50;
+	return far <= 600 ? 150 : 250;
+};
+
+/** The tile a mesh's face's middle falls in (x, z): its key. */
+function cellOf(m: TrackMesh, f: number, size: number): string {
+	let x = 0;
+	let z = 0;
+	for (let k = 0; k < 3; k++) {
+		const o = (m.f[f + k] as number) * CORNER;
+		x += m.v[o] as number;
+		z += m.v[o + 2] as number;
+	}
+	return `${Math.floor(x / 3 / size)},${Math.floor(z / 3 / size)}`;
+}
+
+/** A mesh's faces (by their first corners' places in its faces) as a mesh of their own, their corners renumbered. */
+function meshOfFaces(m: TrackMesh, faces: number[]): TrackMesh {
+	const at = new Map<number, number>();
+	const v: number[] = [];
+	const f: number[] = [];
+	for (const first of faces)
+		for (let k = 0; k < 3; k++) {
+			const i = m.f[first + k] as number;
+			let j = at.get(i);
+			if (j === undefined) {
+				j = v.length / CORNER;
+				at.set(i, j);
+				for (let c = 0; c < CORNER; c++) v.push(m.v[i * CORNER + c] as number);
+			}
+			f.push(j);
+		}
+	return { ...m, v: new Float32Array(v), f: new Uint32Array(f) };
+}
 
 /** A mesh cut by the tiles its faces' middles fall in (x, z): each tile's faces, their corners renumbered. */
 export function tilesOf(m: TrackMesh, size: number): Map<string, TrackMesh> {
 	const cells = new Map<string, number[]>();
 	for (let f = 0; f < m.f.length; f += 3) {
-		let x = 0;
-		let z = 0;
-		for (let k = 0; k < 3; k++) {
-			const o = (m.f[f + k] as number) * CORNER;
-			x += m.v[o] as number;
-			z += m.v[o + 2] as number;
-		}
-		const cell = `${Math.floor(x / 3 / size)},${Math.floor(z / 3 / size)}`;
+		const cell = cellOf(m, f, size);
 		const l = cells.get(cell);
 		if (l) l.push(f);
 		else cells.set(cell, [f]);
@@ -442,23 +487,7 @@ export function tilesOf(m: TrackMesh, size: number): Map<string, TrackMesh> {
 		out.set(cells.keys().next().value as string, m);
 		return out;
 	}
-	for (const [cell, faces] of cells) {
-		const at = new Map<number, number>();
-		const v: number[] = [];
-		const f: number[] = [];
-		for (const first of faces)
-			for (let k = 0; k < 3; k++) {
-				const i = m.f[first + k] as number;
-				let j = at.get(i);
-				if (j === undefined) {
-					j = v.length / CORNER;
-					at.set(i, j);
-					for (let c = 0; c < CORNER; c++) v.push(m.v[i * CORNER + c] as number);
-				}
-				f.push(j);
-			}
-		out.set(cell, { ...m, v: new Float32Array(v), f: new Uint32Array(f) });
-	}
+	for (const [cell, faces] of cells) out.set(cell, meshOfFaces(m, faces));
 	return out;
 }
 
@@ -541,7 +570,7 @@ async function drawPictures(
 			loads.forEach((l, i) => {
 				backdrops.set(l, made[i] as Uint8Array);
 			});
-			if (venueShot) venueBackdrop = made[made.length - 1];
+			if (venueShot) venueBackdrop = made.at(-1);
 		} catch (e) {
 			log(`  pictures: the track not rendered (${(e as Error).message}), drawn without it`);
 		}
@@ -588,369 +617,691 @@ async function drawPictures(
 	log(`  pictures: the venue's icon; ${drawn.length} layouts' icons, thumbnails, wheel maps and loading screens (${backdrops.size} over the track rendered)`);
 }
 
+/** The track's library: each material's colour picture, how it shows through and its ground. */
+type Library = Record<string, { colour?: string; alpha?: string; surface?: string }>;
+/** surfaces.json's grounds, each with what it is called in rFactor */
+type Surfaces = Record<string, { targets?: { rf2?: string } }>;
+/** objects.json's layouts: their racing lines among the rest */
+type LayoutsObjects = Record<string, LayoutObjects & { lines?: RacingLines }>;
+/** A working gantry's lamp: its place in the start's order, its mesh. */
+type StartLamp = { at: number; mesh: TrackMesh };
+
+/** A location being written: where its files go, the track's library its materials are of, and what of it is written and made so far. */
+interface Rf2Job {
+	files: HostFiles;
+	project: string;
+	out: string;
+	maps: string;
+	gmtDir: string;
+	axes: Axes;
+	log: (line: string) => void;
+	lib: Library;
+	texAc: Record<string, TextureAc>;
+	/** each texture's DDS, by its source */
+	textures: Map<string, string>;
+	/** every file written, in order */
+	written: string[];
+	gmts: number;
+	/** whether the start lamps' frames are written */
+	lampTextures: boolean;
+	/** the prices screens, by material: drawn in seven segments (rf2/screens.ts), not as their library pictures */
+	prices: ReadonlyMap<string, PriceScreen>;
+}
+
+/** A JSON file read (a byte-order mark at its start passed over). */
+async function readJson<T>(files: HostFiles, p: string): Promise<T> {
+	return JSON.parse(dec(await files.read(p)).replace(/^﻿/, "")) as T;
+}
+
+/** A file of the location written, and kept for copying into rFactor 2's ModDev. */
+async function put(job: Rf2Job, path: string, data: Uint8Array | string): Promise<void> {
+	await job.files.write(path, typeof data === "string" ? enc(data) : data);
+	job.written.push(path);
+}
+
+/** How a library material shows what is behind it (opaque where it says neither blended nor masked). */
+function alphaOf(alpha: string | undefined): Alpha {
+	if (alpha === "blend" || alpha === "mask") return alpha;
+	return "opaque";
+}
+
+/** What a mesh's role makes it to rFactor (only seen where it is neither driven on nor a wall). */
+function kindOf(role: string): Kind {
+	if (role === "surface" || role === "wall") return role;
+	return "visual";
+}
+
+/** A library colour as the AC build's DDS of it, once (the model's own folder's before the library's; white where there is none). */
+async function textureOf(job: Rf2Job, png: string | undefined, stem: string): Promise<string> {
+	if (!png) return WHITE;
+	const { files, project, textures, texAc } = job;
+	const own = `${project}/source/textures/${stem}/${png}`;
+	const isOwn = await files.exists(own);
+	const src = isOwn ? own : `${project}/source/textures/${png}`;
+	const prefix = isOwn ? `${stem}_` : "";
+	const name = fileName(`${prefix}${withoutExtension(png)}.dds`);
+	if (textures.has(src)) return textures.get(src) as string;
+	if (!(await files.exists(src))) {
+		job.log(`  ${png}: no such texture, drawn white`);
+		textures.set(src, WHITE);
+		return WHITE;
+	}
+	const b = await files.read(src);
+	const fmt = texAc[png]?.ac ?? "DXT1";
+	const key = await digestOf([b, enc(fmt), new Uint8Array([texAc[png]?.normal ? 1 : 0])]);
+	const kept = `${project}/build/cache/dds/${key}.dds`;
+	// (a cached one that is no DDS made again: AC's build passes a library's JPEG on as it is)
+	let dds: Uint8Array | null = (await files.exists(kept)) ? await files.read(kept) : null;
+	if (!dds || !isDds(dds)) {
+		dds = isPng(b) ? await acDds(`${withoutExtension(png)}.dds`, b, texAc) : await squareDds(b, fmt);
+		await files.write(kept, dds);
+	}
+	if (!powerOfTwoDds(dds)) dds = await squareDds(b, fmt);
+	await put(job, `${job.maps}/${name}`, dds);
+	textures.set(src, name);
+	return name;
+}
+
+/** An editor's model's own picture (inside its model) as a DDS of sides powers of two, once a picture: DXT5 where it shows through, else DXT1. */
+async function ownTextureOf(job: Rf2Job, own: OwnMaterial): Promise<string> {
+	const pic = own.colour;
+	if (!pic) return WHITE;
+	const { textures } = job;
+	const hash = await digestOf([pic.data]);
+	const src = `own:${hash}`;
+	if (textures.has(src)) return textures.get(src) as string;
+	const name = fileName(`own_${hash.slice(0, 8)}_${withoutExtension(pic.name)}.dds`);
+	let img: Picture;
+	try {
+		img = await readPicture(pic.data);
+	} catch (e) {
+		job.log(`  ${pic.name}: ${(e as Error).message}, drawn white`);
+		textures.set(src, WHITE);
+		return WHITE;
+	}
+	await put(job, `${job.maps}/${name}`, ddsChain(convert(powerOfTwoSized(img), "RGBA"), own.alpha === "opaque" ? "DXT1" : "DXT5"));
+	textures.set(src, name);
+	return name;
+}
+
+/** A working gantry's lamps as its StartLight: a GMT of them, each its own material stepped by the start (rf2/startlights.ts), their frames written once. */
+async function startLightOf(job: Rf2Job, stem: string, lamps: StartLamp[]): Promise<Instance> {
+	if (!job.lampTextures) {
+		const { off, on } = lampPictures();
+		await put(job, `${job.maps}/${LAMP_TEXTURE}00.dds`, ddsChain(off, "DXT5"));
+		await put(job, `${job.maps}/${LAMP_TEXTURE}01.dds`, ddsChain(on, "DXT5"));
+		job.lampTextures = true;
+	}
+	const order = [...lamps].sort((a, b) => a.at - b.at);
+	const materials = order.map((_, i) => lampMaterial(`STARTLAMP${i}`, i, order.length));
+	const meshes = order.flatMap(({ mesh }, i) => gmtMeshOf(mesh, i, job.axes) ?? []);
+	const name = fileName(`${stem}_startlight`);
+	await put(job, `${job.gmtDir}/${name}.gmt`, writeGmt(staticGmt(START_LIGHT, meshes, materials, SEEN_FAR, 0)));
+	job.gmts++;
+	return { name: START_LIGHT, mesh: `${name}.gmt`, collide: false, hat: false, shadows: false };
+}
+
+/** A model's meshes sorted for its GMTs: its groups (by kind, how they are drawn, and tile), its floor and roads (the AI lines'), and a working gantry's
+ * lamps and board (each layout's own, rf2/screens.ts). */
+interface ModelParts {
+	groups: Map<string, Group>;
+	floor: Float64Array[];
+	road: Float64Array[];
+	lamps: StartLamp[];
+	boards: TrackMesh[];
+}
+
+/** A mesh's faces' corners' places, three numbers a corner (the floor the AI lines are laid on). */
+function floorOf(m: TrackMesh): Float64Array {
+	const T = new Float64Array(m.f.length * 3);
+	for (let i = 0; i < m.f.length; i++) for (let j = 0; j < 3; j++) T[i * 3 + j] = m.v[(m.f[i] as number) * CORNER + j] as number;
+	return T;
+}
+
+/** A mesh put in its model's groups (its ground among the location's grounds), and in its floor and roads where it is driven on. */
+function addMesh(parts: ModelParts, m: TrackMesh, lib: Library, surfaces: Surfaces, grounds: Map<string, Ground>): void {
+	const kind = kindOf(m.role);
+	const g0 = kind === "visual" ? null : meshGround(m, lib);
+	const ground = g0 ? groundOf(g0, surfaces) : null;
+	if (ground) grounds.set(ground.prefix, ground);
+	if (kind === "surface") {
+		const T = floorOf(m);
+		parts.floor.push(T);
+		if (g0 && ROADS.has(g0)) parts.road.push(T);
+	}
+	const near = m.draw[0] ?? 0;
+	// (as far as its model says; else the ground and what is driven on to the horizon, the rest not so far)
+	const far = m.draw[1] ?? (kind === "surface" ? DRAW_FAR : SEEN_FAR);
+	// (only the roads and rumbles rubbered in and wetted by RealRoad, as Joesville's race surface: not the grass)
+	const deformable = kind === "surface" && !!ground && DEFORMED.has(ground.prefix);
+	// (in tiles, each its own GMTs: rFactor culls and draws near or far by a whole GMT, so each keeps to its tile)
+	for (const [cell, part] of tilesOf(m, tileSize(far))) {
+		const key = `${kind}|${m.visible}|${m.shadows}|${near}|${far}|${deformable}|${cell}`;
+		let g = parts.groups.get(key);
+		if (!g) {
+			g = { kind, visible: m.visible, shadows: m.shadows, near, far, deformable, meshes: [] };
+			parts.groups.set(key, g);
+		}
+		g.meshes.push({ mesh: part, ground });
+	}
+}
+
+/** A model's meshes sorted (see ModelParts), the empty left out; a board only seen, of a board's screen's material (screens), kept apart. */
+function modelParts(
+	meshes: TrackMesh[],
+	lib: Library,
+	surfaces: Surfaces,
+	grounds: Map<string, Ground>,
+	screens: ReadonlyMap<string, BoardScreen> = new Map(),
+): ModelParts {
+	const parts: ModelParts = { groups: new Map(), floor: [], road: [], lamps: [], boards: [] };
+	for (const m of meshes) {
+		if (!m.f.length) continue;
+		// (a working gantry's lamps: the StartLight's, lit by the start)
+		const lamp = START_LAMP.exec(m.name);
+		if (lamp) parts.lamps.push({ at: Number(lamp[1]), mesh: m });
+		// (its flag lamp: none, as no script shows it here; it stands where the lamps are and would hide them)
+		else if (m.name === FLAG) continue;
+		else if (m.visible && kindOf(m.role) === "visual" && screens.has(m.material ?? "")) parts.boards.push(m);
+		else addMesh(parts, m, lib, surfaces, grounds);
+	}
+	return parts;
+}
+
+/** A mesh's texture: white where it is unseen; an editor's model's own picture; else its library colour's. */
+async function meshTexture(job: Rf2Job, stem: string, visible: boolean, mesh: TrackMesh): Promise<string> {
+	if (!visible) return WHITE;
+	const prices = job.prices.get(mesh.material ?? "");
+	if (prices) return pricesTexture(job, prices);
+	if (mesh.own) return ownTextureOf(job, mesh.own);
+	return textureOf(job, job.lib[mesh.material ?? ""]?.colour, stem);
+}
+
+/** A prices screen's picture, its prices in seven segments (rf2/screens.ts), a DDS once. */
+async function pricesTexture(job: Rf2Job, s: PriceScreen): Promise<string> {
+	const src = `prices:${s.material}`;
+	const known = job.textures.get(src);
+	if (known) return known;
+	const name = fileName(`screen_${s.material}.dds`);
+	await put(job, `${job.maps}/${name}`, ddsChain(powerOfTwoSized(pricesPicture(s)), "DXT1"));
+	job.textures.set(src, name);
+	return name;
+}
+
+/** How a mesh shows what is behind it: an editor's model's own alpha, never the library's of its name; else its library material's. */
+function meshAlpha(mesh: TrackMesh, lib: Library): string | undefined {
+	if (mesh.own) return mesh.own.alpha;
+	return mesh.material ? lib[mesh.material]?.alpha : undefined;
+}
+
+/** A mesh's material's name, before its ground's: an editor's model's own named after its picture. */
+function meshMaterialName(mesh: TrackMesh): string {
+	const own = mesh.own;
+	if (!own) return mesh.material ?? "hidden";
+	const picture = own.colour ? withoutExtension(own.colour.name) : "";
+	return `${mesh.material ?? "material"}_own_${picture}`;
+}
+
+/** A mesh's material, made once for its model. */
+async function meshMaterial(job: Rf2Job, stem: string, g: Group, mesh: TrackMesh, ground: Ground | null, made: Map<string, GmtMaterial>): Promise<GmtMaterial> {
+	const name = materialName(meshMaterialName(mesh), ground);
+	let mat = made.get(name);
+	if (!mat) {
+		const tex = await meshTexture(job, stem, g.visible, mesh);
+		mat = diffuseMaterial(name, tex, alphaOf(meshAlpha(mesh, job.lib)));
+		made.set(name, mat);
+	}
+	return mat;
+}
+
+/** A group's filled GMT written: its instance in the scene. */
+async function groupGmt(job: Rf2Job, name: string, g: Group, fill: GmtFill): Promise<Instance> {
+	await put(job, `${job.gmtDir}/${name}.gmt`, writeGmt(staticGmt(name, fill.meshes, fill.materials, g.far, g.near)));
+	job.gmts++;
+	return {
+		name,
+		mesh: `${name}.gmt`,
+		collide: g.kind !== "visual",
+		hat: g.kind === "surface",
+		deformable: g.deformable,
+		render: g.visible ? undefined : false,
+		// (a surface casts none: rFactor drops Deformable from a shadow caster, as the samples' race surfaces cast none; nor does a mesh drawn only near, a
+		// tyre stack's detail: its far stand-in casts its shadow)
+		shadows: g.visible && g.shadows && g.kind !== "surface" && g.far > 100,
+	};
+}
+
+/** A group's GMT filled so far written, where it has anything, its instance after the model's others (and numbered by them). */
+async function flushFill(job: Rf2Job, stem: string, g: Group, fill: GmtFill, inst: Instance[]): Promise<void> {
+	if (!fill.empty) inst.push(await groupGmt(job, fileName(`${stem}_${g.kind}_${inst.length}`), g, fill));
+}
+
+/** A model's groups as GMTs, each filled up to the samples' limits (a new GMT after; one mesh a material, each material made once for the model): their
+ * instances. */
+async function groupGmts(job: Rf2Job, stem: string, groups: Map<string, Group>): Promise<Instance[]> {
+	const inst: Instance[] = [];
+	const made = new Map<string, GmtMaterial>();
+	for (const g of groups.values()) {
+		let fill = new GmtFill();
+		for (const { mesh, ground } of g.meshes) {
+			const mat = await meshMaterial(job, stem, g, mesh, ground, made);
+			const gm = gmtMeshOf(mesh, 0, job.axes);
+			if (!gm) continue;
+			for (const piece of gmtPieces(gm)) {
+				if (!fill.fits(piece, mat)) {
+					await flushFill(job, stem, g, fill, inst);
+					fill = new GmtFill();
+				}
+				fill.add(piece, mat);
+			}
+		}
+		await flushFill(job, stem, g, fill, inst);
+	}
+	return inst;
+}
+
+/** The models' GMTs written: each model's instances, its floor and roads, the grounds driven on, each working gantry's lamps (how many, by its model) and its
+ * board's meshes (each layout's own written with the layout). */
+interface ModelsBuilt {
+	instancesOf: Map<string, Instance[]>;
+	floorParts: Map<string, { floor: Float64Array[]; road: Float64Array[] }>;
+	grounds: Map<string, Ground>;
+	lampsOf: Map<string, number>;
+	boardsOf: Map<string, TrackMesh[]>;
+}
+
+/** Each model's meshes as GMTs, a GMT for each kind of them (a model not there left out); its boards of the screens' materials kept for the layouts. */
+async function modelGmts(job: Rf2Job, stems: string[], models: string, surfaces: Surfaces, screens: ReadonlyMap<string, BoardScreen>): Promise<ModelsBuilt> {
+	const built: ModelsBuilt = { instancesOf: new Map(), floorParts: new Map(), grounds: new Map(), lampsOf: new Map(), boardsOf: new Map() };
+	for (const stem of stems) {
+		const path = `${models}/${stem}.glb`;
+		if (!(await job.files.exists(path))) {
+			job.log(`  ${stem}: no model ${path}, left out`);
+			built.instancesOf.set(stem, []);
+			continue;
+		}
+		const parts = modelParts(trackModel(await job.files.read(path)), job.lib, surfaces, built.grounds, screens);
+		built.floorParts.set(stem, { floor: parts.floor, road: parts.road });
+		if (parts.boards.length) built.boardsOf.set(stem, parts.boards);
+		const inst = await groupGmts(job, stem, parts.groups);
+		if (parts.lamps.length) {
+			inst.push(await startLightOf(job, stem, parts.lamps));
+			built.lampsOf.set(stem, parts.lamps.length);
+		}
+		built.instancesOf.set(stem, inst);
+		job.log(`  ${stem}: ${inst.length} GMT${inst.length === 1 ? "" : "s"}`);
+	}
+	return built;
+}
+
+/** The placed objects being made: the catalogue and its models' parts, the boards' cards, and each object's GMT and material made once. */
+interface Placing {
+	job: Rf2Job;
+	src: CatalogueSource;
+	cat: Awaited<ReturnType<typeof catalogue>>;
+	parts: Map<string, Promise<TemplatePart[]>>;
+	cards: { sheet: CardSheet; texture: string } | null;
+	objects: Map<string, string>;
+	materials: Map<string, GmtMaterial>;
+}
+
+/** A catalogue model's parts, loaded once. */
+function partsFor(p: Placing, model: string): Promise<TemplatePart[]> {
+	let ps = p.parts.get(model);
+	if (!ps) {
+		const meta = p.cat[model];
+		if (!meta) throw new Error(`a placed object of a model the catalogue has not: ${model}`);
+		ps = loadTemplate(p.src, meta);
+		p.parts.set(model, ps);
+	}
+	return ps;
+}
+
+/** The boards' cards: one sheet of every board's text, as the AC build draws it, and its texture (none where there is no board, or it is not drawn). */
+async function boardCards(job: Rf2Job, boards: PhysicsObject[], painter: CardPainter | undefined): Promise<Placing["cards"]> {
+	if (!boards.length) return null;
+	const sheet = cardSheet(boards.map((ob) => boardText(ob.name, ob.text)));
+	try {
+		const png = await (painter ?? canvasCards)(sheet);
+		const cards = { sheet, texture: await ownTextureOf(job, { colour: { name: CARDS_PICTURE, data: png }, alpha: "opaque" }) };
+		job.log(`  the boards' cards: ${sheet.texts.map((t) => JSON.stringify(t)).join(", ") || "blank"}`);
+		return cards;
+	} catch (e) {
+		job.log(`  the boards' cards: ${(e as Error).message}, left blank`);
+		return null;
+	}
+}
+
+/** A placed object's part's material, made once (the boards' cards drawn on their sheet's texture). */
+async function objectMaterial(p: Placing, part: TemplatePart, model: string): Promise<GmtMaterial> {
+	const key = part.material;
+	let m = p.materials.get(key);
+	if (!m) {
+		const e = p.job.lib[part.material];
+		const tex = part.material === CARDS_MATERIAL && p.cards ? p.cards.texture : await textureOf(p.job, e?.colour, model);
+		m = diffuseMaterial(materialName(part.material, null), tex, alphaOf(e?.alpha));
+		p.materials.set(key, m);
+	}
+	return m;
+}
+
+/** A placed object's GMT, written once for the same object in any layout: its name. */
+async function objectOf(p: Placing, ob: PhysicsObject): Promise<string> {
+	const { job } = p;
+	const key = objectKey(ob);
+	const had = p.objects.get(key);
+	if (had) return had;
+	const name = objectName(ob.model, await digestOf([enc(key)]));
+	const own = (await partsFor(p, ob.model)).filter((pt) => pt.part !== "hull");
+	const shown = p.cards && p.cat[ob.model]?.kind === "boards" ? onCards(own, BOARD_SHEET_MATERIAL, p.cards.sheet, boardText(ob.name, ob.text)) : own;
+	const meshes: GmtMesh[] = [];
+	const materials: GmtMaterial[] = [];
+	for (const pt of shown) {
+		const mat = await objectMaterial(p, pt, ob.model);
+		let k = materials.indexOf(mat);
+		if (k < 0) k = materials.push(mat) - 1;
+		const gm = gmtMeshOf(turnedMesh(pt, ob.heading), k, job.axes);
+		if (gm) meshes.push(gm);
+	}
+	await put(job, `${job.gmtDir}/${name}.gmt`, writeGmt(objectGmt(name, ob, meshes, materials, staticGmt, job.axes)));
+	job.gmts++;
+	p.objects.set(key, name);
+	return name;
+}
+
+/** Each layout's placed objects (places.json: its cones, its marker board), knocked about: a GMT each, the same object in two layouts one; their instances
+ * by layout (none where no layout has any). */
+async function placedObjects(job: Rf2Job, o: Rf2Options, layouts: string[], placed: PlacesDoc["layouts"]): Promise<Map<string, Instance[]>> {
+	const objectsOf = new Map<string, Instance[]>();
+	if (!layouts.some((l) => placed[l]?.objects?.length)) return objectsOf;
+	const { files, project } = job;
+	const src: CatalogueSource = {
+		read: (f) => files.read(f),
+		exists: (f) => files.exists(f),
+		editorModels: editorModelsOf(project, o.editorModels),
+		textures: `${project}/source/textures`,
+	};
+	const cat = await catalogue(src);
+	const boards = layouts.flatMap((l) => (placed[l]?.objects ?? []).filter((ob) => cat[ob.model]?.kind === "boards"));
+	const cards = await boardCards(job, boards, o.cards);
+	const p: Placing = { job, src, cat, parts: new Map(), cards, objects: new Map(), materials: new Map() };
+	for (const l of layouts) {
+		const list: Instance[] = [];
+		const seen = new Set<string>();
+		for (const ob of placed[l]?.objects ?? []) {
+			if (!cat[ob.model]) {
+				job.log(`  ${l}: ${ob.name}, a ${ob.model} the catalogue has not, left out`);
+				continue;
+			}
+			const name = await objectOf(p, ob);
+			if (seen.has(name)) continue;
+			seen.add(name);
+			list.push(objectInstance(name));
+		}
+		objectsOf.set(l, list);
+	}
+	job.log(`  placed objects: ${p.objects.size} GMTs, knocked about in ${objectsOf.size} layouts`);
+	return objectsOf;
+}
+
+/** Floor triangles of several meshes as one surface. */
+function together(parts: Float64Array[]): Surface {
+	const all = new Float64Array(parts.reduce((a, p) => a + p.length, 0));
+	let at = 0;
+	for (const p of parts) {
+		all.set(p, at);
+		at += p.length;
+	}
+	return new Surface(all);
+}
+
+/** A layout's ui_track.json (empty where it has none). */
+async function uiOf(files: HostFiles, project: string, l: string): Promise<Record<string, string>> {
+	const p = `${project}/source/track/ui/${l}/ui_track.json`;
+	return (await files.exists(p)) ? await readJson<Record<string, string>>(files, p) : {};
+}
+
+/** A layout's timing beams' GMTs written: their instances, a pit lane's ends pit stops', the rest timing's. */
+async function beamInstances(job: Rf2Job, dir: string, beams: Beam[]): Promise<Instance[]> {
+	const out: Instance[] = [];
+	for (const b of beams) {
+		await put(job, `${dir}/${b.name}.gmt`, writeGmt(beamGmt(b)));
+		out.push({
+			name: b.name,
+			mesh: `${b.name}.gmt`,
+			collide: true,
+			hat: false,
+			render: false,
+			response: b.name === "xpitin" || b.name === "xpitout" ? "VEHICLE,PITSTOP" : "VEHICLE,TIMING",
+		});
+	}
+	return out;
+}
+
+/** Where a layout's fixed reflections are seen from: the middle of its start line (else of its first beam), 2 m over it. */
+function reflectionsCentre(beams: Beam[]): [number, number, number] | undefined {
+	const finish = beams.find((b) => b.name === "xfinish") ?? beams[0];
+	if (!finish) return undefined;
+	return [(finish.left[0] + finish.right[0]) / 2, (finish.left[1] + finish.right[1]) / 2 + 2, (finish.left[2] + finish.right[2]) / 2];
+}
+
+/** What every layout's files are made of: the venue, its TDF, the models' GMTs, the placed objects, the lights at night and what letters the boards. */
+interface LayoutSources {
+	venue: string;
+	trackName: string;
+	tdf: string;
+	pictures: boolean;
+	lists: Record<string, string[]>;
+	layouts: LayoutsObjects | undefined;
+	models: ModelsBuilt;
+	objectsOf: Map<string, Instance[]>;
+	lights: Light[];
+	boards: { screens: ReadonlyMap<string, BoardScreen>; painter: BoardPainter } | null;
+}
+
+/** A board's own picture: its model's, else its library material's (none: null). */
+async function boardPicture(job: Rf2Job, mesh: TrackMesh): Promise<Uint8Array | null> {
+	if (mesh.own) return mesh.own.colour?.data ?? null;
+	const png = job.lib[mesh.material ?? ""]?.colour;
+	const p = `${job.project}/source/textures/${png}`;
+	return png && (await job.files.exists(p)) ? job.files.read(p) : null;
+}
+
+/** A board's picture lettered with its lines (rf2/screens.ts), a DDS once for the same picture and lines; its picture as it is where it cannot be lettered. */
+async function boardTexture(job: Rf2Job, stem: string, mesh: TrackMesh, boards: NonNullable<LayoutSources["boards"]>, lines: string[]): Promise<string> {
+	const screen = boards.screens.get(mesh.material ?? "") as BoardScreen;
+	const picture = await boardPicture(job, mesh);
+	if (!picture) return meshTexture(job, stem, true, mesh);
+	const key = await digestOf([picture, enc(JSON.stringify([screen, lines]))]);
+	const src = `board:${key}`;
+	const known = job.textures.get(src);
+	if (known) return known;
+	let drawn: Picture;
+	try {
+		drawn = await readPicture(await boards.painter({ picture, screen, lines }));
+	} catch (e) {
+		job.log(`  ${stem}'s board: ${(e as Error).message}, its picture as it is`);
+		return meshTexture(job, stem, true, mesh);
+	}
+	const name = fileName(`${stem}_board_${key.slice(0, 8)}.dds`);
+	await put(job, `${job.maps}/${name}`, ddsChain(convert(powerOfTwoSized(drawn), "RGBA"), "DXT1"));
+	job.textures.set(src, name);
+	return name;
+}
+
+/** A layout's own boards on its models' gantries: each a GMT of the board's meshes, its picture lettered with the track's and the layout's names. */
+async function layoutBoards(job: Rf2Job, l: string, models: string[], s: LayoutSources, lines: string[]): Promise<Instance[]> {
+	const out: Instance[] = [];
+	if (!s.boards) return out;
+	for (const stem of models) {
+		const meshes = s.models.boardsOf.get(stem) ?? [];
+		const board = meshes.length ? await modelBoard(job, `${stem}_board_${l}`, stem, meshes, s.boards, lines) : null;
+		if (board) out.push(board);
+	}
+	return out;
+}
+
+/** A model's board in a layout: a GMT named name of its meshes (the first's drawing kept), its picture lettered with the lines; none where none is drawn. */
+async function modelBoard(
+	job: Rf2Job,
+	named: string,
+	stem: string,
+	meshes: TrackMesh[],
+	boards: NonNullable<LayoutSources["boards"]>,
+	lines: string[],
+): Promise<Instance | null> {
+	const first = meshes[0] as TrackMesh;
+	const name = fileName(named);
+	const material = diffuseMaterial(name, await boardTexture(job, stem, first, boards, lines));
+	const fill = new GmtFill();
+	for (const m of meshes) {
+		const gm = gmtMeshOf(m, 0, job.axes);
+		if (gm) for (const piece of gmtPieces(gm)) fill.add(piece, material);
+	}
+	if (fill.empty) return null;
+	const far = first.draw[1] ?? SEEN_FAR;
+	await put(job, `${job.gmtDir}/${name}.gmt`, writeGmt(staticGmt(name, fill.meshes, fill.materials, far, first.draw[0] ?? 0)));
+	job.gmts++;
+	return { name, mesh: `${name}.gmt`, collide: false, hat: false, shadows: first.shadows && far > 100 };
+}
+
+/** A layout's scene, GDB, weather, AIW and timing beams written: its lap, for its pictures. */
+async function writeLayout(job: Rf2Job, l: string, s: LayoutSources): Promise<Lap> {
+	const { venue, trackName, tdf } = s;
+	const dir = `${job.out}/${l}`;
+	const lay = s.layouts?.[l] as LayoutObjects & { lines: RacingLines };
+	const models = s.lists[l] ?? [];
+	const parts = models.map((m) => s.models.floorParts.get(m) ?? { floor: [], road: [] });
+	const F = together(parts.flatMap((p) => p.floor));
+	const R = together(parts.flatMap((p) => p.road));
+	const floor = (x: number, z: number) => F.y(x, z);
+	const onRoad = (x: number, z: number) => !Number.isNaN(R.y(x, z));
+	const fast = aiLineOf(lay.lines.fast as RacingLine, floor, onRoad);
+	const pit = lay.lines.pit?.curve?.length ? aiLineOf(lay.lines.pit, floor, onRoad, STEP, {}) : null;
+	const input = { layout: lay, fast, pit, floor, axes: job.axes };
+	await put(job, `${dir}/${l}.AIW`, aiwText(input));
+	const timing = aiwTiming(input);
+	const beams = await beamInstances(job, dir, timing.beams);
+	// (its fixed reflections seen from the middle of its start line, 2 m over it)
+	const centre = reflectionsCentre(timing.beams);
+	const ui = await uiOf(job.files, job.project, l);
+	const title = ui.name || `${trackName} ${l}`;
+	const location = ui.city && ui.country ? `${ui.city}, ${ui.country}` : undefined;
+	const boards = await layoutBoards(job, l, models, s, boardLines(trackName, layoutTitle(title, trackName, l)));
+	await put(
+		job,
+		`${dir}/${l}.scn`,
+		scnText({
+			searchPaths: [".", venue, `${venue}\\${l}`, String.raw`${venue}\Assets\GMT`, String.raw`${venue}\Assets\Maps`],
+			instances: oneStartLight([...models.flatMap((m) => s.models.instancesOf.get(m) ?? []), ...boards, ...(s.objectsOf.get(l) ?? []), ...beams]),
+			lights: s.lights,
+			centre,
+		}),
+	);
+	await put(
+		job,
+		`${dir}/${l}.gdb`,
+		gdbText({
+			id: l,
+			trackName: title,
+			eventName: title,
+			venueName: trackName,
+			length: timing.lap,
+			tdf: `..\\${tdf}`,
+			location,
+			venueIcon: s.pictures ? `${venue}\\${venueIconFile(venue)}` : undefined,
+			startingLights: startingLightsOf(models, s.models.lampsOf),
+		}),
+	);
+	await put(job, `${dir}/${l}.wet`, wetText());
+	job.log(`  ${l}: ${(timing.lap / 1000).toFixed(3)} km, ${beams.length} timing beams`);
+	return { line: mapLine(fast.points), points: fast.points, lap: timing.lap, title, location };
+}
+
+/** The layouts made: those asked for (else every one of track.json's), each with models and a racing line; the rest in skipped, with why. */
+function layoutsMade(
+	asked: string[] | undefined,
+	lists: Record<string, string[]>,
+	objects: LayoutsObjects | undefined,
+	skipped: Record<string, string>,
+): string[] {
+	return (asked ?? Object.keys(lists)).filter((l) => {
+		if (!lists[l]?.length) skipped[l] = "no models in track.json";
+		else if (!objects?.[l]?.lines?.fast?.curve?.length) skipped[l] = "no racing line (its AIW is made of it)";
+		return !skipped[l];
+	});
+}
+
 /** The location made (see the module's note). */
 export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Built> {
 	const log = o.log ?? (() => {});
-	const axes = o.axes ?? TRACK_TO_RF2;
-	const project = o.project.replace(/[\\/]+$/, "");
-	const readJson = async <T>(p: string): Promise<T> => JSON.parse(dec(await files.read(p)).replace(/^﻿/, "")) as T;
-	const track = await readJson<{ name?: string; models?: string; layouts?: Record<string, { models?: string[] }> }>(`${project}/tools/reference/track.json`);
+	const project = trimSlashes(o.project);
+	const track = await readJson<{ name?: string; models?: string; layouts?: Record<string, { models?: string[] }> }>(
+		files,
+		`${project}/tools/reference/track.json`,
+	);
 	const trackName = track.name ?? "Track";
 	const venue = acFolder(trackName);
-	const out = `${(o.out ?? `${project}/build/rf2`).replace(/[\\/]+$/, "")}/Locations/${venue}`;
+	const root = trimSlashes(o.out ?? `${project}/build/rf2`);
+	const out = `${root}/Locations/${venue}`;
 	const models = `${project}/${track.models || "track/models"}`;
-	const libDoc = await readJson<{
-		materials: Record<string, { colour?: string; alpha?: string; surface?: string }>;
-		textures?: Record<string, TextureAc>;
-	}>(`${project}/source/materials.json`);
-	const lib = libDoc.materials;
-	const texAc = libDoc.textures ?? {};
+	const libDoc = await readJson<{ materials: Library; textures?: Record<string, TextureAc> }>(files, `${project}/source/materials.json`);
 	const surfaces = (await files.exists(`${project}/source/surfaces.json`))
-		? ((await readJson<{ surfaces?: Record<string, { targets?: { rf2?: string } }> }>(`${project}/source/surfaces.json`)).surfaces ?? {})
+		? ((await readJson<{ surfaces?: Surfaces }>(files, `${project}/source/surfaces.json`)).surfaces ?? {})
 		: {};
-	const objects = plain((await readPart(files, await settingsOf(files, project), "objects")) ?? ({} as PyJson)) as {
-		layouts?: Record<string, LayoutObjects & { lines?: RacingLines }>;
-	};
+	const objects = plain((await readPart(files, await settingsOf(files, project), "objects")) ?? ({} as PyJson)) as { layouts?: LayoutsObjects };
 	const lists = Object.fromEntries(Object.entries(track.layouts ?? {}).map(([k, v]) => [k, v.models ?? []]));
 	const skipped: Record<string, string> = {};
-	const layouts = (o.layouts ?? Object.keys(lists)).filter((l) => {
-		if (!lists[l]?.length) skipped[l] = "no models in track.json";
-		else if (!objects.layouts?.[l]?.lines?.fast?.curve?.length) skipped[l] = "no racing line (its AIW is made of it)";
-		return !skipped[l];
-	});
+	const layouts = layoutsMade(o.layouts, lists, objects.layouts, skipped);
 	if (!layouts.length) throw new Error(`no layout to make: ${JSON.stringify(skipped)}`);
-	const written: string[] = [];
-	const put = async (path: string, data: Uint8Array | string) => {
-		await files.write(path, typeof data === "string" ? enc(data) : data);
-		written.push(path);
+	// (the track's lights and screens: its lamps lit at night, its screens drawn still, rf2/screens.ts)
+	const lightsDoc = await lightsData(files, project, models);
+	const job: Rf2Job = {
+		files,
+		project,
+		out,
+		maps: `${out}/Assets/Maps`,
+		gmtDir: `${out}/Assets/GMT`,
+		axes: o.axes ?? TRACK_TO_RF2,
+		log,
+		lib: libDoc.materials,
+		texAc: libDoc.textures ?? {},
+		textures: new Map(),
+		written: [],
+		gmts: 0,
+		lampTextures: false,
+		prices: priceScreens(lightsDoc),
 	};
 
 	// ---- textures: each library colour as the AC build's DDS of it, once
-	const maps = `${out}/Assets/Maps`;
-	const ddsCache = `${project}/build/cache/dds`;
-	const textures = new Map<string, string>();
 	// (32 bits a pixel: Direct3D 11, rFactor's, has no 24-bit format)
-	await put(`${maps}/${WHITE}`, ddsOf({ width: 4, height: 4, mode: "RGBA", data: new Uint8Array(64).fill(255) }));
-	const textureOf = async (png: string | undefined, stem: string): Promise<string> => {
-		if (!png) return WHITE;
-		const own = `${project}/source/textures/${stem}/${png}`;
-		const isOwn = await files.exists(own);
-		const src = isOwn ? own : `${project}/source/textures/${png}`;
-		const name = fileName(`${isOwn ? `${stem}_` : ""}${png.replace(/\.[^.]*$/, "")}.dds`);
-		if (textures.has(src)) return textures.get(src) as string;
-		if (!(await files.exists(src))) {
-			log(`  ${png}: no such texture, drawn white`);
-			textures.set(src, WHITE);
-			return WHITE;
-		}
-		const b = await files.read(src);
-		const fmt = texAc[png]?.ac ?? "DXT1";
-		const key = await digestOf([b, enc(fmt), new Uint8Array([texAc[png]?.normal ? 1 : 0])]);
-		const kept = `${ddsCache}/${key}.dds`;
-		// (a cached one that is no DDS made again: AC's build passes a library's JPEG on as it is)
-		let dds: Uint8Array | null = (await files.exists(kept)) ? await files.read(kept) : null;
-		if (!dds || !isDds(dds)) {
-			dds = isPng(b) ? await acDds(`${png.replace(/\.[^.]*$/, "")}.dds`, b, texAc) : await squareDds(b, fmt);
-			await files.write(kept, dds);
-		}
-		if (!powerOfTwoDds(dds)) dds = await squareDds(b, fmt);
-		await put(`${maps}/${name}`, dds);
-		textures.set(src, name);
-		return name;
-	};
-	/** An editor's model's own picture (inside its model) as a DDS of sides powers of two, once a picture: DXT5 where it shows through, else DXT1. */
-	const ownTextureOf = async (own: OwnMaterial): Promise<string> => {
-		const pic = own.colour;
-		if (!pic) return WHITE;
-		const hash = await digestOf([pic.data]);
-		const src = `own:${hash}`;
-		if (textures.has(src)) return textures.get(src) as string;
-		const name = fileName(`own_${hash.slice(0, 8)}_${pic.name.replace(/\.[^.]*$/, "")}.dds`);
-		let img: Awaited<ReturnType<typeof readPicture>>;
-		try {
-			img = await readPicture(pic.data);
-		} catch (e) {
-			log(`  ${pic.name}: ${(e as Error).message}, drawn white`);
-			textures.set(src, WHITE);
-			return WHITE;
-		}
-		const up = (n: number) => Math.min(4096, 2 ** Math.ceil(Math.log2(Math.max(n, 4))));
-		const sized = pow2(img.width) && pow2(img.height) ? img : resizeLanczos(img, up(img.width), up(img.height));
-		await put(`${maps}/${name}`, ddsChain(convert(sized, "RGBA"), own.alpha === "opaque" ? "DXT1" : "DXT5"));
-		textures.set(src, name);
-		return name;
-	};
+	await put(job, `${job.maps}/${WHITE}`, ddsOf({ width: 4, height: 4, mode: "RGBA", data: new Uint8Array(64).fill(255) }));
+
+	// ---- the gantries' boards lettered where there is a canvas (rf2/screens.ts)
+	const painter = o.boards ?? (typeof OffscreenCanvas === "undefined" ? undefined : canvasBoard);
+	const boards = painter ? { screens: boardScreens(lightsDoc), painter } : null;
+	if (!painter) log("  boards: none lettered here (no canvas): the gantries' boards as their pictures are");
 
 	// ---- each model's meshes as GMTs, a GMT for each kind of them
-	const gmtDir = `${out}/Assets/GMT`;
-	const stems = [...new Set(layouts.flatMap((l) => lists[l] ?? []))];
-	const instancesOf = new Map<string, Instance[]>();
-	const floorParts = new Map<string, { floor: Float64Array[]; road: Float64Array[] }>();
-	const grounds = new Map<string, Ground>();
-	let gmts = 0;
-	for (const stem of stems) {
-		const path = `${models}/${stem}.glb`;
-		if (!(await files.exists(path))) {
-			log(`  ${stem}: no model ${path}, left out`);
-			instancesOf.set(stem, []);
-			continue;
-		}
-		const meshes = trackModel(await files.read(path));
-		const groups = new Map<string, Group>();
-		const floor: Float64Array[] = [];
-		const road: Float64Array[] = [];
-		for (const m of meshes) {
-			if (!m.f.length) continue;
-			const kind: Kind = m.role === "surface" ? "surface" : m.role === "wall" ? "wall" : "visual";
-			const g0 = kind === "visual" ? null : meshGround(m, lib);
-			const ground = g0 ? groundOf(g0, surfaces) : null;
-			if (ground) grounds.set(ground.prefix, ground);
-			if (kind === "surface") {
-				const T = new Float64Array(m.f.length * 3);
-				for (let i = 0; i < m.f.length; i++) for (let j = 0; j < 3; j++) T[i * 3 + j] = m.v[(m.f[i] as number) * CORNER + j] as number;
-				floor.push(T);
-				if (g0 && ROADS.has(g0)) road.push(T);
-			}
-			const near = m.draw[0] ?? 0;
-			// (as far as its model says; else the ground and what is driven on to the horizon, the rest not so far)
-			const far = m.draw[1] ?? (kind === "surface" ? DRAW_FAR : SEEN_FAR);
-			// (only the roads and rumbles rubbered in and wetted by RealRoad, as Joesville's race surface: not the grass)
-			const deformable = kind === "surface" && !!ground && DEFORMED.has(ground.prefix);
-			// (in tiles, each its own GMTs: rFactor culls and draws near or far by a whole GMT, so each keeps to its tile)
-			for (const [cell, part] of tilesOf(m, tileSize(far))) {
-				const key = `${kind}|${m.visible}|${m.shadows}|${near}|${far}|${deformable}|${cell}`;
-				let g = groups.get(key);
-				if (!g) {
-					g = { kind, visible: m.visible, shadows: m.shadows, near, far, deformable, meshes: [] };
-					groups.set(key, g);
-				}
-				g.meshes.push({ mesh: part, ground });
-			}
-		}
-		floorParts.set(stem, { floor, road });
-		const inst: Instance[] = [];
-		let n = 0;
-		// (each material made once for the model)
-		const made = new Map<string, GmtMaterial>();
-		for (const g of groups.values()) {
-			// (filled up to the samples' limits, a new GMT after; one mesh a material)
-			let fill = new GmtFill();
-			const flush = async () => {
-				if (fill.empty) return;
-				const name = fileName(`${stem}_${g.kind}_${n++}`);
-				await put(`${gmtDir}/${name}.gmt`, writeGmt(staticGmt(name, fill.meshes, fill.materials, g.far, g.near)));
-				gmts++;
-				inst.push({
-					name,
-					mesh: `${name}.gmt`,
-					collide: g.kind !== "visual",
-					hat: g.kind === "surface",
-					deformable: g.deformable,
-					render: g.visible ? undefined : false,
-					// (a surface casts none: rFactor drops Deformable from a shadow caster, as the samples' race surfaces cast none; nor does a mesh drawn only near, a
-					// tyre stack's detail: its far stand-in casts its shadow)
-					shadows: g.visible && g.shadows && g.kind !== "surface" && g.far > 100,
-				});
-				fill = new GmtFill();
-			};
-			for (const { mesh, ground } of g.meshes) {
-				// (an editor's model's own: its picture and alpha, never the library's of its name)
-				const own = mesh.own;
-				const e = own ? { alpha: own.alpha } : mesh.material ? lib[mesh.material] : undefined;
-				const name = materialName(
-					own ? `${mesh.material ?? "material"}_own_${own.colour?.name.replace(/\.[^.]*$/, "") ?? ""}` : (mesh.material ?? "hidden"),
-					ground,
-				);
-				let mat = made.get(name);
-				if (!mat) {
-					const tex = !g.visible ? WHITE : own ? await ownTextureOf(own) : await textureOf(lib[mesh.material ?? ""]?.colour, stem);
-					mat = diffuseMaterial(name, tex, e?.alpha === "blend" ? "blend" : e?.alpha === "mask" ? "mask" : "opaque");
-					made.set(name, mat);
-				}
-				const gm = gmtMeshOf(mesh, 0, axes);
-				if (!gm) continue;
-				for (const piece of gmtPieces(gm)) {
-					if (!fill.fits(piece, mat)) await flush();
-					fill.add(piece, mat);
-				}
-			}
-			await flush();
-		}
-		instancesOf.set(stem, inst);
-		log(`  ${stem}: ${inst.length} GMT${inst.length === 1 ? "" : "s"}`);
-	}
+	const built = await modelGmts(job, [...new Set(layouts.flatMap((l) => lists[l] ?? []))], models, surfaces, boards?.screens ?? new Map());
 
 	// ---- each layout's placed objects (places.json: its cones, its marker board), knocked about: a GMT each, the same object in two layouts one
 	const placesFile = `${models}/places.json`;
-	const placed = (await files.exists(placesFile)) ? (await readJson<PlacesDoc>(placesFile)).layouts : {};
-	const objectsOf = new Map<string, Instance[]>();
-	const anyPlaced = layouts.some((l) => placed[l]?.objects?.length);
-	if (anyPlaced) {
-		const src: CatalogueSource = {
-			read: (f) => files.read(f),
-			exists: (f) => files.exists(f),
-			editorModels: editorModelsOf(project, o.editorModels),
-			textures: `${project}/source/textures`,
-		};
-		const cat = await catalogue(src);
-		const partsOf = new Map<string, Promise<TemplatePart[]>>();
-		const partsFor = (model: string) => {
-			let ps = partsOf.get(model);
-			if (!ps) {
-				const meta = cat[model];
-				if (!meta) throw new Error(`a placed object of a model the catalogue has not: ${model}`);
-				ps = loadTemplate(src, meta);
-				partsOf.set(model, ps);
-			}
-			return ps;
-		};
-		// (the boards' cards: one sheet of every board's text, as the AC build draws it)
-		const boards = layouts.flatMap((l) => (placed[l]?.objects ?? []).filter((ob) => cat[ob.model]?.kind === "boards"));
-		let cards: { sheet: CardSheet; texture: string } | null = null;
-		if (boards.length) {
-			const sheet = cardSheet(boards.map((ob) => boardText(ob.name, ob.text)));
-			try {
-				const png = await (o.cards ?? canvasCards)(sheet);
-				cards = { sheet, texture: await ownTextureOf({ colour: { name: CARDS_PICTURE, data: png }, alpha: "opaque" }) };
-				log(`  the boards' cards: ${sheet.texts.map((t) => JSON.stringify(t)).join(", ") || "blank"}`);
-			} catch (e) {
-				log(`  the boards' cards: ${(e as Error).message}, left blank`);
-			}
-		}
-		const madeObjects = new Map<string, string>();
-		const objectMaterials = new Map<string, GmtMaterial>();
-		const objectMaterial = async (part: TemplatePart, model: string): Promise<GmtMaterial> => {
-			const key = part.material;
-			let m = objectMaterials.get(key);
-			if (!m) {
-				const e = lib[part.material];
-				const tex = part.material === CARDS_MATERIAL && cards ? cards.texture : await textureOf(e?.colour, model);
-				m = diffuseMaterial(materialName(part.material, null), tex, e?.alpha === "blend" ? "blend" : e?.alpha === "mask" ? "mask" : "opaque");
-				objectMaterials.set(key, m);
-			}
-			return m;
-		};
-		const objectOf = async (ob: PhysicsObject): Promise<string> => {
-			const key = objectKey(ob);
-			const had = madeObjects.get(key);
-			if (had) return had;
-			const name = objectName(ob.model, await digestOf([enc(key)]));
-			const own = (await partsFor(ob.model)).filter((p) => p.part !== "hull");
-			const shown = cards && cat[ob.model]?.kind === "boards" ? onCards(own, BOARD_SHEET_MATERIAL, cards.sheet, boardText(ob.name, ob.text)) : own;
-			const meshes: GmtMesh[] = [];
-			const materials: GmtMaterial[] = [];
-			for (const p of shown) {
-				const mat = await objectMaterial(p, ob.model);
-				let k = materials.indexOf(mat);
-				if (k < 0) k = materials.push(mat) - 1;
-				const gm = gmtMeshOf(turnedMesh(p, ob.heading), k, axes);
-				if (gm) meshes.push(gm);
-			}
-			await put(`${gmtDir}/${name}.gmt`, writeGmt(objectGmt(name, ob, meshes, materials, staticGmt, axes)));
-			gmts++;
-			madeObjects.set(key, name);
-			return name;
-		};
-		for (const l of layouts) {
-			const list: Instance[] = [];
-			const seen = new Set<string>();
-			for (const ob of placed[l]?.objects ?? []) {
-				if (!cat[ob.model]) {
-					log(`  ${l}: ${ob.name}, a ${ob.model} the catalogue has not, left out`);
-					continue;
-				}
-				const name = await objectOf(ob);
-				if (seen.has(name)) continue;
-				seen.add(name);
-				list.push(objectInstance(name));
-			}
-			objectsOf.set(l, list);
-		}
-		log(`  placed objects: ${madeObjects.size} GMTs, knocked about in ${objectsOf.size} layouts`);
-	}
+	const placed = (await files.exists(placesFile)) ? (await readJson<PlacesDoc>(files, placesFile)).layouts : {};
+	const objectsOf = await placedObjects(job, o, layouts, placed);
 
 	// ---- the grounds
 	// ---- the lamps, lit at night (the track's, as the AC build has them)
-	const lights = nightLights(await lightsData(files, project, models), axes);
+	const lights = nightLights(lightsDoc, job.axes);
 	log(`  ${lights.length} lights at night`);
 
 	const tdf = `${venue}.tdf`;
-	await put(`${out}/${tdf}`, tdfText([...grounds.values()]));
+	await put(job, `${out}/${tdf}`, tdfText([...built.grounds.values()]));
 
 	// ---- each layout: its scene, GDB, weather, AIW and timing beams
-	const together = (parts: Float64Array[]) => {
-		const all = new Float64Array(parts.reduce((a, p) => a + p.length, 0));
-		let at = 0;
-		for (const p of parts) {
-			all.set(p, at);
-			at += p.length;
-		}
-		return new Surface(all);
-	};
-	const uiOf = async (l: string) => {
-		const p = `${project}/source/track/ui/${l}/ui_track.json`;
-		return (await files.exists(p)) ? await readJson<Record<string, string>>(p) : {};
-	};
+	const sources: LayoutSources = { venue, trackName, tdf, pictures: !!o.pictures, lists, layouts: objects.layouts, models: built, objectsOf, lights, boards };
 	const laps = new Map<string, Lap>();
-	for (const l of layouts) {
-		const dir = `${out}/${l}`;
-		const lay = objects.layouts?.[l] as LayoutObjects & { lines: RacingLines };
-		const parts = (lists[l] ?? []).map((s) => floorParts.get(s) ?? { floor: [], road: [] });
-		const F = together(parts.flatMap((p) => p.floor));
-		const R = together(parts.flatMap((p) => p.road));
-		const floor = (x: number, z: number) => F.y(x, z);
-		const onRoad = (x: number, z: number) => !Number.isNaN(R.y(x, z));
-		const fast = aiLineOf(lay.lines.fast as RacingLine, floor, onRoad);
-		const pit = lay.lines.pit?.curve?.length ? aiLineOf(lay.lines.pit, floor, onRoad, STEP, {}) : null;
-		const input = { layout: lay, fast, pit, floor, axes };
-		await put(`${dir}/${l}.AIW`, aiwText(input));
-		const timing = aiwTiming(input);
-		const beams: Instance[] = [];
-		for (const b of timing.beams) {
-			await put(`${dir}/${b.name}.gmt`, writeGmt(beamGmt(b)));
-			beams.push({
-				name: b.name,
-				mesh: `${b.name}.gmt`,
-				collide: true,
-				hat: false,
-				render: false,
-				response: b.name === "xpitin" || b.name === "xpitout" ? "VEHICLE,PITSTOP" : "VEHICLE,TIMING",
-			});
-		}
-		// (its fixed reflections seen from the middle of its start line, 2 m over it)
-		const finish = timing.beams.find((b) => b.name === "xfinish") ?? timing.beams[0];
-		const centre: [number, number, number] | undefined = finish
-			? [(finish.left[0] + finish.right[0]) / 2, (finish.left[1] + finish.right[1]) / 2 + 2, (finish.left[2] + finish.right[2]) / 2]
-			: undefined;
-		const ui = await uiOf(l);
-		const title = ui.name || `${trackName} ${l}`;
-		const location = ui.city && ui.country ? `${ui.city}, ${ui.country}` : undefined;
-		laps.set(l, { line: mapLine(fast.points), points: fast.points, lap: timing.lap, title, location });
-		await put(
-			`${dir}/${l}.scn`,
-			scnText({
-				searchPaths: [".", venue, `${venue}\\${l}`, `${venue}\\Assets\\GMT`, `${venue}\\Assets\\Maps`],
-				instances: [...(lists[l] ?? []).flatMap((s) => instancesOf.get(s) ?? []), ...(objectsOf.get(l) ?? []), ...beams],
-				lights,
-				centre,
-			}),
-		);
-		await put(
-			`${dir}/${l}.gdb`,
-			gdbText({
-				id: l,
-				trackName: title,
-				eventName: title,
-				venueName: trackName,
-				length: timing.lap,
-				tdf: `..\\${tdf}`,
-				location,
-				venueIcon: o.pictures ? `${venue}\\${venueIconFile(venue)}` : undefined,
-			}),
-		);
-		await put(`${dir}/${l}.wet`, wetText());
-		log(`  ${l}: ${(timing.lap / 1000).toFixed(3)} km, ${beams.length} timing beams`);
-	}
+	for (const l of layouts) laps.set(l, await writeLayout(job, l, sources));
 
 	// ---- the pictures: the venue's icon, each layout's icons, thumbnail, wheel map and loading screen
 	if (o.pictures)
@@ -962,7 +1313,7 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
 			laps,
 			placed,
 			acTrack: o.acTrack,
-			put,
+			put: (path, data) => put(job, path, data),
 			log,
 		});
 	else log("  pictures: none drawn here (no canvas): the game shows none, and loads on black");
@@ -970,9 +1321,26 @@ export async function buildRf2(files: HostFiles, o: Rf2Options): Promise<Rf2Buil
 	// ---- tried in rFactor 2's Mod Mode: the location copied into its ModDev/Locations
 	let installed: string | null = null;
 	if (o.install) {
-		installed = `${o.install.replace(/[\\/]+$/, "")}/ModDev/Locations/${venue}`;
-		for (const p of written) await files.write(`${installed}${p.slice(out.length)}`, await files.read(p));
+		installed = `${trimSlashes(o.install)}/ModDev/Locations/${venue}`;
+		for (const p of job.written) await files.write(`${installed}${p.slice(out.length)}`, await files.read(p));
 		log(`  copied into ${installed}`);
 	}
-	return { location: out, venue, layouts, gmts, textures: textures.size + 1, skipped, installed };
+	return { location: out, venue, layouts, gmts: job.gmts, textures: job.textures.size + 1, skipped, installed };
+}
+
+/** A scene's instances with one StartLight at most (the first: a layout lights its start with one gantry, the game's name for it its only one). */
+export function oneStartLight(instances: Instance[]): Instance[] {
+	let had = false;
+	return instances.filter((i) => {
+		if (i.name !== START_LIGHT) return true;
+		if (had) return false;
+		had = true;
+		return true;
+	});
+}
+
+/** A layout's start's steps: its first working gantry's lamps, and all out (none where it has no working gantry: the game's own count). */
+export function startingLightsOf(models: string[], lampsOf: ReadonlyMap<string, number>): number | undefined {
+	const lamps = models.map((m) => lampsOf.get(m)).find((n) => n !== undefined);
+	return lamps === undefined ? undefined : startingLights(lamps);
 }

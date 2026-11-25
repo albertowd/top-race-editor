@@ -94,7 +94,7 @@ describe("what is where", () => {
 		expect(objectAt(o, "vp_a", 1.3, -10, 0.1)).toEqual({ kind: "tyres", i: TYRES, j: 1 });
 		expect(objectAt(o, "vp_a", 0.2, -10.05, 0.1)).toEqual({ kind: "tyres", i: TYRES, j: 0 });
 		const picked = { kind: "tyres" as const, i: TYRES, j: -1 };
-		expect(objectAt(o, "vp_a", 1.4 / 3, -10, 0.1, undefined, picked)).toEqual({
+		expect(objectAt(o, "vp_a", 1.4 / 3, -10, 0.1, undefined, { picked })).toEqual({
 			kind: "tyres",
 			i: TYRES,
 			j: 0,
@@ -174,6 +174,17 @@ describe("the edits", () => {
 		expect(o.objects[7]).toMatchObject({ name: "BOARD_0", collision: "dynamic", layouts: ["vp_a"] });
 		add("hotlap");
 		expect(o.layouts.vp_a.hotlap).toEqual({ x: 1, z: 2, heading: 0.5 });
+		expect(countOf(o, "vp_a", "safety_car")).toBe(0);
+		expect(add("safety_car")).toEqual({ kind: "safety_car", i: 0, j: -1 });
+		expect(o.layouts.vp_a.safety_car).toEqual({ x: 1, z: 2, heading: 0.5 });
+		expect(countOf(o, "vp_a", "safety_car")).toBe(1);
+		expect(spotOf(o, "vp_a", { kind: "safety_car", i: 0, j: -1 })).toEqual({ x: 1, z: 2, heading: 0.5 });
+		// (taken away: no field left, the build's guess on the pit lane again)
+		o = edit(o, (d) => {
+			expect(removeObject(d, "vp_a", { kind: "safety_car", i: 0, j: -1 })).toBe(true);
+			expect(removeObject(d, "vp_a", { kind: "safety_car", i: 0, j: -1 })).toBe(false);
+		});
+		expect("safety_car" in o.layouts.vp_a).toBe(false);
 		add("timing");
 		expect(o.layouts.vp_a.timing[1]).toEqual({ left: { x: -3, z: 2 }, right: { x: 5, z: 2 } });
 		add("cones");

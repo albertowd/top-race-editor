@@ -3,7 +3,9 @@
 import type { Picture } from "./dds";
 
 const FOURCC = 0x4;
-const DXT: Record<string, 1 | 2 | 3> = { DXT1: 1, DXT2: 2, DXT3: 2, DXT4: 3, DXT5: 3 };
+/** A DXT's kind: DXT1, DXT3 (its alpha as it is), DXT5 (its alpha interpolated). */
+type DxtKind = 1 | 2 | 3;
+const DXT: Record<string, DxtKind> = { DXT1: 1, DXT2: 2, DXT3: 2, DXT4: 3, DXT5: 3 };
 
 /** The 565 colour as RGB. */
 function rgb565(c: number): [number, number, number] {
@@ -13,65 +15,93 @@ function rgb565(c: number): [number, number, number] {
 	return [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)];
 }
 
+/** A DXT block's bytes: DXT1's 8, the others' 16. */
+function blockSize(kind: DxtKind): number {
+	return kind === 1 ? 8 : 16;
+}
+
+/** A DXT3 block's explicit 4-bit alphas. */
+function explicitAlpha(b: Uint8Array, o: number, alpha: Uint8Array): void {
+	for (let i = 0; i < 16; i++) {
+		const v = ((b[o + (i >> 1)] as number) >> ((i & 1) * 4)) & 15;
+		alpha[i] = v * 17;
+	}
+}
+
+/** A DXT5 block's alphas, from its two ends and their 3-bit indices. */
+function interpolatedAlpha(b: Uint8Array, o: number, alpha: Uint8Array): void {
+	const a0 = b[o] as number;
+	const a1 = b[o + 1] as number;
+	const a = [a0, a1, 0, 0, 0, 0, 0, 0];
+	if (a0 > a1) for (let i = 1; i < 7; i++) a[i + 1] = Math.round(((7 - i) * a0 + i * a1) / 7);
+	else {
+		for (let i = 1; i < 5; i++) a[i + 1] = Math.round(((5 - i) * a0 + i * a1) / 5);
+		a[6] = 0;
+		a[7] = 255;
+	}
+	// (48 bits of 3-bit indices)
+	let bits = 0;
+	for (let i = 5; i >= 0; i--) bits = bits * 256 + (b[o + 2 + i] as number);
+	for (let i = 0; i < 16; i++) {
+		alpha[i] = a[Math.floor(bits / 2 ** (3 * i)) & 7] as number;
+	}
+}
+
+/** A block's four colours (RGBA each) from its two 565 ends; DXT1's with the first end not over the second: their middle and a clear black. */
+function palette(pal: Uint8Array, c0: number, c1: number, kind: DxtKind): void {
+	const [r0, g0, b0] = rgb565(c0);
+	const [r1, g1, b1] = rgb565(c1);
+	pal.set([r0, g0, b0, 255, r1, g1, b1, 255]);
+	if (c0 > c1 || kind !== 1) {
+		pal.set([(2 * r0 + r1) / 3, (2 * g0 + g1) / 3, (2 * b0 + b1) / 3, 255], 8);
+		pal.set([(r0 + 2 * r1) / 3, (g0 + 2 * g1) / 3, (b0 + 2 * b1) / 3, 255], 12);
+	} else {
+		pal.set([(r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2, 255], 8);
+		pal.set([0, 0, 0, 0], 12);
+	}
+}
+
+/** A level's pixels (RGBA) as they are read, w by h. */
+interface Level {
+	out: Uint8Array;
+	w: number;
+	h: number;
+}
+
+/** A block's 16 pixels written at (bx, by), those past the level's sides left out. */
+function putBlock(level: Level, bx: number, by: number, idx: number, pal: Uint8Array, alpha: Uint8Array): void {
+	const { out, w, h } = level;
+	for (let i = 0; i < 16; i++) {
+		const x = bx + (i & 3);
+		const y = by + (i >> 2);
+		if (x >= w || y >= h) continue;
+		const k = ((idx >>> (2 * i)) & 3) * 4;
+		const p = (y * w + x) * 4;
+		out[p] = pal[k] as number;
+		out[p + 1] = pal[k + 1] as number;
+		out[p + 2] = pal[k + 2] as number;
+		out[p + 3] = Math.min(pal[k + 3] as number, alpha[i] as number);
+	}
+}
+
 /** A DXT level's blocks as RGBA. */
-function blocks(b: Uint8Array, at: number, w: number, h: number, kind: 1 | 2 | 3): Uint8Array {
+function blocks(b: Uint8Array, at: number, w: number, h: number, kind: DxtKind): Uint8Array {
 	const out = new Uint8Array(w * h * 4);
-	const size = kind === 1 ? 8 : 16;
+	const size = blockSize(kind);
 	const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
 	const pal = new Uint8Array(16);
 	const alpha = new Uint8Array(16);
+	const level: Level = { out, w, h };
 	let o = at;
 	for (let by = 0; by < h; by += 4)
 		for (let bx = 0; bx < w; bx += 4, o += size) {
 			if (o + size > b.length) return out;
 			alpha.fill(255);
-			if (kind === 2)
-				for (let i = 0; i < 16; i++) {
-					const v = ((b[o + (i >> 1)] as number) >> ((i & 1) * 4)) & 15;
-					alpha[i] = v * 17;
-				}
-			else if (kind === 3) {
-				const a0 = b[o] as number;
-				const a1 = b[o + 1] as number;
-				const a = [a0, a1, 0, 0, 0, 0, 0, 0];
-				if (a0 > a1) for (let i = 1; i < 7; i++) a[i + 1] = Math.round(((7 - i) * a0 + i * a1) / 7);
-				else {
-					for (let i = 1; i < 5; i++) a[i + 1] = Math.round(((5 - i) * a0 + i * a1) / 5);
-					a[6] = 0;
-					a[7] = 255;
-				}
-				// (48 bits of 3-bit indices)
-				let bits = 0;
-				for (let i = 5; i >= 0; i--) bits = bits * 256 + (b[o + 2 + i] as number);
-				for (let i = 0; i < 16; i++) {
-					alpha[i] = a[Math.floor(bits / 2 ** (3 * i)) & 7] as number;
-				}
-			}
+			if (kind === 2) explicitAlpha(b, o, alpha);
+			else if (kind === 3) interpolatedAlpha(b, o, alpha);
 			const c = kind === 1 ? o : o + 8;
-			const c0 = dv.getUint16(c, true);
-			const c1 = dv.getUint16(c + 2, true);
-			const [r0, g0, b0] = rgb565(c0);
-			const [r1, g1, b1] = rgb565(c1);
-			pal.set([r0, g0, b0, 255, r1, g1, b1, 255]);
-			if (c0 > c1 || kind !== 1) {
-				pal.set([(2 * r0 + r1) / 3, (2 * g0 + g1) / 3, (2 * b0 + b1) / 3, 255], 8);
-				pal.set([(r0 + 2 * r1) / 3, (g0 + 2 * g1) / 3, (b0 + 2 * b1) / 3, 255], 12);
-			} else {
-				pal.set([(r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2, 255], 8);
-				pal.set([0, 0, 0, 0], 12);
-			}
-			const idx = dv.getUint32(c + 4, true);
-			for (let i = 0; i < 16; i++) {
-				const x = bx + (i & 3);
-				const y = by + (i >> 2);
-				if (x >= w || y >= h) continue;
-				const k = ((idx >>> (2 * i)) & 3) * 4;
-				const p = (y * w + x) * 4;
-				out[p] = pal[k] as number;
-				out[p + 1] = pal[k + 1] as number;
-				out[p + 2] = pal[k + 2] as number;
-				out[p + 3] = Math.min(pal[k + 3] as number, alpha[i] as number);
-			}
+			palette(pal, dv.getUint16(c, true), dv.getUint16(c + 2, true), kind);
+			putBlock(level, bx, by, dv.getUint32(c + 4, true), pal, alpha);
 		}
 	return out;
 }
@@ -94,12 +124,12 @@ export function readDds(b: Uint8Array, max = Infinity): Picture | null {
 	let w = dv.getUint32(16, true);
 	const mips = Math.max(1, dv.getUint32(28, true));
 	const pf = dv.getUint32(80, true);
-	const four = String.fromCharCode(b[84] as number, b[85] as number, b[86] as number, b[87] as number);
+	const four = String.fromCodePoint(b[84] as number, b[85] as number, b[86] as number, b[87] as number);
 	const bits = dv.getUint32(88, true);
 	const kind = pf & FOURCC ? DXT[four] : undefined;
 	if (pf & FOURCC && !kind) return null;
 	if (!kind && bits !== 32 && bits !== 24) return null;
-	const levelSize = (lw: number, lh: number) => (kind ? Math.ceil(lw / 4) * Math.ceil(lh / 4) * (kind === 1 ? 8 : 16) : lw * lh * (bits / 8));
+	const levelSize = (lw: number, lh: number) => (kind ? Math.ceil(lw / 4) * Math.ceil(lh / 4) * blockSize(kind) : lw * lh * (bits / 8));
 	let at = 128;
 	for (let level = 0; level < mips - 1 && (w > max || h > max); level++) {
 		at += levelSize(w, h);

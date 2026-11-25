@@ -156,25 +156,42 @@ export function roadsTop(built: { m: RoadMesh }[]): (x: number, z: number) => nu
 	}
 	return (x, z) => {
 		const y = S.y(x, z);
-		if (!Number.isNaN(y)) return y;
-		let best = -1;
-		let bd = Infinity;
-		const gx = Math.floor(x);
-		const gz = Math.floor(z);
-		for (let r = 0; r < 4096 && (best < 0 || bd > r - 1); r++)
-			for (let ix = gx - r; ix <= gx + r; ix++)
-				for (let iz = gz - r; iz <= gz + r; iz++) {
-					if (Math.max(Math.abs(ix - gx), Math.abs(iz - gz)) !== r) continue;
-					for (const i of cells.get(`${ix},${iz}`) ?? []) {
-						const d = Math.hypot((T[i] as number) - x, (T[i + 2] as number) - z);
-						if (d < bd) {
-							bd = d;
-							best = i;
-						}
-					}
-				}
-		return best < 0 ? 0 : (T[best + 1] as number);
+		return Number.isNaN(y) ? nearestHeight(T, cells, x, z) : y;
 	};
+}
+
+/** The nearest point so far to (x, z): where in the triangles' numbers it is (-1 for none yet), and how far. */
+interface Nearest {
+	x: number;
+	z: number;
+	best: number;
+	bd: number;
+}
+
+/** Of the points (where in the triangles' numbers) in the cells r cells round (gx, gz), any nearer to the nearest's (x, z) than the nearest so far: that the
+ * nearest. */
+function nearerInRing(T: Float64Array, cells: Map<string, number[]>, gx: number, gz: number, r: number, near: Nearest) {
+	const { x, z } = near;
+	for (let ix = gx - r; ix <= gx + r; ix++)
+		for (let iz = gz - r; iz <= gz + r; iz++) {
+			if (Math.max(Math.abs(ix - gx), Math.abs(iz - gz)) !== r) continue;
+			for (const i of cells.get(`${ix},${iz}`) ?? []) {
+				const d = Math.hypot((T[i] as number) - x, (T[i + 2] as number) - z);
+				if (d < near.bd) {
+					near.bd = d;
+					near.best = i;
+				}
+			}
+		}
+}
+
+/** The height of the nearest to (x, z) of the points filed by metre cells, ring by ring out from its cell; 0 where there is none. */
+function nearestHeight(T: Float64Array, cells: Map<string, number[]>, x: number, z: number): number {
+	const near: Nearest = { x, z, best: -1, bd: Infinity };
+	const gx = Math.floor(x);
+	const gz = Math.floor(z);
+	for (let r = 0; r < 4096 && (near.best < 0 || near.bd > r - 1); r++) nearerInRing(T, cells, gx, gz, r, near);
+	return near.best < 0 ? 0 : (T[near.best + 1] as number);
 }
 
 /** The roads' regions for the merge, in its order (merge_floor's): their rumbles first, over everything, laid on the roads' meshes (roadsTop, unless another
@@ -227,6 +244,129 @@ async function partOf(host: PlaceHost, project: string, name: PartName, file?: s
 	return v === null ? null : plain(v as PyJson);
 }
 
+/** The roads' meshes in the order they are built in, each on its own heights, else on the ground (its key, its height): each kept from the merge before where
+ * it is built as it was, on the same ground. */
+function builtMeshes(project: string, roads: Record<string, RoadDesc>, groundKey: string, ground: (x: number, z: number) => number) {
+	const keptMeshes = roadMeshes.get(project);
+	const nextMeshes = new Map<string, RoadMesh>();
+	const built = priority(roads).map((n) => {
+		const rr = asBuilt(roads[n] as RoadDesc, roads);
+		const key = `${rr.heights ? "" : groundKey}|${JSON.stringify(rr)}`;
+		const m = keptMeshes?.get(key) ?? (rr.heights ? mesh(rr) : mesh(rr, ground));
+		nextMeshes.set(key, m);
+		return { name: n, m };
+	});
+	roadMeshes.set(project, nextMeshes);
+	return built;
+}
+
+/** Each region's faces and area seen from above, of those the merge made a mesh of. */
+function regionsCount(regions: Region[], out: Record<string, Mesh>): { name: string; faces: number; area: number }[] {
+	return regions.flatMap((r) => {
+		const m = out[r.name];
+		return m ? [{ name: r.name, faces: m.F.length / 3, area: Math.round(areaOf(m) * 10) / 10 }] : [];
+	});
+}
+
+/** The window round every road's mesh, PAD over; round the origin where there are none. */
+function windowRound(built: { m: RoadMesh }[]): Box {
+	const b = { x0: Infinity, z0: Infinity, x1: -Infinity, z1: -Infinity };
+	for (const { m } of built)
+		for (let i = 0; i < m.P.length; i += 3) {
+			b.x0 = Math.min(b.x0, m.P[i] as number);
+			b.x1 = Math.max(b.x1, m.P[i] as number);
+			b.z0 = Math.min(b.z0, m.P[i + 2] as number);
+			b.z1 = Math.max(b.z1, m.P[i + 2] as number);
+		}
+	return Number.isFinite(b.x0)
+		? {
+				x0: Math.floor(b.x0 - PAD),
+				z0: Math.floor(b.z0 - PAD),
+				x1: Math.ceil(b.x1 + PAD),
+				z1: Math.ceil(b.z1 + PAD),
+			}
+		: { x0: -PAD, z0: -PAD, x1: PAD, z1: PAD };
+}
+
+/** A project's merge cache, made the first time it is asked for. */
+function cacheOf(project: string): MergeCache {
+	let cache = caches.get(project);
+	if (!cache) {
+		cache = new MergeCache();
+		caches.set(project, cache);
+	}
+	return cache;
+}
+
+/** Objects laid: whether the catalogue has a model, those laid, the names of those it has not. */
+interface ObjectsLaid {
+	known: (model: string) => boolean;
+	laid: LaidObject[];
+	unknown: string[];
+}
+
+/** No objects laid, the catalogue not read: no model known. */
+const noneLaid = (): ObjectsLaid => ({ known: () => false, laid: [], unknown: [] });
+
+/** objects.json's objects laid on the floor (top), of the editor's catalogue: each model's parts loaded once. */
+async function layObjects(
+	host: PlaceHost,
+	project: string,
+	models: string | undefined,
+	objects: PlacedObject[],
+	top: (x: number, z: number) => number,
+): Promise<ObjectsLaid> {
+	const laid: LaidObject[] = [];
+	const unknown: string[] = [];
+	const src: CatalogueSource = {
+		read: (f) => host.files.read(f),
+		exists: (f) => host.files.exists(f),
+		editorModels: editorModelsOf(project, models),
+	};
+	const cat = await catalogue(src);
+	const parts = new Map<string, Promise<TemplatePart[]>>();
+	for (const o of objects) {
+		const meta = cat[o.model];
+		if (!meta || !o.curve?.length) {
+			unknown.push(o.name);
+			continue;
+		}
+		// (a knockable one standing alone: a layout's physics object, in its places, not laid; each game makes its own)
+		if (o.collision === "dynamic" && o.curve.length === 1) continue;
+		let t = parts.get(o.model);
+		if (!t) {
+			t = loadTemplate(src, meta);
+			parts.set(o.model, t);
+		}
+		laid.push(layObject(o, meta, await t, top));
+	}
+	return { known: (m) => m in cat, laid, unknown };
+}
+
+/** The layouts' places made on the floor (top), each spot as high over it as it stood in the places before (the file given, else the track's models'
+ * places.json). */
+async function placesOf(
+	host: PlaceHost,
+	project: string,
+	placesFile: string | undefined,
+	objects: ObjectsIn,
+	top: (x: number, z: number) => number,
+	known: (model: string) => boolean,
+): Promise<PlacesDoc> {
+	const beforeFile = placesFile ?? `${settingsPaths(await settingsOf(host.files, project)).models}/places.json`;
+	const before = (await host.files.exists(beforeFile)) ? (JSON.parse(new TextDecoder().decode(await host.files.read(beforeFile))) as PlacesDoc) : null;
+	return layoutPlaces(objects, top, known, before, SPOT_LIFT);
+}
+
+/** How many layouts the places have, and their spots and physics objects. */
+function placesCount(places: PlacesDoc): { layouts: number; spots: number; objects: number } {
+	return {
+		layouts: Object.keys(places.layouts).length,
+		spots: Object.values(places.layouts).reduce((a, L) => a + L.spots.length, 0),
+		objects: Object.values(places.layouts).reduce((a, L) => a + L.objects.length, 0),
+	};
+}
+
 /** The roads of a track merged: params as the engine's call `roads.merge` takes them. */
 export async function mergeRoads(
 	host: PlaceHost,
@@ -251,46 +391,13 @@ export async function mergeRoads(
 	const doc = ((await partOf(host, p.project, "roads", p.roads)) ?? { roads: [] }) as { roads: RoadDesc[] };
 	const roads = Object.fromEntries(doc.roads.map((r) => [r.name, r]));
 	const place = await placeOf(host, p.project, p.terrain);
-	// (each road's mesh kept from the merge before where it is built as it was, on the same ground)
-	const keptMeshes = roadMeshes.get(p.project);
-	const nextMeshes = new Map<string, RoadMesh>();
-	const built = priority(roads).map((n) => {
-		const rr = asBuilt(roads[n] as RoadDesc, roads);
-		const key = `${rr.heights ? "" : place.key}|${JSON.stringify(rr)}`;
-		const m = keptMeshes?.get(key) ?? (rr.heights ? mesh(rr) : mesh(rr, place.ground.y));
-		nextMeshes.set(key, m);
-		return { name: n, m };
-	});
-	roadMeshes.set(p.project, nextMeshes);
-	let window = p.window;
-	if (!window) {
-		const b = { x0: Infinity, z0: Infinity, x1: -Infinity, z1: -Infinity };
-		for (const { m } of built)
-			for (let i = 0; i < m.P.length; i += 3) {
-				b.x0 = Math.min(b.x0, m.P[i] as number);
-				b.x1 = Math.max(b.x1, m.P[i] as number);
-				b.z0 = Math.min(b.z0, m.P[i + 2] as number);
-				b.z1 = Math.max(b.z1, m.P[i + 2] as number);
-			}
-		window = Number.isFinite(b.x0)
-			? {
-					x0: Math.floor(b.x0 - PAD),
-					z0: Math.floor(b.z0 - PAD),
-					x1: Math.ceil(b.x1 + PAD),
-					z1: Math.ceil(b.z1 + PAD),
-				}
-			: { x0: -PAD, z0: -PAD, x1: PAD, z1: PAD };
-	}
-	const w = window;
+	const built = builtMeshes(p.project, roads, place.key, place.ground.y);
+	const w = p.window ?? windowRound(built);
 	const aspects = await pictureAspects(host.files, p.project, KERB_MATERIALS);
 	const regions = roadRegions(roads as Roads, built, w, undefined, (m) => aspects[m], place.ground.y);
 	regions.push({ name: "ground", ground: { height: place.ground.y, uv: (x, z) => [x / 50, z / 50], spacing: 2 } });
 	const stages: { stage: string; ms: number }[] = [{ stage: "roads and the place", ms: performance.now() - t0 }];
-	let cache = caches.get(p.project);
-	if (!cache) {
-		cache = new MergeCache();
-		caches.set(p.project, cache);
-	}
+	const cache = cacheOf(p.project);
 	const out = await merge(regions, w, filler, {
 		...more,
 		cache,
@@ -316,60 +423,20 @@ export async function mergeRoads(
 	stages.push({ stage: "the lines laid", ms: performance.now() - tLines });
 	// (and its objects laid on the floor, of the editor's catalogue)
 	const tObjects = performance.now();
-	let known: (model: string) => boolean = () => false;
-	const laid: LaidObject[] = [];
-	const unknown: string[] = [];
-	if (objects?.objects?.length) {
-		const src: CatalogueSource = {
-			read: (f) => host.files.read(f),
-			exists: (f) => host.files.exists(f),
-			editorModels: editorModelsOf(p.project, p.models),
-		};
-		const cat = await catalogue(src);
-		known = (m) => m in cat;
-		const parts = new Map<string, Promise<TemplatePart[]>>();
-		for (const o of objects.objects) {
-			const meta = cat[o.model];
-			if (!meta || !o.curve?.length) {
-				unknown.push(o.name);
-				continue;
-			}
-			// (a knockable one standing alone: a layout's physics object, in its places, not laid; each game makes its own)
-			if (o.collision === "dynamic" && o.curve.length === 1) continue;
-			let t = parts.get(o.model);
-			if (!t) {
-				t = loadTemplate(src, meta);
-				parts.set(o.model, t);
-			}
-			laid.push(layObject(o, meta, await t, top));
-		}
-	}
+	const { known, laid, unknown } = objects?.objects?.length ? await layObjects(host, p.project, p.models, objects.objects, top) : noneLaid();
 	// (the layouts' places: their spots and physics objects on the floor, each spot as high over it as it stood in the places before)
 	let places: PlacesDoc | null = null;
-	if (objects?.layouts || objects?.objects?.length) {
-		const beforeFile = p.places ?? `${settingsPaths(await settingsOf(host.files, p.project)).models}/places.json`;
-		const before = (await host.files.exists(beforeFile)) ? (JSON.parse(new TextDecoder().decode(await host.files.read(beforeFile))) as PlacesDoc) : null;
-		places = layoutPlaces(objects as ObjectsIn, top, known, before, SPOT_LIFT);
-	}
+	if (objects?.layouts || objects?.objects?.length) places = await placesOf(host, p.project, p.places, objects as ObjectsIn, top, known);
 	stages.push({ stage: "the objects laid", ms: performance.now() - tObjects });
 	const result: RoadsMerged = {
 		window: w,
 		ms: 0,
 		stages: stages.map((s) => ({ ...s, ms: Math.round(s.ms) })),
-		regions: regions.flatMap((r) => {
-			const m = out[r.name];
-			return m ? [{ name: r.name, faces: m.F.length / 3, area: Math.round(areaOf(m) * 10) / 10 }] : [];
-		}),
+		regions: regionsCount(regions, out),
 		filled: cache.filled,
 		kept: cache.kept,
 		paint: { lines: lines.length, faces: lines.reduce((a, l) => a + l.F.length / 3, 0) },
-		places: places
-			? {
-					layouts: Object.keys(places.layouts).length,
-					spots: Object.values(places.layouts).reduce((a, L) => a + L.spots.length, 0),
-					objects: Object.values(places.layouts).reduce((a, L) => a + L.objects.length, 0),
-				}
-			: undefined,
+		places: places ? placesCount(places) : undefined,
 		objects: {
 			laid: laid.length,
 			faces: laid.reduce((a, o) => a + o.parts.reduce((b, x) => b + x.F.length / 3, 0), 0),

@@ -66,7 +66,10 @@ export function groundOf(surface: string, surfaces: Record<string, { targets?: {
 }
 
 /** a material's name in rFactor's files: its ground's prefix first where it is driven on (the TDF matches it so) */
-export const materialName = (name: string, ground: Ground | null): string => `${ground ? `${ground.prefix}_` : ""}${name}`.replace(/[^A-Za-z0-9_]/g, "_");
+export const materialName = (name: string, ground: Ground | null): string => {
+	const prefix = ground ? `${ground.prefix}_` : "";
+	return `${prefix}${name}`.replaceAll(/\W/g, "_");
+};
 
 const TRACKVARS = [
 	"RoadDryGrip=1.00",
@@ -137,6 +140,25 @@ export interface Scene {
 
 const f3 = (v: readonly number[], d = 3) => v.map((x) => x.toFixed(d)).join(", ");
 
+/** An instance's lines in the scene, the blank line before it first. */
+function instanceLines(i: Instance): string[] {
+	const flags = [
+		`MeshFile=${i.mesh}`,
+		...(i.deformable ? ["Deformable=True"] : []),
+		`CollTarget=${i.collide ? "True" : "False"}`,
+		`HATTarget=${i.hat ? "True" : "False"}`,
+		...(i.shadows ? ["ShadowCaster=(Static, Solid)"] : []),
+		...(i.lodOut ? [`LODOut=(${i.lodOut.toFixed(1)})`] : []),
+	];
+	const L = ["", `Instance=${i.name}`, "{"];
+	if (i.render === false) L.push("  Render=False");
+	if (i.moveable) L.push("  Moveable=True");
+	L.push(`  ${flags.join(" ")}`);
+	if (i.response) L.push(`  Response=${i.response}`);
+	L.push("}");
+	return L;
+}
+
 /** The layout's scene (SCN). */
 export function scnText(s: Scene): string {
 	// (its first line as every one of Studio 397's tracks has it)
@@ -180,22 +202,7 @@ export function scnText(s: Scene): string {
 			` Type=Omni Pos=(${f3(l.pos, 6)}) Range=(0.000000, ${l.range.toFixed(6)}) Active=True Intensity=(${l.intensity.toFixed(6)}) Color=(${l.colour.map((c) => Math.round(c)).join(", ")})`,
 			"}",
 		);
-	for (const i of s.instances) {
-		const flags = [
-			`MeshFile=${i.mesh}`,
-			...(i.deformable ? ["Deformable=True"] : []),
-			`CollTarget=${i.collide ? "True" : "False"}`,
-			`HATTarget=${i.hat ? "True" : "False"}`,
-			...(i.shadows ? ["ShadowCaster=(Static, Solid)"] : []),
-			...(i.lodOut ? [`LODOut=(${i.lodOut.toFixed(1)})`] : []),
-		];
-		L.push("", `Instance=${i.name}`, "{");
-		if (i.render === false) L.push("  Render=False");
-		if (i.moveable) L.push("  Moveable=True");
-		L.push(`  ${flags.join(" ")}`);
-		if (i.response) L.push(`  Response=${i.response}`);
-		L.push("}");
-	}
+	for (const i of s.instances) L.push(...instanceLines(i));
 	// (the reflections the game needs at least, as LochDrummond has them: STATIC01, a cube still at the track's centre, and REFMAP0, one following the car;
 	// without them it warns that its background mappers are not defined)
 	const c = f3(s.centre ?? [0, 2, 0], 2);
@@ -248,6 +255,8 @@ export interface Layout {
 	pitKph?: number;
 	/** the venue's icon, from rFactor's Locations (<venue>\<venue>Icon.dds) */
 	venueIcon?: string;
+	/** the steps its start lights count (its gantry's lamps and all out); none: 5 */
+	startingLights?: number;
 }
 
 /** cars a race takes where a layout does not say */
@@ -270,12 +279,11 @@ export function gdbText(l: Layout): string {
 		`  TerrainDataFile=${l.tdf}`,
 		"  HeadlightsRequired = false",
 		`  Max Vehicles = ${l.maxVehicles ?? MAX_VEHICLES}`,
-		"  FormationAndStart = 0",
 		"  PitlaneBoundary = 1",
 		"  GarageDepth = 2.0",
 		`  RacePitKPH = ${(l.pitKph ?? 30).toFixed(1)}`,
 		`  NormalPitKPH = ${(l.pitKph ?? 30).toFixed(1)}`,
-		"  NumStartingLights = 5",
+		`  NumStartingLights = ${l.startingLights ?? 5}`,
 		...(l.latitude !== undefined ? [`  Latitude = ${l.latitude.toFixed(4)}`] : []),
 		...(l.longitude !== undefined ? [`  Longitude = ${l.longitude.toFixed(4)}`] : []),
 		...(l.altitude !== undefined ? [`  Altitude = ${l.altitude.toFixed(1)}`] : []),

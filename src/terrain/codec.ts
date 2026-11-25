@@ -5,7 +5,7 @@ import type { Grid, GridJson, Points, Raster, RasterJson } from "./types";
 function bytesOf(s: string): Uint8Array<ArrayBuffer> {
 	const bin = atob(s);
 	const out = new Uint8Array(bin.length);
-	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+	for (let i = 0; i < bin.length; i++) out[i] = bin.codePointAt(i) as number;
 	return out;
 }
 
@@ -13,7 +13,7 @@ const CHUNK = 0x8000;
 
 function base64Of(bytes: Uint8Array): string {
 	let bin = "";
-	for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+	for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCodePoint(...bytes.subarray(i, i + CHUNK));
 	return btoa(bin);
 }
 

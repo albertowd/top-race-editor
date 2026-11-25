@@ -48,7 +48,7 @@ export function IconSelect<T extends string>({ value, options, onChange, label }
 		onChange(v);
 		close();
 	};
-	const keys = (e: KeyboardEvent<HTMLFieldSetElement>) => {
+	const keys = (e: KeyboardEvent<HTMLButtonElement>) => {
 		const buttons = [...(list.current?.querySelectorAll("button") ?? [])];
 		const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
 		let to = -1;
@@ -99,10 +99,10 @@ export function IconSelect<T extends string>({ value, options, onChange, label }
 				<span className="iconselect-label">{current.label}</span>
 			</button>
 			{open ? (
-				<fieldset id={id} ref={list} className="iconselect-list" onKeyDown={keys}>
+				<fieldset id={id} ref={list} className="iconselect-list">
 					<legend className="sr-only">{label}</legend>
 					{options.map((o) => (
-						<button key={o.value} type="button" aria-pressed={o.value === value} className="iconselect-option" onClick={() => choose(o.value)}>
+						<button key={o.value} type="button" aria-pressed={o.value === value} className="iconselect-option" onClick={() => choose(o.value)} onKeyDown={keys}>
 							<img src={o.icon} alt="" width={40} height={40} />
 							<span>
 								{o.label}

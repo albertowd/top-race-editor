@@ -530,8 +530,10 @@ another game's build ([DEVELOPMENT.md](DEVELOPMENT.md#building-for-the-games) ha
 - `pictures.ts` (drawn by the engine window's `rf2pictures.ts`): the layouts' icons, thumbnails, wheel maps and
   loading screens, and the venue's icon, as ModDev's samples have them.
 
-Made since: the lamps lit at night, the knockable cones and boards, the pictures and loading screens. Still to do:
-the trackside cameras, the gantry's lights, a lighter ground, and packing (ModMgr's MAS, an rFCMP).
+Made since: the lamps lit at night, the knockable cones and boards, the pictures and loading screens, the gantry's
+start lights, the screens as still pictures (`screens.ts`: the board lettered with each layout's name, the prices in
+seven segments), the safety car's start where a layout sets one (its AIW's AUX). Still to do: the trackside cameras, a
+lighter ground, and packing (ModMgr's MAS, an rFCMP).
 
 What a track is (Studio 397's documentation, and what the game ships):
 

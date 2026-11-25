@@ -2,7 +2,7 @@
 // (extras.track: its role, its ground, whether it is seen, how far it is drawn, its shadows, whether grass grows on it), its material's name in the library
 // (source/materials.json) and its corners and triangles where it stands, in the track's axes (y up). Nothing here is one game's: AC's names and flags are its
 // own build's. A mesh over the 65536 corners a 16-bit index reaches is cut in pieces of its name.
-import { accessor, BLENDER_COPY, type GltfDoc, type GltfNode, nodeMatrix, readGlb } from "../gltf";
+import { accessor, BLENDER_COPY, type GltfDoc, type GltfNode, type GltfPrimitive, nodeMatrix, readGlb } from "../gltf";
 
 /** numbers a corner has: position, normal, uv */
 export const CORNER = 8;
@@ -89,22 +89,29 @@ function* pieces(v: Float32Array, f: Uint32Array): Generator<[Float32Array, Uint
 	const nf = f.length / 3;
 	let start = 0;
 	while (start < nf) {
-		const used = new Map<number, number>();
-		let end = start;
-		while (end < nf && used.size + 3 <= 65535) {
-			for (let c = 0; c < 3; c++) {
-				const k = f[end * 3 + c] as number;
-				if (!used.has(k)) used.set(k, used.size);
-			}
-			end++;
-		}
-		const out = new Float32Array(used.size * CORNER);
-		for (const [old, i] of used) out.set(v.subarray(old * CORNER, (old + 1) * CORNER), i * CORNER);
-		const faces = new Uint32Array((end - start) * 3);
-		for (let j = start * 3; j < end * 3; j++) faces[j - start * 3] = used.get(f[j] as number) as number;
+		const [out, faces, end] = piece(v, f, start);
 		yield [out, faces];
 		start = end;
 	}
+}
+
+/** The piece of a mesh's faces from start on that 65535 corners hold: its corners, its faces' corners renumbered, and the face after it. */
+function piece(v: Float32Array, f: Uint32Array, start: number): [Float32Array, Uint32Array, number] {
+	const nf = f.length / 3;
+	const used = new Map<number, number>();
+	let end = start;
+	while (end < nf && used.size + 3 <= 65535) {
+		for (let c = 0; c < 3; c++) {
+			const k = f[end * 3 + c] as number;
+			if (!used.has(k)) used.set(k, used.size);
+		}
+		end++;
+	}
+	const out = new Float32Array(used.size * CORNER);
+	for (const [old, i] of used) out.set(v.subarray(old * CORNER, (old + 1) * CORNER), i * CORNER);
+	const faces = new Uint32Array((end - start) * 3);
+	for (let j = start * 3; j < end * 3; j++) faces[j - start * 3] = used.get(f[j] as number) as number;
+	return [out, faces, end];
 }
 
 /** A model's meshes (its glb's bytes), in the order the model has them. */
@@ -125,10 +132,16 @@ export function trackModel(bytes: Uint8Array): TrackMesh[] {
 	return out;
 }
 
+/** How a glTF material's alpha mode shows through. */
+function alphaOf(mode: string | undefined): OwnMaterial["alpha"] {
+	if (mode === "MASK") return "mask";
+	return mode === "BLEND" ? "blend" : "opaque";
+}
+
 /** A material's own picture and alpha, as its model holds them (its colour the image its base colour is of: named so, with its kind's ending where its name has
  * none). */
 function ownMaterial(doc: GltfDoc, bin: Uint8Array, g: NonNullable<GltfDoc["materials"]>[number]): OwnMaterial {
-	const alpha = g.alphaMode === "MASK" ? "mask" : g.alphaMode === "BLEND" ? "blend" : "opaque";
+	const alpha = alphaOf(g.alphaMode);
 	const t = g.pbrMetallicRoughness?.baseColorTexture;
 	const img = t ? doc.images?.[doc.textures?.[t.index]?.source ?? -1] : undefined;
 	const view = img ? doc.bufferViews?.[img.bufferView ?? -1] : undefined;
@@ -140,6 +153,53 @@ function ownMaterial(doc: GltfDoc, bin: Uint8Array, g: NonNullable<GltfDoc["mate
 	return { colour: { name: /\.(png|jpe?g)$/i.test(base) ? base : base + ext, data }, alpha };
 }
 
+/** A mesh's normals (n0: nv of them, x y z each) turned by a normal matrix (nm: rows taking row normals). */
+function turnedNormals(n0: ArrayLike<number>, nm: number[], nv: number): Float64Array {
+	const nor = new Float64Array(nv * 3);
+	for (let k = 0; k < nv; k++)
+		for (let j = 0; j < 3; j++) {
+			let s = 0;
+			for (let i = 0; i < 3; i++) s += (n0[k * 3 + i] as number) * (nm[i * 3 + j] as number);
+			nor[k * 3 + j] = s;
+		}
+	return nor;
+}
+
+/** A mesh's normals made of its faces (pos: its nv points, x y z each): each corner the sum of its faces'. */
+function faceNormals(pos: ArrayLike<number>, faces: Uint32Array, nv: number): Float64Array {
+	const nor = new Float64Array(nv * 3);
+	for (let t = 0; t < faces.length; t += 3) {
+		const [a, b, c] = [faces[t] as number, faces[t + 1] as number, faces[t + 2] as number];
+		const u = [0, 1, 2].map((i) => (pos[b * 3 + i] as number) - (pos[a * 3 + i] as number));
+		const w = [0, 1, 2].map((i) => (pos[c * 3 + i] as number) - (pos[a * 3 + i] as number));
+		const n = [
+			(u[1] as number) * (w[2] as number) - (u[2] as number) * (w[1] as number),
+			(u[2] as number) * (w[0] as number) - (u[0] as number) * (w[2] as number),
+			(u[0] as number) * (w[1] as number) - (u[1] as number) * (w[0] as number),
+		];
+		for (const k of [a, b, c]) for (let i = 0; i < 3; i++) nor[k * 3 + i] = (nor[k * 3 + i] as number) + (n[i] as number);
+	}
+	return nor;
+}
+
+/** A mesh's corners, CORNER numbers each: its points where it stands (m: its matrix of rows), its normals made unit, its uvs. */
+function corners(pos: ArrayLike<number>, nor: Float64Array, uv: ArrayLike<number>, m: number[]): Float32Array {
+	const nv = pos.length / 3;
+	const v = new Float32Array(nv * CORNER);
+	for (let k = 0; k < nv; k++) {
+		for (let j = 0; j < 3; j++) {
+			let s = m[12 + j] as number;
+			for (let i = 0; i < 3; i++) s += (pos[k * 3 + i] as number) * (m[i * 4 + j] as number);
+			v[k * CORNER + j] = s;
+		}
+		const L = Math.hypot(nor[k * 3] as number, nor[k * 3 + 1] as number, nor[k * 3 + 2] as number) || 1;
+		for (let j = 0; j < 3; j++) v[k * CORNER + 3 + j] = (nor[k * 3 + j] as number) / Math.max(L, 1e-12);
+		v[k * CORNER + 6] = uv[k * 2] as number;
+		v[k * CORNER + 7] = uv[k * 2 + 1] as number;
+	}
+	return v;
+}
+
 function mesh(doc: GltfDoc, bin: Uint8Array, g: GltfNode, m: number[], names: string[], owns: (OwnMaterial | undefined)[], out: TrackMesh[]) {
 	const track = trackOf(g);
 	const name = (g.name ?? "mesh").replace(BLENDER_COPY, "");
@@ -147,63 +207,41 @@ function mesh(doc: GltfDoc, bin: Uint8Array, g: GltfNode, m: number[], names: st
 	const nm = normalMatrix(m);
 	for (const prim of doc.meshes?.[g.mesh as number]?.primitives ?? []) {
 		if ((prim.mode ?? 4) !== 4) continue;
-		const at = prim.attributes;
-		const pos = accessor(doc, bin, at.POSITION as number).data;
-		const nv = pos.length / 3;
-		const faces = prim.indices !== undefined ? Uint32Array.from(accessor(doc, bin, prim.indices).data) : Uint32Array.from({ length: nv }, (_, i) => i);
-		const uv = at.TEXCOORD_0 !== undefined ? accessor(doc, bin, at.TEXCOORD_0).data : new Float32Array(nv * 2);
-		let nor: Float64Array;
-		if (at.NORMAL !== undefined) {
-			const n0 = accessor(doc, bin, at.NORMAL).data;
-			nor = new Float64Array(nv * 3);
-			for (let k = 0; k < nv; k++)
-				for (let j = 0; j < 3; j++) {
-					let s = 0;
-					for (let i = 0; i < 3; i++) s += (n0[k * 3 + i] as number) * (nm[i * 3 + j] as number);
-					nor[k * 3 + j] = s;
-				}
-		} else {
-			// (none: each corner the sum of its faces')
-			nor = new Float64Array(nv * 3);
-			for (let t = 0; t < faces.length; t += 3) {
-				const [a, b, c] = [faces[t] as number, faces[t + 1] as number, faces[t + 2] as number];
-				const u = [0, 1, 2].map((i) => (pos[b * 3 + i] as number) - (pos[a * 3 + i] as number));
-				const w = [0, 1, 2].map((i) => (pos[c * 3 + i] as number) - (pos[a * 3 + i] as number));
-				const n = [
-					(u[1] as number) * (w[2] as number) - (u[2] as number) * (w[1] as number),
-					(u[2] as number) * (w[0] as number) - (u[0] as number) * (w[2] as number),
-					(u[0] as number) * (w[1] as number) - (u[1] as number) * (w[0] as number),
-				];
-				for (const k of [a, b, c]) for (let i = 0; i < 3; i++) nor[k * 3 + i] = (nor[k * 3 + i] as number) + (n[i] as number);
-			}
-		}
-		const v = new Float32Array(nv * CORNER);
-		for (let k = 0; k < nv; k++) {
-			for (let j = 0; j < 3; j++) {
-				let s = m[12 + j] as number;
-				for (let i = 0; i < 3; i++) s += (pos[k * 3 + i] as number) * (m[i * 4 + j] as number);
-				v[k * CORNER + j] = s;
-			}
-			const L = Math.hypot(nor[k * 3] as number, nor[k * 3 + 1] as number, nor[k * 3 + 2] as number) || 1;
-			for (let j = 0; j < 3; j++) v[k * CORNER + 3 + j] = (nor[k * 3 + j] as number) / Math.max(L, 1e-12);
-			v[k * CORNER + 6] = uv[k * 2] as number;
-			v[k * CORNER + 7] = uv[k * 2 + 1] as number;
-		}
+		const { v, faces } = primitiveCorners(doc, bin, prim, m, nm);
+		const own = prim.material !== undefined && owns[prim.material] ? { own: owns[prim.material] } : {};
+		const material = prim.material !== undefined && names.length ? (names[prim.material] ?? null) : null;
 		for (const [pv, pf] of pieces(v, faces))
 			out.push({
 				name,
 				role: track.role ?? "visual",
 				surface: track.surface ?? null,
 				visible: track.visible !== false,
-				draw: [Number(draw[0] ?? 0), draw[1] == null ? null : Number(draw[1])],
+				draw: drawOf(draw),
 				shadows: track.shadows !== false,
 				grass: !!track.grass,
-				material: prim.material !== undefined && names.length ? (names[prim.material] ?? null) : null,
-				...(prim.material !== undefined && owns[prim.material] ? { own: owns[prim.material] } : {}),
+				material,
+				...own,
 				v: pv,
 				f: pf,
 			});
 	}
+}
+
+/** How far a mesh is drawn, as its extras give it: from (none: 0) and to (none: null, as far as it is seen). */
+function drawOf(draw: readonly (number | null | undefined)[]): [number, number | null] {
+	return [Number(draw[0] ?? 0), draw[1] == null ? null : Number(draw[1])];
+}
+
+/** A primitive's corners (CORNER numbers each, where it stands: m its matrix, nm its normals') and its faces (none given: each three corners in turn). */
+function primitiveCorners(doc: GltfDoc, bin: Uint8Array, prim: GltfPrimitive, m: number[], nm: number[]): { v: Float32Array; faces: Uint32Array } {
+	const at = prim.attributes;
+	const pos = accessor(doc, bin, at.POSITION as number).data;
+	const nv = pos.length / 3;
+	const faces = prim.indices !== undefined ? Uint32Array.from(accessor(doc, bin, prim.indices).data) : Uint32Array.from({ length: nv }, (_, i) => i);
+	const uv = at.TEXCOORD_0 !== undefined ? accessor(doc, bin, at.TEXCOORD_0).data : new Float32Array(nv * 2);
+	// (no normals: each corner the sum of its faces')
+	const nor = at.NORMAL !== undefined ? turnedNormals(accessor(doc, bin, at.NORMAL).data, nm, nv) : faceNormals(pos, faces, nv);
+	return { v: corners(pos, nor, uv, m), faces };
 }
 
 /** The kind of ground a mesh is driven as (a key of surfaces.json), or null if nothing drives on it: a wall's 'wall'; a surface's its material's surface (lib:

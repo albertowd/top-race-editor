@@ -154,7 +154,7 @@ function PaintFlow() {
 		line: s.sel.line >= 0,
 		mark: s.obj?.kind === "marks" || s.obj?.kind === "rubber" ? s.obj.kind : null,
 	}));
-	const [chosen, choose] = useState<PaintPart>("lines");
+	const [chosen, setChosen] = useState<PaintPart>("lines");
 	// (what is picked on the map shows its own part)
 	let part = chosen;
 	if (mark) part = mark;
@@ -164,8 +164,29 @@ function PaintFlow() {
 		// (what is picked of another part let go, as it would show its own)
 		if (p === "lines" || (mark && mark !== p)) ed.selectObject(null);
 		if (p !== "lines") ed.select({ line: -1 });
-		choose(p);
+		setChosen(p);
 	};
+	let flow: ReactNode;
+	if (part === "rubber") flow = <ObjectsFlow kinds={["rubber"]} />;
+	else if (part === "lines")
+		flow = (
+			<>
+				<RoadList count="lines" />
+				{paintable ? <LinesForm /> : <PickRoad what="lines" />}
+			</>
+		);
+	else
+		flow = (
+			<ObjectsFlow
+				kinds={["marks"]}
+				extra={
+					<>
+						<AcrossRow />
+						<LiningPanel paint />
+					</>
+				}
+			/>
+		);
 	return (
 		<>
 			<Segmented
@@ -179,24 +200,7 @@ function PaintFlow() {
 				onChange={onChange}
 			/>
 			{part === "rubber" ? <WearPanel part="rubber" /> : <WearPanel part="paint" />}
-			{part === "rubber" ? (
-				<ObjectsFlow kinds={["rubber"]} />
-			) : part === "lines" ? (
-				<>
-					<RoadList count="lines" />
-					{paintable ? <LinesForm /> : <PickRoad what="lines" />}
-				</>
-			) : (
-				<ObjectsFlow
-					kinds={["marks"]}
-					extra={
-						<>
-							<AcrossRow />
-							<LiningPanel paint />
-						</>
-					}
-				/>
-			)}
+			{flow}
 		</>
 	);
 }

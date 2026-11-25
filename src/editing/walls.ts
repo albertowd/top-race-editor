@@ -23,7 +23,7 @@ export function wallPieces(w: Curved): [WallNode, WallNode, number][] {
 	const c = w.curve;
 	const out: [WallNode, WallNode, number][] = [];
 	for (let i = 1; i < c.length; i++) out.push([c[i - 1], c[i], i - 1]);
-	if (w.closed && c.length > 2) out.push([c[c.length - 1], c[0], c.length - 1]);
+	if (w.closed && c.length > 2) out.push([c.at(-1) as WallNode, c[0], c.length - 1]);
 	return out;
 }
 
@@ -168,7 +168,7 @@ export function addWallNode(w: Curved, x: number, z: number, tol: number): numbe
 		if (near.d <= tol && !atEnd && near.t > 0 && near.t < 1) return splitWall(w, near.seg, near.t);
 	}
 	const first = c[0];
-	const last = c[c.length - 1];
+	const last = c.at(-1) as WallNode;
 	const toFirst = Math.hypot(first.p[0] - x, first.p[1] - z);
 	const toLast = Math.hypot(last.p[0] - x, last.p[1] - z);
 	const node: WallNode = { p: [x, z], in: [0, 0], out: [0, 0] };
@@ -180,6 +180,6 @@ export function addWallNode(w: Curved, x: number, z: number, tol: number): numbe
 	}
 	c.push(node);
 	smoothWall(w, c.length - 1);
-	if (c.length > 1 && !c[c.length - 2].corner) smoothWall(w, c.length - 2);
+	if (c.length > 1 && !(c.at(-2) as WallNode).corner) smoothWall(w, c.length - 2);
 	return c.length - 1;
 }

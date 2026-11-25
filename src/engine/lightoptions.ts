@@ -68,7 +68,7 @@ export function withLightOption(
 	if (next.strength === own.strength) delete next.strength;
 	if (next.range === own.range) delete next.range;
 	if (next.colour && sameColour(next.colour, own.colour)) delete next.colour;
-	const out: LightOptions = { ...(options ?? {}) };
+	const out: LightOptions = { ...options };
 	if (Object.keys(next).length) out[String(k)] = next;
 	else delete out[String(k)];
 	return Object.keys(out).length ? out : undefined;
@@ -110,31 +110,41 @@ export function cleanLightOptions<N>(v: unknown, where: string, round: (x: numbe
 		if (!/^\d+$/.test(key)) throw new LightOptionsError(`${w}: a light's place among its model's lights (0, 1...)`);
 		const o = (v as Record<string, unknown>)[key];
 		if (!o || typeof o !== "object" || Array.isArray(o)) throw new LightOptionsError(`${w}: {on, strength, colour, range}`);
-		const L = o as Record<string, unknown>;
-		const one: Record<string, unknown> = {};
-		if (L.on !== undefined && L.on !== null) {
-			if (typeof L.on !== "boolean") throw new LightOptionsError(`${w}.on: true or false`);
-			if (!L.on) one.on = false;
-		}
-		if (L.strength !== undefined && L.strength !== null) {
-			const s = numberOf(L.strength);
-			if (s === null || s < 0) throw new LightOptionsError(`${w}.strength: a number, 0 or more`);
-			one.strength = round(s);
-		}
-		if (L.colour !== undefined && L.colour !== null) {
-			const c = L.colour;
-			const ok = Array.isArray(c) && c.length === 3 && c.every((x) => (numberOf(x) ?? -1) >= 0 && (numberOf(x) ?? 2) <= 1);
-			if (!ok) throw new LightOptionsError(`${w}.colour: [red, green, blue], each 0 to 1`);
-			one.colour = (c as unknown[]).map((x) => round(numberOf(x) as number));
-		}
-		if (L.range !== undefined && L.range !== null) {
-			const r = numberOf(L.range);
-			if (r === null || r <= 0) throw new LightOptionsError(`${w}.range: metres, more than 0`);
-			one.range = round(r);
-		}
+		const one = cleanLight(o as Record<string, unknown>, w, round);
 		if (Object.keys(one).length) out[key] = one;
 	}
 	return Object.keys(out).length ? out : undefined;
+}
+
+/** A light's options checked (w: where it is, for what is wrong): on, strength, colour and range, each it gives (only off kept), each number given to round. */
+function cleanLight<N>(L: Record<string, unknown>, w: string, round: (x: number) => N): Record<string, unknown> {
+	const one: Record<string, unknown> = {};
+	if (L.on !== undefined && L.on !== null) {
+		if (typeof L.on !== "boolean") throw new LightOptionsError(`${w}.on: true or false`);
+		if (!L.on) one.on = false;
+	}
+	if (L.strength !== undefined && L.strength !== null) one.strength = round(strengthOf(L.strength, w));
+	if (L.colour !== undefined && L.colour !== null) one.colour = colourOf(L.colour, w).map((x) => round(x));
+	if (L.range !== undefined && L.range !== null) {
+		const r = numberOf(L.range);
+		if (r === null || r <= 0) throw new LightOptionsError(`${w}.range: metres, more than 0`);
+		one.range = round(r);
+	}
+	return one;
+}
+
+/** A light's strength checked: a number, 0 or more. */
+function strengthOf(v: unknown, w: string): number {
+	const s = numberOf(v);
+	if (s === null || s < 0) throw new LightOptionsError(`${w}.strength: a number, 0 or more`);
+	return s;
+}
+
+/** A light's colour checked: three numbers, each 0 to 1. */
+function colourOf(c: unknown, w: string): number[] {
+	const ok = Array.isArray(c) && c.length === 3 && c.every((x) => (numberOf(x) ?? -1) >= 0 && (numberOf(x) ?? 2) <= 1);
+	if (!ok) throw new LightOptionsError(`${w}.colour: [red, green, blue], each 0 to 1`);
+	return (c as unknown[]).map((x) => numberOf(x) as number);
 }
 
 /** The track's light series (source/lights.json's `series`), as plain numbers; none where it has no such file. */

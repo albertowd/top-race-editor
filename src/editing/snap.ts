@@ -82,6 +82,12 @@ export function snapToPaintEnd(
 	return { x, z, label };
 }
 
+/** A mark's node j as a snap names it: its start or end (an open mark's ends), else its number. */
+function nodeLabel(end: boolean, j: number): string {
+	if (!end) return `node ${j + 1}`;
+	return j ? "end" : "start";
+}
+
 /** What a paint mark's node dragged to near (wx, wz) snaps to, within tol metres: another mark's end or a road's edge line's (so the two are painted as one
  * line, their corner mitred; of another paint, joined by a seam), else one of another mark's other nodes, else the nearest point of its line. */
 export function snapToMarks(
@@ -104,7 +110,7 @@ export function snapToMarks(
 		const c = m.curve;
 		c.forEach((n, j) => {
 			const end = !m.closed && (j === 0 || j === c.length - 1);
-			take(n.p[0], n.p[1], `${m.name}'s ${end ? (j ? "end" : "start") : `node ${j + 1}`}`, end ? 0 : 1);
+			take(n.p[0], n.p[1], `${m.name}'s ${nodeLabel(end, j)}`, end ? 0 : 1);
 		});
 		const P = markPath(m).P;
 		for (let k = 1; k < P.length; k++) {

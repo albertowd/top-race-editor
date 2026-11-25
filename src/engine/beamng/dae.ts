@@ -11,7 +11,7 @@ export interface DaeMesh {
 	F: ArrayLike<number>;
 }
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 /** A number as Python's '%.<p>g' writes it, near enough for a reader: p significant digits, no trailing zeros. */
 const g = (x: number, p: number) => {
@@ -80,7 +80,7 @@ export function writeDae(meshes: DaeMesh[], o: { collide?: boolean; sizes?: numb
 		geo.push(geometry(id, m));
 		if (size !== null)
 			nodes.push(
-				`<node id="n${k}" name="${m.name.replace(/[^A-Za-z0-9_]/g, "_")}_${k}_L${size}"><instance_geometry url="#${id}">${bind(m.material)}</instance_geometry></node>`,
+				`<node id="n${k}" name="${m.name.replace(/\W/g, "_")}_${k}_L${size}"><instance_geometry url="#${id}">${bind(m.material)}</instance_geometry></node>`,
 			);
 		if (size === null || (collide && !collision.length))
 			nodes.push(`<node id="c${k}" name="Colmesh_${k}-1"><instance_geometry url="#${id}">${bind(m.material)}</instance_geometry></node>`);

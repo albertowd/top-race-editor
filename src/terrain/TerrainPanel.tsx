@@ -61,6 +61,8 @@ const NO_EDITS: readonly TerrainEdit[] = [];
 const NO_WHY: Readonly<Record<string, string>> = {};
 
 const fmt = (v: number | undefined, digits = 2) => (v === undefined || Number.isNaN(v) ? "–" : v.toFixed(digits));
+/** A number of metres with its sign (a plus where it is above nothing). */
+const signed = (v: number) => `${v > 0 ? "+" : ""}${fmt(v)}`;
 
 /** The terrain's inspector. */
 export function TerrainPanel() {
@@ -73,9 +75,9 @@ export function TerrainPanel() {
 		return <p className="empty-state">This track has no terrain: {s.message}. A new track's wizard makes one from a place's picture and heights.</p>;
 	if (!s.hasDoc)
 		return (
-			<p className="empty-state" role="status">
+			<output className="empty-state" style={{ display: "block" }}>
 				{s.status === "error" ? s.message : "Loading the terrain…"}
-			</p>
+			</output>
 		);
 	return (
 		<>
@@ -114,10 +116,10 @@ function SaveRow() {
 					Redo
 				</button>
 			</div>
-			<p className="hint terrain-status" role="status">
+			<output className="hint terrain-status" style={{ display: "block", margin: "8px 0 0" }}>
 				{s.working ? "Working it out…" : s.message}
 				{s.dirty ? " · not saved" : ""}
-			</p>
+			</output>
 		</>
 	);
 }
@@ -262,7 +264,7 @@ function MouseGroup() {
 					</tr>
 					<tr>
 						<th scope="row">Edits</th>
-						<td>{Number.isNaN(change) ? "0.00" : `${change > 0 ? "+" : ""}${fmt(change)}`} m</td>
+						<td>{Number.isNaN(change) ? "0.00" : signed(change)} m</td>
 					</tr>
 				</tbody>
 			</table>
@@ -342,8 +344,11 @@ function FiltersGroup() {
 					{f.areas.map((a, i) => {
 						const on = pick?.kind === "area" && pick.i === i;
 						return (
-							// biome-ignore lint/suspicious/noArrayIndexKey: areas are kept and edited by their place
-							<li key={i} className={on ? "sel" : undefined}>
+							<li
+								// biome-ignore lint/suspicious/noArrayIndexKey: areas are kept and edited by their place
+								key={i} // NOSONAR: kept and edited by their place
+								className={on ? "sel" : undefined}
+							>
 								<button type="button" className="row-button" aria-current={on} onClick={() => t.pickThing({ kind: "area", i })}>
 									<span className="swatch" style={{ background: AREA_COLOURS[a.kind] }} />
 									<span className="row-title" title={a.name}>
@@ -367,9 +372,12 @@ const editSummary = (e: TerrainEdit, rasterCells?: number): string => {
 		case "raster":
 			return rasterCells ? `${rasterCells.toLocaleString()} cells` : "a raster";
 		case "offset":
-			return `${e.by > 0 ? "+" : ""}${fmt(e.by)} m`;
-		case "flat":
-			return e.at ? `at its point ${e.plus ? `${e.plus > 0 ? "+" : ""}${fmt(e.plus)} m` : ""}` : `at ${fmt(e.height)} m`;
+			return `${signed(e.by)} m`;
+		case "flat": {
+			if (!e.at) return `at ${fmt(e.height)} m`;
+			const plus = e.plus ? `${signed(e.plus)} m` : "";
+			return `at its point ${plus}`;
+		}
 		case "smooth":
 			return `over ${fmt(e.sigma_m, 1)} m`;
 		default:
@@ -391,8 +399,11 @@ function EditsGroup() {
 						const on = pick?.kind === "edit" && pick.i === i;
 						const r = e.type === "raster" ? rasters[e.file] : undefined;
 						return (
-							// biome-ignore lint/suspicious/noArrayIndexKey: edits are kept and edited by their place (their order is theirs)
-							<li key={i} className={on ? "sel" : undefined}>
+							<li
+								// biome-ignore lint/suspicious/noArrayIndexKey: edits are kept and edited by their place (their order is theirs)
+								key={i} // NOSONAR: kept and edited by their place
+								className={on ? "sel" : undefined}
+							>
 								<div className={e.off ? "terrain-edit-row dim" : "terrain-edit-row"}>
 									<input
 										type="checkbox"

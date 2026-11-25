@@ -46,11 +46,8 @@ export async function readPicture(b: Uint8Array): Promise<Picture> {
 	}
 }
 
-/** A PNG of 8-bit RGB, RGBA, grey or grey with alpha, not interlaced (as a track keeps its textures), read as Pillow reads it (grey as RGB, grey with alpha as
- * RGBA). */
-export async function readPng(b: Uint8Array): Promise<Picture> {
-	const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-	if (dv.getUint32(0) !== 0x89504e47) throw new Error("not a PNG");
+/** A PNG's chunks read up to IEND: its size and colour type (IHDR's, checked to be a kind the track's textures are) and its IDAT chunks' bytes, joined. */
+function pngChunks(b: Uint8Array, dv: DataView): { width: number; height: number; type: number; idat: Uint8Array } {
 	let p = 8;
 	let width = 0;
 	let height = 0;
@@ -58,7 +55,7 @@ export async function readPng(b: Uint8Array): Promise<Picture> {
 	const idat: Uint8Array[] = [];
 	while (p + 8 <= b.length) {
 		const len = dv.getUint32(p);
-		const kind = String.fromCharCode(...b.subarray(p + 4, p + 8));
+		const kind = String.fromCodePoint(...b.subarray(p + 4, p + 8));
 		const body = b.subarray(p + 8, p + 8 + len);
 		if (kind === "IHDR") {
 			width = dv.getUint32(p + 8);
@@ -77,8 +74,31 @@ export async function readPng(b: Uint8Array): Promise<Picture> {
 		all.set(c, o);
 		o += c.length;
 	}
-	const raw = await inflate(all);
-	const bpp = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type] as number;
+	return { width, height, type, idat: all };
+}
+
+/** Paeth's predictor (PNG's filter 4): of the bytes left (a), up (u) and up-left (c), the one nearest a + u - c. */
+function paeth(a: number, u: number, c: number): number {
+	const pp = a + u - c;
+	const pa = Math.abs(pp - a);
+	const pb = Math.abs(pp - u);
+	const pc = Math.abs(pp - c);
+	if (pa <= pb && pa <= pc) return a;
+	return pb <= pc ? u : c;
+}
+
+/** A PNG byte v unfiltered by its row's filter f, from the bytes left (a), up (u) and up-left (c) of it (before it is taken to 0-255). */
+function unfiltered(f: number | undefined, v: number, a: number, u: number, c: number): number {
+	if (f === 0) return v;
+	if (f === 1) return v + a;
+	if (f === 2) return v + u;
+	if (f === 3) return v + ((a + u) >> 1);
+	if (f === 4) return v + paeth(a, u, c);
+	throw new Error(`a PNG row of filter ${f}`);
+}
+
+/** A PNG's inflated rows unfiltered: each row's filter byte, then its bytes, bpp to a pixel. */
+function unfilterRows(raw: Uint8Array, width: number, height: number, bpp: number): Uint8Array {
 	const stride = width * bpp;
 	const data = new Uint8Array(height * stride);
 	for (let y = 0; y < height; y++) {
@@ -90,21 +110,21 @@ export async function readPng(b: Uint8Array): Promise<Picture> {
 			const a = x >= bpp ? (data[row + x - bpp] as number) : 0;
 			const u = y > 0 ? (data[row - stride + x] as number) : 0;
 			const c = y > 0 && x >= bpp ? (data[row - stride + x - bpp] as number) : 0;
-			let out: number;
-			if (f === 0) out = v;
-			else if (f === 1) out = v + a;
-			else if (f === 2) out = v + u;
-			else if (f === 3) out = v + ((a + u) >> 1);
-			else if (f === 4) {
-				const pp = a + u - c;
-				const pa = Math.abs(pp - a);
-				const pb = Math.abs(pp - u);
-				const pc = Math.abs(pp - c);
-				out = v + (pa <= pb && pa <= pc ? a : pb <= pc ? u : c);
-			} else throw new Error(`a PNG row of filter ${f}`);
-			data[row + x] = out & 255;
+			data[row + x] = unfiltered(f, v, a, u, c) & 255;
 		}
 	}
+	return data;
+}
+
+/** A PNG of 8-bit RGB, RGBA, grey or grey with alpha, not interlaced (as a track keeps its textures), read as Pillow reads it (grey as RGB, grey with alpha as
+ * RGBA). */
+export async function readPng(b: Uint8Array): Promise<Picture> {
+	const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	if (dv.getUint32(0) !== 0x89504e47) throw new Error("not a PNG");
+	const { width, height, type, idat } = pngChunks(b, dv);
+	const raw = await inflate(idat);
+	const bpp = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type] as number;
+	const data = unfilterRows(raw, width, height, bpp);
 	if (type === 2 || type === 6) return { width, height, mode: type === 6 ? "RGBA" : "RGB", data };
 	// (grey, and grey with alpha: as Pillow converts L to RGB and LA to RGBA, the grey in each channel)
 	const n = width * height;
@@ -183,29 +203,57 @@ const clip8 = (ss: number) => {
 	return Math.min(Math.max(x, 0), 255);
 };
 
+/** A resample's fixed-point sum (from a half, to round) of n samples, src's from `at` on every `step`, weighted by kk's from k on. */
+function weighted(src: Uint8Array, at: number, step: number, n: number, kk: Int32Array, k: number): number {
+	let ss = 1 << (PRECISION_BITS - 1);
+	for (let t = 0; t < n; t++) {
+		// (in 32 bits, as Pillow's int: its weights small enough that the sum never overflows)
+		ss += (src[at + t * step] as number) * (kk[k + t] as number);
+	}
+	return ss;
+}
+
 /** A pass of Pillow's resample over 8-bit channels: across (horizontal) or down. */
 function pass(src: Uint8Array, w: number, h: number, ch: number, outSize: number, across: boolean): Uint8Array {
-	const { ksize, bounds, kk } = coefficients(across ? w : h, outSize);
-	const ow = across ? outSize : w;
-	const oh = across ? h : outSize;
+	const [inSize, ow, oh] = across ? [w, outSize, h] : [h, w, outSize];
+	const { ksize, bounds, kk } = coefficients(inSize, outSize);
 	const out = new Uint8Array(ow * oh * ch);
-	const half = 1 << (PRECISION_BITS - 1);
+	// (the samples of an output pixel: along its row across, down its column otherwise)
+	const step = across ? ch : w * ch;
 	for (let yy = 0; yy < oh; yy++)
 		for (let xx = 0; xx < ow; xx++) {
 			const i = across ? xx : yy;
 			const min = bounds[i * 2] as number;
 			const n = bounds[i * 2 + 1] as number;
-			for (let c = 0; c < ch; c++) {
-				let ss = half;
-				for (let t = 0; t < n; t++) {
-					const at = across ? (yy * w + min + t) * ch + c : ((min + t) * w + xx) * ch + c;
-					// (in 32 bits, as Pillow's int: its weights small enough that the sum never overflows)
-					ss = (ss + (src[at] as number) * (kk[i * ksize + t] as number)) | 0;
-				}
-				out[(yy * ow + xx) * ch + c] = clip8(ss);
-			}
+			const first = across ? (yy * w + min) * ch : (min * w + xx) * ch;
+			for (let c = 0; c < ch; c++) out[(yy * ow + xx) * ch + c] = clip8(weighted(src, first + c, step, n, kk, i * ksize));
 		}
 	return out;
+}
+
+/** RGBA pixels with their colours times their alpha (Pillow's RGBA to RGBa), in a copy. */
+function premultiplied(src: Uint8Array): Uint8Array {
+	const d = new Uint8Array(src);
+	for (let i = 0; i < d.length; i += 4) {
+		const a = d[i + 3] as number;
+		for (let c = 0; c < 3; c++) {
+			const t = (d[i + c] as number) * a + 128;
+			d[i + c] = ((t >> 8) + t) >> 8;
+		}
+	}
+	return d;
+}
+
+/** RGBa pixels back to RGBA (Pillow's: their colours divided by their alpha, clipped to 0-255), in place; those fully opaque or fully clear as they are. */
+function unpremultiply(d: Uint8Array): void {
+	for (let i = 0; i < d.length; i += 4) {
+		const a = d[i + 3] as number;
+		if (a === 255 || a === 0) continue;
+		for (let c = 0; c < 3; c++) {
+			const v = Math.trunc((255 * (d[i + c] as number)) / a);
+			d[i + c] = Math.min(Math.max(v, 0), 255);
+		}
+	}
 }
 
 /** Image.resize((w, h), LANCZOS): across then down (down first where the height shrinks the most, as Pillow 13), each pass rounded to 0-255; RGBA premultiplied
@@ -213,17 +261,7 @@ function pass(src: Uint8Array, w: number, h: number, ch: number, outSize: number
 export function resizeLanczos(im: Picture, w: number, h: number): Picture {
 	if (w === im.width && h === im.height) return im;
 	const ch = im.mode === "RGBA" ? 4 : 3;
-	let d = im.data;
-	if (ch === 4) {
-		d = new Uint8Array(im.data);
-		for (let i = 0; i < d.length; i += 4) {
-			const a = d[i + 3] as number;
-			for (let c = 0; c < 3; c++) {
-				const t = (d[i + c] as number) * a + 128;
-				d[i + c] = ((t >> 8) + t) >> 8;
-			}
-		}
-	}
+	let d = ch === 4 ? premultiplied(im.data) : im.data;
 	let cw = im.width;
 	let chh = im.height;
 	// (down first where the height loses more than twice what the width does: Pillow 13's horizontal_first)
@@ -247,15 +285,7 @@ export function resizeLanczos(im: Picture, w: number, h: number): Picture {
 		down();
 		across();
 	}
-	if (ch === 4)
-		for (let i = 0; i < d.length; i += 4) {
-			const a = d[i + 3] as number;
-			if (a === 255 || a === 0) continue;
-			for (let c = 0; c < 3; c++) {
-				const v = Math.trunc((255 * (d[i + c] as number)) / a);
-				d[i + c] = v <= 0 ? 0 : v < 256 ? v : 255;
-			}
-		}
+	if (ch === 4) unpremultiply(d);
 	return { width: w, height: h, mode: im.mode, data: d };
 }
 
@@ -291,30 +321,64 @@ function blockAt(im: Picture, bx: number, by: number) {
 	return { px, inside };
 }
 
-function bc1Color(im: Picture, bx: number, by: number, separateAlpha: boolean, dst: Uint8Array, o: number): void {
-	const { px, inside } = blockAt(im, bx, by);
-	const alpha = new Uint8Array(16);
-	let first = true;
+/** A BC1 block's endpoints (the least and greatest 565 colour of its pixels inside the picture) and whether it has clear pixels: with separateAlpha, those of
+ * alpha 0, left out of the endpoints and marked 0 in alpha (the others 1). */
+function bc1Endpoints(px: Uint8Array, inside: Uint8Array, separateAlpha: boolean, alpha: Uint8Array): { min: number; max: number; transparency: boolean } {
 	let transparency = false;
-	let min = 0;
-	let max = 0;
+	let min = Infinity;
+	let max = -Infinity;
 	for (let i = 0; i < 4; i++)
 		for (let j = 0; j < 4; j++) {
 			const b = i + j * 4;
 			if (!inside[b]) continue;
-			if (separateAlpha) {
-				if (px[b * 4 + 3] === 0) {
-					alpha[b] = 0;
-					transparency = true;
-					continue;
-				}
-				alpha[b] = 1;
+			if (separateAlpha && markClear(px, b, alpha)) {
+				transparency = true;
+				continue;
 			}
 			const c = encode565(px[b * 4] as number, px[b * 4 + 1] as number, px[b * 4 + 2] as number);
-			if (first || c < min) min = c;
-			if (first || c > max) max = c;
-			first = false;
+			min = Math.min(min, c);
+			max = Math.max(max, c);
 		}
+	// (no colour in the block: both endpoints 0)
+	if (min > max) return { min: 0, max: 0, transparency };
+	return { min, max, transparency };
+}
+
+/** Whether pixel b of px is clear (alpha 0), marked in alpha: 0 clear, 1 not. */
+function markClear(px: Uint8Array, b: number, alpha: Uint8Array): boolean {
+	const clear = px[b * 4 + 3] === 0;
+	alpha[b] = clear ? 0 : 1;
+	return clear;
+}
+
+/** A BC1 pixel's 2-bit index (pixel b of px) by its distance from the endpoint lo towards hi: of four colours, or of three where the block has clear pixels. */
+function bc1Index(px: Uint8Array, b: number, lo: [number, number, number], hi: [number, number, number], transparency: boolean): number {
+	let distance = f32(0);
+	let total = 0;
+	for (let k = 0; k < 3; k++) {
+		const denom = Math.abs(hi[k] - lo[k]);
+		if (denom !== 0) {
+			distance = f32(distance + f32(Math.abs((px[b * 4 + k] as number) - lo[k]) / denom));
+			total += 1;
+		}
+	}
+	if (total === 0) return 0;
+	if (transparency) {
+		distance = f32(distance * Math.trunc(4 / total));
+		// (under 1, color_max)
+		if (distance < 1) return 0;
+		return distance < 3 ? 2 : 1;
+	}
+	distance = f32(distance * Math.trunc(6 / total));
+	if (distance < 1) return 1;
+	if (distance < 3) return 3;
+	return distance < 5 ? 2 : 0;
+}
+
+function bc1Color(im: Picture, bx: number, by: number, separateAlpha: boolean, dst: Uint8Array, o: number): void {
+	const { px, inside } = blockAt(im, bx, by);
+	const alpha = new Uint8Array(16);
+	const { min, max, transparency } = bc1Endpoints(px, inside, separateAlpha, alpha);
 	let p = o;
 	if (transparency) {
 		dst[p++] = min & 255;
@@ -336,28 +400,7 @@ function bc1Color(im: Picture, bx: number, by: number, separateAlpha: boolean, d
 				l |= 3 << (j * 2);
 				continue;
 			}
-			let distance = f32(0);
-			let total = 0;
-			for (let k = 0; k < 3; k++) {
-				const denom = Math.abs(hi[k] - lo[k]);
-				if (denom !== 0) {
-					distance = f32(distance + f32(Math.abs((px[b * 4 + k] as number) - lo[k]) / denom));
-					total += 1;
-				}
-			}
-			if (total === 0) continue;
-			if (transparency) {
-				distance = f32(distance * Math.trunc(4 / total));
-				if (distance < 1) {
-					// (color_max)
-				} else if (distance < 3) l |= 2 << (j * 2);
-				else l |= 1 << (j * 2);
-			} else {
-				distance = f32(distance * Math.trunc(6 / total));
-				if (distance < 1) l |= 1 << (j * 2);
-				else if (distance < 3) l |= 3 << (j * 2);
-				else if (distance < 5) l |= 2 << (j * 2);
-			}
+			l |= bc1Index(px, b, lo, hi, transparency) << (j * 2);
 		}
 		dst[p++] = l;
 	}
@@ -378,9 +421,8 @@ function bc2Alpha(im: Picture, bx: number, by: number, dst: Uint8Array, o: numbe
 	}
 }
 
-function bc3Alpha(im: Picture, bx: number, by: number, channel: number, dst: Uint8Array, o: number): void {
-	const { px, inside } = blockAt(im, bx, by);
-	const block = new Uint8Array(16);
+/** A BC3 block's endpoints (the least and greatest of its pixels' channel inside the picture), that channel kept in block (by x + y * 4). */
+function bc3Endpoints(px: Uint8Array, inside: Uint8Array, channel: number, block: Uint8Array): { min: number; max: number } {
 	let first = true;
 	let min = 0;
 	let max = 0;
@@ -394,28 +436,31 @@ function bc3Alpha(im: Picture, bx: number, by: number, channel: number, dst: Uin
 			if (first || a > max) max = a;
 			first = false;
 		}
+	return { min, max };
+}
+
+/** A BC3 alpha's 3-bit index: 6 for 0, 7 for 255, otherwise by its distance from min (denom the endpoints apart). */
+function bc3Index(a: number, min: number, denom: number): number {
+	if (!a) return 6;
+	if (a === 255) return 7;
+	const distance = denom === 0 ? 0 : f32(f32(Math.abs(a - min) / denom) * 10);
+	if (distance < 3) return 2;
+	if (distance < 5) return 3;
+	if (distance < 7) return 4;
+	return 5;
+}
+
+function bc3Alpha(im: Picture, bx: number, by: number, channel: number, dst: Uint8Array, o: number): void {
+	const { px, inside } = blockAt(im, bx, by);
+	const block = new Uint8Array(16);
+	const { min, max } = bc3Endpoints(px, inside, channel, block);
 	let p = o;
 	dst[p++] = min;
 	dst[p++] = max;
 	const denom = Math.abs(max - min);
 	for (let i = 0; i < 2; i++) {
 		let l = 0;
-		for (let j = 7; j > -1; j--) {
-			const a = block[i * 8 + j] as number;
-			if (!a) {
-				l |= 6 << (j * 3);
-				continue;
-			}
-			if (a === 255) {
-				l |= 7 << (j * 3);
-				continue;
-			}
-			const distance = denom === 0 ? 0 : f32(f32(Math.abs(a - min) / denom) * 10);
-			if (distance < 3) l |= 2 << (j * 3);
-			else if (distance < 5) l |= 3 << (j * 3);
-			else if (distance < 7) l |= 4 << (j * 3);
-			else l |= 5 << (j * 3);
-		}
+		for (let j = 7; j > -1; j--) l |= bc3Index(block[i * 8 + j] as number, min, denom) << (j * 3);
 		dst[p++] = l & 255;
 		dst[p++] = (l >> 8) & 255;
 		dst[p++] = (l >> 16) & 255;
@@ -424,6 +469,13 @@ function bc3Alpha(im: Picture, bx: number, by: number, channel: number, dst: Uin
 
 export type DxtFormat = "DXT1" | "DXT3" | "DXT5";
 const BCN: Record<DxtFormat, number> = { DXT1: 1, DXT3: 2, DXT5: 3 };
+
+/** A DXT3 (n 2) or DXT5 (n 3) block's alpha half, its first 8 bytes: DXT3's explicit alpha or DXT5's interpolated, all 0xff for a picture without alpha. */
+function alphaBlock(im: Picture, bx: number, by: number, n: number, dst: Uint8Array, o: number): void {
+	if (im.mode !== "RGBA") dst.fill(0xff, o, o + 8);
+	else if (n === 2) bc2Alpha(im, bx, by, dst, o);
+	else bc3Alpha(im, bx, by, 3, dst, o);
+}
 
 /** A picture's blocks as Pillow's BCn encoder writes them (n: 1 DXT1, 2 DXT3, 3 DXT5). */
 export function bcn(im: Picture, fmt: DxtFormat): Uint8Array {
@@ -437,10 +489,7 @@ export function bcn(im: Picture, fmt: DxtFormat): Uint8Array {
 	for (let by = 0; by < im.height; by += 4)
 		for (let bx = 0; bx < im.width; bx += 4) {
 			if (n === 2 || n === 3) {
-				if (hasAlpha) {
-					if (n === 2) bc2Alpha(im, bx, by, out, o);
-					else bc3Alpha(im, bx, by, 3, out, o);
-				} else out.fill(0xff, o, o + 8);
+				alphaBlock(im, bx, by, n, out, o);
 				o += 8;
 			}
 			bc1Color(im, bx, by, n === 1 && hasAlpha, out, o);
@@ -453,7 +502,12 @@ export function bcn(im: Picture, fmt: DxtFormat): Uint8Array {
 
 const DDSD = { CAPS: 0x1, HEIGHT: 0x2, WIDTH: 0x4, PITCH: 0x8, PIXELFORMAT: 0x1000, LINEARSIZE: 0x80000 };
 const DDPF = { ALPHAPIXELS: 0x1, FOURCC: 0x4, RGB: 0x40 };
-const fourcc = (s: string) => s.charCodeAt(0) | (s.charCodeAt(1) << 8) | (s.charCodeAt(2) << 16) | (s.charCodeAt(3) << 24);
+/** A four-character code (ASCII) as its little-endian 32 bits. */
+function fourcc(s: DxtFormat | "DDS "): number {
+	let v = 0;
+	for (let i = 0; i < 4; i++) v |= (s.codePointAt(i) ?? 0) << (i * 8);
+	return v;
+}
 
 /** A picture as Pillow saves it as DDS: compressed (fmt given: BCn) or uncompressed (its channels B, G, R, A). */
 export function ddsOf(im: Picture, fmt?: DxtFormat): Uint8Array {
@@ -488,7 +542,27 @@ export function ddsOf(im: Picture, fmt?: DxtFormat): Uint8Array {
 	}
 	const head = new Uint8Array(128);
 	const dv = new DataView(head.buffer);
-	const u32 = [fourcc("DDS "), 124, flags, im.height, im.width, pitch, 0, 0, ...Array(11).fill(0), 32, pixelFlags, four, bitcount, ...mask, 0x1000, 0, 0, 0, 0];
+	const u32 = [
+		fourcc("DDS "),
+		124,
+		flags,
+		im.height,
+		im.width,
+		pitch,
+		0,
+		0,
+		...new Array(11).fill(0),
+		32,
+		pixelFlags,
+		four,
+		bitcount,
+		...mask,
+		0x1000,
+		0,
+		0,
+		0,
+		0,
+	];
 	u32.forEach((v, i) => {
 		dv.setUint32(i * 4, v >>> 0, true);
 	});

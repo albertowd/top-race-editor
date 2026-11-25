@@ -169,7 +169,7 @@ export function racePath(
 		const [mid, width] = across(i);
 		const radius = (g !== null ? Math.max(width, Math.min(half as number, 2 * HALF_ROAD)) : width) + 1;
 		const nid = next();
-		const name = k === 0 ? "Start" : g !== null ? `Split ${g}` : `Checkpoint ${k}`;
+		const name = gateName(k, g);
 		const rec = startPosition(`${name} Recovery Forward`, "recovery", at(i - 4), along(i - 4));
 		pathnodes.push({
 			customFields: { names: {}, tags: {}, types: {}, values: {} },
@@ -229,9 +229,15 @@ export function racePath(
 	return { path, length };
 }
 
+/** A path node's name: the first the start, a timing gate's its split, the rest checkpoints by their place. */
+function gateName(k: number, g: number | null): string {
+	if (k === 0) return "Start";
+	return g === null ? `Checkpoint ${k}` : `Split ${g}`;
+}
+
 /** The race's path with the grid's slots as the AI race's racers' start positions: Racer Start 1 on. */
 export function aiPath(path: RacePath, grid: [V3, V3][]): RacePath {
-	const out = JSON.parse(JSON.stringify(path)) as RacePath;
+	const out = structuredClone(path);
 	const sid = Math.max(...[...out.startPositions, ...out.pathnodes].map((p) => p.oldId as number)) + 1;
 	grid.forEach(([at, fwd], k) => {
 		out.startPositions.push({
@@ -293,7 +299,7 @@ export function aiMission(
 			shuffleGroup: false,
 			smartStartPlace: true,
 			stoppedLimit: 0,
-			startText: `${LAPS} laps against karts like yours, from the back of the grid. Finish in the top three for a star, first for all three.`,
+			startText: `${LAPS} laps against cars like yours, from the back of the grid. Finish in the top three for a star, first for all three.`,
 			useGroundmarkers: false,
 			vehicleGroupActive: false,
 			vehicleGroupByClass: "same",
@@ -428,13 +434,19 @@ export interface ConeSet {
 	boards: Board[];
 }
 
+/** A name without the underscores it starts or ends with. */
+function trimUnderscores(s: string): string {
+	let from = 0;
+	let to = s.length;
+	while (from < to && s[from] === "_") from++;
+	while (to > from && s[to - 1] === "_") to--;
+	return s.slice(from, to);
+}
+
 /** A prefab of a layout's cones (feet in the level's place) and boards, as one vehicle with its first cone's foot (or board's) where it is placed: an object a
  * line, in the group the last line makes. The set its part is made of. */
 export function conePrefab(tag: string, feet: V3[], boards: Board[]): { prefab: string; set: ConeSet } {
-	const name = tag
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_")
-		.replace(/^_+|_+$/g, "");
+	const name = trimUnderscores(tag.toLowerCase().replace(/[^a-z0-9]+/g, "_"));
 	let origin: V3;
 	if (feet.length) origin = feet[0] as V3;
 	else {
@@ -510,8 +522,10 @@ export function coneParts(sets: ConeSet[], boardTexture: Uint8Array | null): Map
 				] as V3[]
 			).map((d) => plus(f, d));
 			flex.push({ pos: { x: f[0], y: f[1], z: f[2] } }, ["cone_01a", [g], { scale }]);
-			nodes.push({ group: g }, { nodeWeight: corner }, ...[0, 1, 2, 3].map((i) => [n[i], ...(p[i] as V3).map(r4)]));
-			nodes.push({ nodeWeight: CONE_MASS * 0.15 }, [n[4], ...(p[4] as V3).map(r4)]);
+			nodes.push({ group: g }, { nodeWeight: corner }, ...[0, 1, 2, 3].map((i) => [n[i], ...(p[i] as V3).map(r4)]), { nodeWeight: CONE_MASS * 0.15 }, [
+				n[4],
+				...(p[4] as V3).map(r4),
+			]);
 			for (const [a, b] of [
 				[0, 4],
 				[1, 4],
@@ -649,7 +663,7 @@ export function uuid5(name: string): string {
 	const parts = [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b].map((seed) => {
 		let h = seed >>> 0;
 		for (let i = 0; i < name.length; i++) {
-			h ^= name.charCodeAt(i);
+			h ^= name.codePointAt(i) ?? 0;
 			h = Math.imul(h, 0x01000193) >>> 0;
 		}
 		return h.toString(16).padStart(8, "0");

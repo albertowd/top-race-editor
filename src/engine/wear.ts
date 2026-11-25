@@ -120,13 +120,16 @@ export function paintPicture(colour: keyof typeof PAINT_WORN, wear: Wear, size =
 	return out;
 }
 
+/** a material's sheen of its own where none is given: its strength and tightness */
+const WORN_SHEEN = { specular: 0.04, exp: 6 };
+
 /** A material of its own (its picture in the model), drawn over the floor as the paint is: blended, not writing the depth; with the sheen given (its strength
  * and tightness, and its ambient where not the diffuse's share). */
 export function wornMaterial(
 	name: string,
 	picture: string,
 	diffuse: number,
-	sheen: { specular: number; exp: number; ambient?: number } = { specular: 0.04, exp: 6 },
+	sheen: { specular: number; exp: number; ambient?: number } = WORN_SHEEN,
 ): Kn5Material {
 	const props: [string, number][] = [
 		["ksAmbient", sheen.ambient ?? diffuse * 0.55],

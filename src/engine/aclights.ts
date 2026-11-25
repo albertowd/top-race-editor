@@ -17,6 +17,20 @@ export const AC_LIGHTS = "extension/ext_config.ini";
 
 type J = { [k: string]: PyJson };
 
+/** A text without the run of c (one character) at its end. */
+function trimEnd(s: string, c: string): string {
+	let end = s.length;
+	while (end > 0 && s[end - 1] === c) end--;
+	return s.slice(0, end);
+}
+
+/** A number's digits without the zeros after its point, nor the point where nothing is left after it. */
+function trimZeros(s: string): string {
+	if (!s.includes(".")) return s;
+	const t = trimEnd(s, "0");
+	return t.endsWith(".") ? t.slice(0, -1) : t;
+}
+
 /** Python's '%g' of a float: 6 significant digits, exponent form below 1e-4 and from 1e6, no trailing zeros. */
 export function pyG(x: number): string {
 	if (Number.isNaN(x)) return "nan";
@@ -24,9 +38,8 @@ export function pyG(x: number): string {
 	if (x === 0) return Object.is(x, -0) ? "-0" : "0";
 	const [m, e] = x.toExponential(5).split("e") as [string, string];
 	const exp = Number(e);
-	const trim = (s: string) => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
-	if (exp < -4 || exp >= 6) return `${trim(m)}e${exp < 0 ? "-" : "+"}${String(Math.abs(exp)).padStart(2, "0")}`;
-	return trim(x.toFixed(5 - exp));
+	if (exp < -4 || exp >= 6) return `${trimZeros(m)}e${exp < 0 ? "-" : "+"}${String(Math.abs(exp)).padStart(2, "0")}`;
+	return trimZeros(x.toFixed(5 - exp));
 }
 
 /** A value as ac_lights' num: a float by %g, anything else as Python's str. */
@@ -34,6 +47,7 @@ function num(v: PyJson | undefined): string {
 	if (v instanceof PyNumber) return /[.eEnN]/.test(v.text) ? pyG(v.value) : v.text;
 	if (typeof v === "number") return Number.isInteger(v) ? String(v) : pyG(v);
 	if (typeof v === "boolean") return v ? "True" : "False";
+	if (typeof v === "object" && v !== null) return JSON.stringify(v);
 	return String(v);
 }
 
@@ -52,19 +66,33 @@ const d = (v: PyJson | undefined) => String(Math.trunc(Number(v)));
 const isList = (v: unknown): v is PyJson[] => Array.isArray(v);
 const isDict = (v: unknown): v is J => !!v && typeof v === "object" && !Array.isArray(v) && !(v instanceof PyNumber);
 /** Python's truth of a value */
-const truthy = (v: unknown) => (isList(v) ? v.length > 0 : isDict(v) ? Object.keys(v).length > 0 : v instanceof PyNumber ? v.value !== 0 : !!v);
+function truthy(v: unknown): boolean {
+	if (isList(v)) return v.length > 0;
+	if (isDict(v)) return Object.keys(v).length > 0;
+	if (v instanceof PyNumber) return v.value !== 0;
+	return !!v;
+}
+
+/** A list of lists as Lua: a table of one row a line. */
+const luaRows = (list: PyJson[]) => list.map((x) => `{${(x as PyJson[]).map(lua).join(",")}}`).join(",\n");
+
+/** A string as Lua: quoted, its backslashes and double quotes escaped, its single quotes made backticks. */
+function luaString(v: string): string {
+	const escaped = v.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`).replaceAll("'", "`");
+	return `"${escaped}"`;
+}
 
 /** A JSON value as Lua: lists as tables (a list of lists one row a line), strings quoted. */
 export function lua(v: PyJson): string {
 	if (typeof v === "boolean") return v ? "true" : "false";
-	if (typeof v === "string") return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "`")}"`;
+	if (typeof v === "string") return luaString(v);
 	if (typeof v === "number" || v instanceof PyNumber) return num(v);
 	if (isDict(v))
 		return `{ ${Object.entries(v)
 			.map(([k, x]) => `${k} = ${lua(x)}`)
 			.join(", ")} }`;
 	const list = v as PyJson[];
-	if (list.length && list.every(isList)) return `{\n${list.map((x) => `{${(x as PyJson[]).map(lua).join(",")}}`).join(",\n")}\n}`;
+	if (list.length && list.every(isList)) return `{\n${luaRows(list)}\n}`;
 	return `{ ${list.map(lua).join(", ")} }`;
 }
 
@@ -88,7 +116,7 @@ export async function lightsData(
 ): Promise<LightsData> {
 	const src = await readJson(files, `${project}/source/lights.json`);
 	const out: LightsData = {
-		series: { ...((src.series as J) ?? {}) },
+		series: { ...(src.series as J | undefined) },
 		lights: [...((src.lights as J[]) ?? [])],
 		screens: [...((src.screens as J[]) ?? [])],
 	};
@@ -119,26 +147,35 @@ function series(dt: LightsData): string[] {
 			dt.lights.filter((L) => L.series === name && !ownKey(L)),
 		),
 	);
-	for (const [name, s0] of entries) {
-		const groups = new Map<string, J[]>();
-		for (const L of dt.lights) {
-			const key = L.series === name ? ownKey(L) : "";
-			if (key) groups.set(key, [...(groups.get(key) ?? []), L]);
-		}
-		for (const lights of groups.values()) {
-			const first = lights[0] as J;
-			const s: J = { ...(s0 as J) };
-			const changed: string[] = [];
-			for (const k of OWN) {
-				const v = first[k];
-				if (!given(v)) continue;
-				s[k] = v;
-				changed.push(`${k} ${isList(v) ? nums(v) : num(v)}`);
-			}
+	for (const [name, s0] of entries)
+		for (const lights of ownGroups(dt.lights, name).values()) {
+			const { s, changed } = ownSeries(s0 as J, lights[0] as J);
 			out.push(section(out.length, `${name}, its own ${changed.join(", ")}`, s, lights));
 		}
-	}
 	return out;
+}
+
+/** The lights of a series their objects made their own, by their own values (ownKey), in the order first met. */
+function ownGroups(lights: J[], name: string): Map<string, J[]> {
+	const groups = new Map<string, J[]>();
+	for (const L of lights) {
+		const key = L.series === name ? ownKey(L) : "";
+		if (key) groups.set(key, [...(groups.get(key) ?? []), L]);
+	}
+	return groups;
+}
+
+/** A series as its lights' objects made it their own (those of first, as all of them): its values, and what of them changed, as its description says. */
+function ownSeries(s0: J, first: J): { s: J; changed: string[] } {
+	const s: J = { ...s0 };
+	const changed: string[] = [];
+	for (const k of OWN) {
+		const v = first[k];
+		if (!given(v)) continue;
+		s[k] = v;
+		changed.push(`${k} ${isList(v) ? nums(v) : num(v)}`);
+	}
+	return { s, changed };
 }
 
 /** A series as AC's LIGHT_SERIES (its place among them i), with its lights. */
@@ -223,8 +260,10 @@ async function screens(files: HostFiles, scripts: string, dt: LightsData, lib: J
 	for (const sc of dt.screens) {
 		const [w, h] = sc.pixels as PyJson[];
 		const [x, y, aw, ah] = truthy(sc.area) ? (sc.area as PyJson[]) : [0, 0, w as PyJson, h as PyJson];
-		const file = `${scripts}/ac/screens/${sc.shows}.lua`;
-		const text = lines(await files.read(file)).replace(/\n+$/, "");
+		const shows = sc.shows as string;
+		const material = sc.material as string;
+		const file = `${scripts}/ac/screens/${shows}.lua`;
+		const text = trimEnd(lines(await files.read(file)), "\n");
 		const data = Object.entries(truthy(sc.data) ? (sc.data as J) : {})
 			.map(([k, v]) => `local ${k.toUpperCase()} = ${lua(v)}`)
 			.join("\n");
@@ -237,11 +276,11 @@ async function screens(files: HostFiles, scripts: string, dt: LightsData, lib: J
 			.filter((l) => !/^\s*--/.test(l))
 			.join("\n");
 		const quote = script.split("\n").find((l) => l.includes("'"));
-		if (quote !== undefined) throw new Error(`the ${sc.shows} screen's script has an apostrophe, which ends the AC config's quoted script: ${quote.trim()}`);
+		if (quote !== undefined) throw new Error(`the ${shows} screen's script has an apostrophe, which ends the AC config's quoted script: ${quote.trim()}`);
 		out.push(
 			[
 				"[SCRIPTABLE_DISPLAY_...]",
-				`MATERIALS = ${sc.material}`,
+				`MATERIALS = ${material}`,
 				`RESOLUTION = ${d(w)}, ${d(h)}`,
 				`DISPLAY_POS = ${d(x)}, ${d(y)}`,
 				`DISPLAY_SIZE = ${d(aw)}, ${d(ah)}`,
@@ -250,13 +289,13 @@ async function screens(files: HostFiles, scripts: string, dt: LightsData, lib: J
 				`BACKGROUND = ${nums((sc.background as PyJson[] | undefined) ?? [0, 0, 0])}, 1`,
 			].join("\n"),
 		);
-		if (truthy((lib[String(sc.material)] as J | undefined)?.glow))
+		if (truthy((lib[material] as J | undefined)?.glow))
 			out.push(
 				[
 					"[CustomEmissive]",
 					"ACTIVE = 1",
-					`DESCRIPTION = ${sc.material} glows as drawn`,
-					`MATERIALS = ${sc.material}`,
+					`DESCRIPTION = ${material} glows as drawn`,
+					`MATERIALS = ${material}`,
 					`Resolution = ${d(w)}, ${d(h)}`,
 					`@ = CustomEmissive_Rect, Channel = 0, Start = "${d(x)}, ${d(y)}", Size = "${d(aw)}, ${d(ah)}", CornerRadius = 0.0`,
 				].join("\n"),
@@ -293,7 +332,7 @@ export async function acLightsText(
 	/** the editor's scripts (models/scripts): each screen's, ac/screens/<shows>.lua */
 	scripts: string,
 ): Promise<string> {
-	let base = lines(await files.read(`${project}/source/track/extension/ext_config.ini`)).replace(/\n+$/, "");
+	let base = trimEnd(lines(await files.read(`${project}/source/track/extension/ext_config.ini`)), "\n");
 	const lib = ((await readJson(files, `${project}/source/materials.json`)).materials as J | undefined) ?? {};
 	// (grass on the meshes the models say it grows on; kept off the materials that cover it: the library's covers_grass, in its order; each after what AC's own
 	// settings name already)

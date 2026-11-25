@@ -107,6 +107,10 @@ export const EDIT_LABELS: Record<TerrainEdit["type"], string> = {
 
 const clone = <T>(v: T): T => structuredClone(v);
 
+/** A raster's metres at (x, z) as they were when the ground was last worked out (was: its values then); 0 where it had none, or had another size. */
+const rasterWasAt = (r: Raster, was: Float32Array | undefined, x: number, z: number): number =>
+	was?.length === r.v.length ? rasterAt({ ...r, v: was }, x, z) : 0;
+
 export interface TerrainOptions {
 	/** ms a change waits for the next before the engine is asked */
 	delay?: number;
@@ -543,7 +547,7 @@ export function createTerrain(api: TerrainApi, options: TerrainOptions = {}) {
 		const was = based[file];
 		const y = sample(base, x, z);
 		if (Number.isNaN(y)) return 0;
-		return r ? y + rasterAt(r, x, z) - (was && was.length === r.v.length ? rasterAt({ ...r, v: was }, x, z) : 0) : y;
+		return r ? y + rasterAt(r, x, z) - rasterWasAt(r, was, x, z) : y;
 	}
 
 	/** The grids shown made again where the raster changed (cells: the raster's), the ground's base kept. */
@@ -555,11 +559,11 @@ export function createTerrain(api: TerrainApi, options: TerrainOptions = {}) {
 		const z0 = r.z0 + cells.j0 * r.cell - pad;
 		const z1 = r.z0 + cells.j1 * r.cell + pad;
 		const was = based[file];
-		const before = (x: number, z: number) => (was && was.length === r.v.length ? rasterAt({ ...r, v: was }, x, z) : 0);
+		const before = (x: number, z: number) => rasterWasAt(r, was, x, z);
 		for (const name of ["ground", "change"] as const) {
 			const G = grids[name];
 			const base = name === "ground" ? groundBase : changeBase;
-			if (!G || !base || base.length !== G.v.length) continue;
+			if (!G || base?.length !== G.v.length) continue;
 			const i0 = Math.max(0, Math.floor((x0 - G.x0) / G.cell));
 			const i1 = Math.min(G.nx - 1, Math.ceil((x1 - G.x0) / G.cell));
 			const j0 = Math.max(0, Math.floor((z0 - G.z0) / G.cell));

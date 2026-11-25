@@ -23,7 +23,7 @@ export function boardText(name: string, text?: string | null): string {
 	return name
 		.replace(/^BOARD_?/i, "")
 		.replace(/_\d+$/, "")
-		.replace(/_/g, " ")
+		.replaceAll("_", " ")
 		.trim();
 }
 
@@ -106,7 +106,7 @@ export const canvasCards: CardPainter = async (sheet) => {
 		g.lineWidth = CARD * 0.03;
 		g.strokeRect(x + CARD * 0.05, y + CARD * 0.06, CARD * 0.9, CARD * 0.88);
 		if (!text) return;
-		const lines = text.split(/\n|\|/).map((l) => l.trim());
+		const lines = text.split(/[\n|]/).map((l) => l.trim());
 		const size = fitSize(lines, (l, s) => {
 			g.font = FONT(s);
 			return g.measureText(l).width;

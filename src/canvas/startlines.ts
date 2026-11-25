@@ -26,7 +26,7 @@ export function startLinesOf(o: TrackObjects, roads: readonly Road[]): StartLine
 	// (as the last ones where neither the roads near a start nor a layout's start changed: a road dragged far off)
 	const near = nearStarts(o, roads);
 	const starts = JSON.stringify(Object.entries(o.layouts).map(([k, l]) => [k, l.start_line ?? null, l.grid?.[0] ?? null, gateOf(l) ?? null]));
-	if (last && last.starts === starts && last.near.length === near.length && last.near.every((r, i) => r === near[i])) {
+	if (last?.starts === starts && last.near.length === near.length && last.near.every((r, i) => r === near[i])) {
 		byRoads.set(roads, last.lines);
 		return last.lines;
 	}
@@ -85,21 +85,27 @@ function nearStarts(o: TrackObjects, roads: readonly Road[]): Road[] {
 	});
 	const near = new Set<string>();
 	for (const r of roads) {
-		let x0 = Infinity;
-		let x1 = -Infinity;
-		let z0 = Infinity;
-		let z1 = -Infinity;
-		for (const n of r.curve ?? [])
-			for (const q of [n.p, [n.p[0] + n.in[0], n.p[1] + n.in[1]], [n.p[0] + n.out[0], n.p[1] + n.out[1]]]) {
-				x0 = Math.min(x0, q[0] as number);
-				x1 = Math.max(x1, q[0] as number);
-				z0 = Math.min(z0, q[1] as number);
-				z1 = Math.max(z1, q[1] as number);
-			}
+		const [x0, x1, z0, z1] = nodesBox(r);
 		if (firsts.some((g) => g.x > x0 - NEAR && g.x < x1 + NEAR && g.z > z0 - NEAR && g.z < z1 + NEAR)) near.add(r.name);
 	}
 	for (const r of roads) if (near.has(r.name)) for (const j of r.joins ?? []) if (j) near.add(j);
 	return roads.filter((r) => near.has(r.name) || (r.along && near.has(r.along.road)));
+}
+
+/** A road's nodes' box with their handles: x from, x to, z from, z to. */
+function nodesBox(r: Road): [number, number, number, number] {
+	let x0 = Infinity;
+	let x1 = -Infinity;
+	let z0 = Infinity;
+	let z1 = -Infinity;
+	for (const n of r.curve ?? [])
+		for (const q of [n.p, [n.p[0] + n.in[0], n.p[1] + n.in[1]], [n.p[0] + n.out[0], n.p[1] + n.out[1]]]) {
+			x0 = Math.min(x0, q[0] as number);
+			x1 = Math.max(x1, q[0] as number);
+			z0 = Math.min(z0, q[1] as number);
+			z1 = Math.max(z1, q[1] as number);
+		}
+	return [x0, x1, z0, z1];
 }
 
 /** pixels a metre the start lines' names are written from (nearer in: legible, not in the way) */

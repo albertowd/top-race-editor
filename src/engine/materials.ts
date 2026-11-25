@@ -24,7 +24,12 @@ const SURFACES: [string, string][] = [
 	["1SAND", "sand"],
 ];
 
-const num = (v: unknown, d: number) => (typeof v === "number" ? v : v === undefined || v === null ? d : Number(v));
+/** A flag's value as a number: d where it has none. */
+function num(v: unknown, d: number): number {
+	if (typeof v === "number") return v;
+	if (v === undefined || v === null) return d;
+	return Number(v);
+}
 
 /** A mesh as kept: its own name (AC's prefix out), its role and what else every game reads of it, and what only AC's round trip needs (materials.py's
  * node_out). */
@@ -34,7 +39,7 @@ export function nodeOut(surfaces: Surfaces, name: string, given: Kx): [string, K
 	const m = AC_NAME.exec(name);
 	const ac = (v: { targets?: { ac?: string } } | undefined) => v?.targets?.ac;
 	let own = name;
-	if (m && m[1] === "1" && (m[2] === "WALL" || Object.values(surfaces).some((v) => ac(v) === m[2]))) {
+	if (m?.[1] === "1" && (m[2] === "WALL" || Object.values(surfaces).some((v) => ac(v) === m[2]))) {
 		own = m[3] as string;
 		if (m[2] === "WALL") track.role = "wall";
 		else {
@@ -66,8 +71,9 @@ export function nodeIn(surfaces: Surfaces, name: string, track: Kx, given: Kx): 
 	let out = name;
 	if (track.role === "wall") out = `1WALL_${name}`;
 	else if (track.role === "surface") {
-		const ac = surfaces[String(track.surface)]?.targets?.ac;
-		if (!ac) throw new Error(`${name}: its ground ${String(track.surface)} has no name of AC's in surfaces.json`);
+		const surface = String(track.surface as string);
+		const ac = surfaces[surface]?.targets?.ac;
+		if (!ac) throw new Error(`${name}: its ground ${surface} has no name of AC's in surfaces.json`);
 		out = `1${ac}_${name}`;
 	}
 	const draw = (Array.isArray(track.draw) ? track.draw : [0, 0]) as (number | null)[];

@@ -138,7 +138,7 @@ const PIT_RADIUS = 5;
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array) => new TextDecoder().decode(b);
 const fileName = (t: string) => t.replace(/[^A-Za-z0-9_.-]/g, "_");
-const ident = (t: string) => t.replace(/[^A-Za-z0-9_]/g, "_");
+const ident = (t: string) => t.replace(/\W/g, "_");
 
 /** The track's y up to BeamNG's z up: x stays, -z is north, y is up (the layouts' maps' axes). */
 export const toBeamng: (x: number, y: number, z: number) => V3 = mapPoint;
@@ -237,20 +237,344 @@ class Ground {
 	}
 }
 
+/** A library's material (source/materials.json). */
+type LibMaterial = { colour?: string; normal?: string; roughness?: string; alpha?: string; surface?: string; covers_grass?: boolean };
+
+/** The track file's part the level reads (tools/reference/track.json). */
+type TrackDoc = {
+	name?: string;
+	models?: string;
+	layouts?: Record<string, { models?: string[] }>;
+	/** the level's own data: the paths off the laps its map draws ({name: {points: [x, z], radius}}), each pit lane's half width by layout, the layouts one can
+	 * spawn at */
+	beamng?: { side_paths?: NonNullable<BeamngOptions["sidePaths"]>; pit_radius?: Record<string, number>; spawns?: string[] };
+};
+
+/** A mesh's points, normals, uvs and faces (meshArrays'). */
+type MeshArrays = Omit<DaeMesh, "name" | "material">;
+
+/** A tree of the forest: its model, where it stands (the track's x, y, z), its turn and its scale. */
+type ForestTree = [string, number, number, number, number, number];
+
+/** A shape as the level's object (TSStatic). */
+interface LevelStatic {
+	/** the model it is of */
+	stem: string;
+	name: string;
+	shapeName: string;
+	collisionType: string;
+	/** what decals are laid on (by default its collision, if it has one) */
+	decalType?: string;
+	position?: V3;
+	extra?: Record<string, unknown>;
+}
+
+/** A layout's start: its spawn's name, its title, where it is and the way it faces. */
+interface LevelStart {
+	name: string;
+	title: string;
+	at: V3;
+	fwd: V3;
+}
+
+/** A layout's race: its time trial and, from its grid, its AI race. */
+interface LevelRace {
+	layout: string;
+	title: string;
+	description: string;
+	author: string;
+	path: RacePath;
+	length: number;
+	trigger: [V3, V3];
+	cones: V3[];
+	boards: Board[];
+	grid: [V3, V3][];
+}
+
+/** A layout's racing line as one of the level's roads, with its sides where it has them. */
+type LevelRoad = { line: V3[]; sides: [number, number][] | null };
+
+/** A start's map's frame: its lowest x y and its highest. */
+type Frame = [[number, number], [number, number]];
+
+/** A path with no trailing slashes. */
+function trimSlashes(p: string): string {
+	let end = p.length;
+	while (end > 0 && (p[end - 1] === "/" || p[end - 1] === "\\")) end--;
+	return p.slice(0, end);
+}
+
+/** A material's name in the level: an editor's model's own by its picture, else the library's of its name; its ground's and a hidden one each of their own. */
+function materialKey(name: string | null, kind: string | null, hidden: boolean, own?: OwnMaterial): string {
+	const base = own ? `tsvp_own_${name ?? "none"}_${own.colour?.name ?? ""}` : `tsvp_${name ?? "none"}`;
+	return ident(base) + (kind ? `_${kind}` : "") + (hidden ? "_hidden" : "");
+}
+
+/** A material drawn (in place) as what it is: the paint cut out, the library's cut out or blended as its alpha says, the hidden blended, the rubber blended
+ * over the floor. */
+function drawnAs(mat: Record<string, unknown>, e: LibMaterial, hidden: boolean, paint: boolean, rubber: boolean): void {
+	if (paint) {
+		// (cut out where it is thinner than half, as BeamNG's own painted lines: drawn with the floor, not sorted with the rubber over it, which drawn blended
+		// would be over it one frame and under it the next)
+		Object.assign(mat, { alphaTest: true, alphaRef: PAINT_ALPHA_REF, castShadows: false });
+	} else {
+		if (e.alpha === "mask") Object.assign(mat, { alphaTest: true, alphaRef: 100 });
+		if (e.alpha === "blend" || hidden) mat.translucent = true;
+	}
+	// (the rubber blended over the paint and the floor, casting no shadow on what is millimetres under it, writing no depth: its marks over one another, at one
+	// height, of one colour, the same drawn either way round; in the shadows that fall on the floor as it is, as BeamNG's own marks on a road: else lit by the
+	// sun under a car's shadow)
+	if (rubber) Object.assign(mat, { castShadows: false, translucentZWrite: false, translucentRecvShadows: true });
+}
+
+/** How an editor's model's own picture is used: as it is, what shows through it, or its colour over the asphalt. */
+type OwnAs = "colour" | "opacity" | "over";
+
+/** An editor's model's own picture's name as the level's texture: as it is, what shows through it, or its colour over the asphalt. */
+function ownPictureName(name: string, as: OwnAs): string {
+	const stem = name.replace(/\.[^.]*$/, "");
+	if (as === "opacity") return `${stem}_opacity.png`;
+	if (as === "over") return `${stem}_over.png`;
+	return name;
+}
+
+/** An editor's model's own picture made the level's texture: as it is, what shows through it, or its colour over the asphalt. */
+async function ownPicture(data: Uint8Array, as: OwnAs): Promise<Uint8Array> {
+	if (as === "opacity") return await opacityPng(data);
+	if (as === "over") return await overGreyPng(data, ASPHALT_GREY);
+	return data;
+}
+
+/** A mesh's faces as triangles, x y z each corner. */
+function triangles(arrays: MeshArrays): Float64Array {
+	const T = new Float64Array(arrays.F.length * 3);
+	for (let k = 0; k < arrays.F.length; k++) T.set((arrays.P as Float64Array).subarray((arrays.F[k] as number) * 3, (arrays.F[k] as number) * 3 + 3), k * 3);
+	return T;
+}
+
+/** The meshes drawn only far, each with the near mesh it takes over from (the distance it does, the near, the far), and the meshes paired so. */
+function lodSwaps(seen: [TrackMesh, DaeMesh][]): { swaps: [number, DaeMesh, DaeMesh][]; used: Set<DaeMesh> } {
+	const swaps: [number, DaeMesh, DaeMesh][] = [];
+	const used = new Set<DaeMesh>();
+	for (const [far, fm] of seen) {
+		if (far.draw[0] <= 0) continue;
+		const fc = bounds(fm.P).mid;
+		const near = seen.find(
+			([m, x]) =>
+				m.draw[0] <= 0 &&
+				m.draw[1] === far.draw[0] &&
+				m.material === far.material &&
+				!used.has(x) &&
+				Math.hypot(...(bounds(x.P).mid.map((v, i) => v - (fc[i] as number)) as V3)) < 0.5,
+		);
+		if (near) {
+			swaps.push([far.draw[0], near[1], fm]);
+			used.add(near[1]);
+			used.add(fm);
+		}
+	}
+	return { swaps, used };
+}
+
+/** The middle of a near mesh and its far one together, and how far from it they reach. */
+function lodBounds(near: DaeMesh, far: DaeMesh): { mid: V3; radius: number } {
+	const all = new Float64Array(near.P.length + far.P.length);
+	all.set(Array.from(near.P), 0);
+	all.set(Array.from(far.P), near.P.length);
+	const { mid } = bounds(all);
+	let radius = 0;
+	for (let i = 0; i < all.length; i += 3)
+		radius = Math.max(radius, Math.hypot((all[i] as number) - mid[0], (all[i + 1] as number) - mid[1], (all[i + 2] as number) - mid[2]));
+	return { mid, radius };
+}
+
+/** The layouts' racing lines' points (the track's x, z), where the grass grows along. */
+function grassLine(ais: Iterable<Uint8Array>): [number, number][] {
+	const line: [number, number][] = [];
+	for (const b of ais) {
+		const ai = readAiFile(b);
+		for (let i = 0; i < ai.points.length; i += 3) line.push([ai.points[i] as number, ai.points[i + 2] as number]);
+	}
+	return line;
+}
+
+/** The grass's material: its blades' picture, cut out, both sides drawn, casting no shadow. */
+function grassMaterial(LEVEL: string): Record<string, unknown> {
+	return {
+		name: "velopark_grass",
+		mapTo: "velopark_grass",
+		class: "Material",
+		persistentId: uuid5(`${LEVEL}/grass`),
+		version: 1.5,
+		Stages: [
+			{
+				roughnessFactor: 1,
+				metallicFactor: 0,
+				baseColorMap: `/levels/${LEVEL}/art/shapes/textures/grass/blades.png`,
+				opacityMap: `/levels/${LEVEL}/art/shapes/textures/grass/blades_opacity.png`,
+			},
+			{},
+			{},
+			{},
+		],
+		alphaTest: true,
+		alphaRef: 90,
+		doubleSided: true,
+		castShadows: false,
+	};
+}
+
+/** A template part's points, normals and uvs in BeamNG's axes (11 numbers a corner). */
+function templateArrays(V: Float64Array): { P: Float64Array; N: Float64Array; U: Float64Array } {
+	const nv = V.length / 11;
+	const P = new Float64Array(nv * 3);
+	const N = new Float64Array(nv * 3);
+	const U = new Float64Array(nv * 2);
+	for (let k = 0; k < nv; k++) {
+		P.set(toBeamng(V[k * 11] as number, V[k * 11 + 1] as number, V[k * 11 + 2] as number), k * 3);
+		N.set(toBeamng(V[k * 11 + 3] as number, V[k * 11 + 4] as number, V[k * 11 + 5] as number), k * 3);
+		U[k * 2] = V[k * 11 + 6] as number;
+		U[k * 2 + 1] = 1 - (V[k * 11 + 7] as number);
+	}
+	return { P, N, U };
+}
+
+/** How far a tree's trunk reaches out from its foot (11 numbers a corner). */
+function trunkRadius(V: Float64Array): number {
+	let r = 0;
+	for (let k = 0; k < V.length / 11; k++) r = Math.max(r, Math.hypot(V[k * 11] as number, V[k * 11 + 2] as number));
+	return r;
+}
+
+/** The trees' placings by their model (those of the forest's items), a line of its forest4.json each. */
+function forestPlacings(trees: ForestTree[], items: Record<string, unknown>): Map<string, string[]> {
+	const lines = new Map<string, string[]>();
+	for (const [name, x, y, z, yaw, scale] of trees) {
+		if (!(name in items)) continue;
+		// (its turn about the track's up made BeamNG's about its up; the rotationMatrix lists the axes x, y, z in turn)
+		const c = Math.cos(yaw);
+		const s = Math.sin(yaw);
+		const pos = toBeamng(x, y, z);
+		pos[2] += LIFT;
+		const rot = [c, -s, 0, s, c, 0, 0, 0, 1];
+		const l = lines.get(name) ?? [];
+		l.push(JSON.stringify({ ctxid: 0, pos, rotationMatrix: rot, scale, type: name }));
+		lines.set(name, l);
+	}
+	return lines;
+}
+
+/** The middle of the forest's trees, in BeamNG's axes. */
+function forestMiddle(trees: ForestTree[]): V3 {
+	const mx = trees.reduce((a, t) => a + t[1], 0) / trees.length;
+	const my = trees.reduce((a, t) => a + t[2], 0) / trees.length;
+	const mz = trees.reduce((a, t) => a + t[3], 0) / trees.length;
+	return toBeamng(mx, my, mz);
+}
+
+/** A model's shape as the level's object: in the level (its MissionGroup), or in a race's prefab (tag: whose). */
+function staticItem(st: LevelStatic, tag: string, parent: string) {
+	const p = st.position ?? [0, 0, 0];
+	return {
+		class: "TSStatic",
+		name: st.name,
+		persistentId: uuid5(`${tag}/object/${st.name}`),
+		__parent: parent,
+		shapeName: st.shapeName,
+		collisionType: st.collisionType,
+		position: [p[0], p[1], p[2] + LIFT],
+		decalType: st.decalType ?? (st.collisionType !== "None" ? "Collision Mesh" : "None"),
+		...st.extra,
+	};
+}
+
+/** The ground's triangles all in one. */
+function joined(ground: Float64Array[]): Float64Array {
+	const all = new Float64Array(ground.reduce((a, t) => a + t.length, 0));
+	let at = 0;
+	for (const t of ground) {
+		all.set(t, at);
+		at += t.length;
+	}
+	return all;
+}
+
+/** A spot of the places in BeamNG's axes. */
+const spotAt = (s: { x: number; y: number; z: number }): V3 => toBeamng(s.x, s.y, s.z);
+
+/** A layout's time gates in turn, their left and right spots in BeamNG's axes: as many as it has both of. */
+function timeGates(found: Map<string, Spot>): [V3, V3][] {
+	const gates: [V3, V3][] = [];
+	while (found.has(`TIME_${gates.length}_L`) && found.has(`TIME_${gates.length}_R`))
+		gates.push([spotAt(found.get(`TIME_${gates.length}_L`) as Spot), spotAt(found.get(`TIME_${gates.length}_R`) as Spot)]);
+	return gates;
+}
+
+/** The layouts one can spawn at (those listed, else every one's), each start's of them: a listed layout the track has none of, or none to spawn at, an error. */
+function spawnStarts(listed: string[] | undefined, lists: Record<string, string[]>, starts: LevelStart[]): LevelStart[] {
+	const unknown = (listed ?? []).filter((l) => !(l in lists));
+	if (unknown.length) throw new Error(`beamng.spawns lists ${unknown.join(", ")}, which the track has no layout of`);
+	const spawns = listed ? starts.filter((s) => listed.includes(s.name.slice("spawn_".length))) : starts;
+	if (!spawns.length) throw new Error("the level has no layout to spawn at (none with a start)");
+	return spawns;
+}
+
+/** A start's map's frame (where the track cannot be rendered): round the layouts' racing lines and a little more, not every road the site has: those far off
+ * cut; with no lines, round the roads. */
+function mapFrame(roads: Record<string, LevelRoad>, rm: Float32Array): Frame {
+	const frame: Frame = [
+		[Infinity, Infinity],
+		[-Infinity, -Infinity],
+	];
+	const lapPoints = Object.values(roads).flatMap((r) => r.line.flatMap((p) => [p[0], p[1]]));
+	const framed = lapPoints.length ? lapPoints : Array.from(rm);
+	for (let i = 0; i + 1 < framed.length; i += 2) {
+		frame[0][0] = Math.min(frame[0][0], framed[i] as number);
+		frame[0][1] = Math.min(frame[0][1], framed[i + 1] as number);
+		frame[1][0] = Math.max(frame[1][0], framed[i] as number);
+		frame[1][1] = Math.max(frame[1][1], framed[i + 1] as number);
+	}
+	const more = 0.08 * Math.max(frame[1][0] - frame[0][0], frame[1][1] - frame[0][1]);
+	if (lapPoints.length) {
+		frame[0][0] -= more;
+		frame[0][1] -= more;
+		frame[1][0] += more;
+		frame[1][1] += more;
+	}
+	return frame;
+}
+
+/** A start's layout (its spawn's name: spawn_<layout>). */
+const layOf = (s: { name: string }) => s.name.slice("spawn_".length);
+
+/** A path's points (the track's x, z) a metre or less apart. */
+function densePoints(points: [number, number][]): [number, number][] {
+	const dense: [number, number][] = [points[0] as [number, number]];
+	for (let i = 0; i + 1 < points.length; i++) {
+		const p = points[i] as [number, number];
+		const q = points[i + 1] as [number, number];
+		const n = Math.max(1, Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1])));
+		for (let k = 1; k <= n; k++) dense.push([p[0] + ((q[0] - p[0]) * k) / n, p[1] + ((q[1] - p[1]) * k) / n]);
+	}
+	return dense;
+}
+
+/** Two lanes alike to a few centimetres (those of layouts sharing pits). */
+const sameLane = (a: V3[], b: V3[]) =>
+	a.length === b.length && a.every((q, i) => Math.max(...q.map((v, j) => Math.abs(v - ((b[i] as V3)[j] as number)))) < 0.5);
+
+/** Every file under each of the folders removed. */
+async function clearFolders(files: HostFiles, tops: string[]): Promise<void> {
+	for (const top of tops) for (const f of await filesUnder(files, top).catch(() => [] as string[])) await files.remove?.(`${top}/${f}`);
+}
+
 /** The level made (see the module's note). */
 export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngOptions): Promise<BeamngBuilt> {
 	const log = o.log ?? (() => {});
-	const project = o.project.replace(/[\\/]+$/, "");
+	const project = trimSlashes(o.project);
 	const readJson = async <T>(p: string): Promise<T> => JSON.parse(dec(await files.read(p))) as T;
 	const exists = (p: string) => files.exists(p);
-	const track = await readJson<{
-		name?: string;
-		models?: string;
-		layouts?: Record<string, { models?: string[] }>;
-		/** the level's own data: the paths off the laps its map draws ({name: {points: [x, z], radius}}), each pit lane's half width by layout, the layouts one can
-		 * spawn at */
-		beamng?: { side_paths?: BeamngOptions["sidePaths"]; pit_radius?: Record<string, number>; spawns?: string[] };
-	}>(`${project}/tools/reference/track.json`);
+	const track = await readJson<TrackDoc>(`${project}/tools/reference/track.json`);
 	const trackName = track.name ?? "track";
 	// (named as the AC track's folder is: its archive beside AC's, <level>_beamng.zip)
 	const LEVEL = acFolder(trackName);
@@ -260,7 +584,7 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	const models = `${project}/${track.models || "track/models"}`;
 	const ui = `${project}/source/track/ui`;
 	const libDoc = await readJson<{
-		materials: Record<string, { colour?: string; normal?: string; roughness?: string; alpha?: string; surface?: string; covers_grass?: boolean }>;
+		materials: Record<string, LibMaterial>;
 		textures?: Record<string, TextureAc>;
 	}>(`${project}/source/materials.json`);
 	const lib = libDoc.materials;
@@ -281,8 +605,11 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	};
 	// (what was written last time: each model's shapes and each texture by what they were made from)
 	const stateFile = `${out}/models.editor.json`;
-	let state: Record<string, unknown> = (await exists(stateFile)) ? await readJson(stateFile) : {};
-	if (state.format !== FORMAT) state = { format: FORMAT };
+	const stateBefore = async (): Promise<Record<string, unknown>> => {
+		const before: Record<string, unknown> = (await exists(stateFile)) ? await readJson(stateFile) : {};
+		return before.format === FORMAT ? before : { format: FORMAT };
+	};
+	const state = await stateBefore();
 	delete state.layout;
 	state.textures ??= {};
 	const texState = state.textures as Record<string, string>;
@@ -339,15 +666,13 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 
 	/** An editor's model's own picture (inside its model) as it is, what shows through it, or its colour as it shows over the asphalt (the paint's, drawn cut
 	 * out); written once a picture. */
-	const ownTexture = async (pic: { name: string; data: Uint8Array }, as: "colour" | "opacity" | "over" = "colour") => {
+	const ownTexture = async (pic: { name: string; data: Uint8Array }, as: OwnAs = "colour") => {
 		const hash = await digestOf([pic.data]);
-		const stemOf = pic.name.replace(/\.[^.]*$/, "");
-		const f = fileName(`own_${hash.slice(0, 8)}_${as === "opacity" ? `${stemOf}_opacity.png` : as === "over" ? `${stemOf}_over.png` : pic.name}`);
+		const f = fileName(`own_${hash.slice(0, 8)}_${ownPictureName(pic.name, as)}`);
 		const outPath = `${texDir}/${f}`;
 		const key = `own ${as}:${hash}`;
 		if (texState[f] !== key || !(await exists(outPath))) {
-			const made = as === "opacity" ? await opacityPng(pic.data) : as === "over" ? await overGreyPng(pic.data, ASPHALT_GREY) : pic.data;
-			await files.write(outPath, made);
+			await files.write(outPath, await ownPicture(pic.data, as));
 			texState[f] = key;
 		}
 		written.add(outPath);
@@ -356,11 +681,35 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 
 	// ---- materials
 	const materials: Record<string, unknown> = {};
+	/** A material's first stage (in place) of an editor's model's own picture: the paint's over the asphalt, the rubber's as rough as the road under it. */
+	const ownStage = async (stage: Record<string, unknown>, own: OwnMaterial, paint: boolean, rubber: boolean) => {
+		// (the rubber's pages as rough as the road under them: only its colour darkened, its sheen as it is)
+		stage.roughnessFactor = rubber ? RUBBER_ROUGHNESS : 1;
+		stage.metallicFactor = 0;
+		if (own.colour) {
+			stage.baseColorMap = await ownTexture(own.colour, paint ? "over" : "colour");
+			if (own.alpha !== "opaque" && own.colour.name.toLowerCase().endsWith(".png")) stage.opacityMap = await ownTexture(own.colour, "opacity");
+		}
+	};
+	/** A material's first stage (in place) of the library's: its colour, what shows through it, its normals and roughness. */
+	const libStage = async (stage: Record<string, unknown>, e: LibMaterial, stem: string) => {
+		// (rough and not metal unless its maps say: BeamNG's default shines like glass)
+		stage.roughnessFactor = 1;
+		stage.metallicFactor = 0;
+		if (e.colour) {
+			stage.baseColorMap = await colourTexture(e.colour, stem);
+			// (BeamNG takes what shows through from its own map, not the colour's alpha)
+			if (e.alpha === "mask" || e.alpha === "blend") stage.opacityMap = await opacityTexture(e.colour, stem);
+		}
+		if (e.normal) stage.normalMap = await pngTexture(e.normal, stem);
+		if (e.roughness) stage.roughnessMap = await pngTexture(e.roughness, stem);
+	};
 	const material = async (name: string | null, kind: string | null, hidden: boolean, stem: string, own?: OwnMaterial): Promise<string> => {
 		// (an editor's model's own: its picture and alpha, never the library's of its name)
-		const e: (typeof lib)[string] = own ? { alpha: own.alpha } : ((name ? lib[name] : undefined) ?? {});
-		const key =
-			ident(own ? `tsvp_own_${name ?? "none"}_${own.colour?.name ?? ""}` : `tsvp_${name ?? "none"}`) + (kind ? `_${kind}` : "") + (hidden ? "_hidden" : "");
+		let e: LibMaterial = {};
+		if (own) e = { alpha: own.alpha };
+		else if (name) e = lib[name] ?? {};
+		const key = materialKey(name, kind, hidden, own);
 		if (key in materials) return key;
 		const stage: Record<string, unknown> = {};
 		// (what lies on the floor, a few millimetres over it: the paint and the rubber, drawn as BeamNG's own road marks are)
@@ -369,26 +718,8 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		if (hidden) {
 			stage.baseColorFactor = [1, 1, 1, 0];
 			stage.opacityFactor = 0;
-		} else if (own) {
-			// (the rubber's pages as rough as the road under them: only its colour darkened, its sheen as it is)
-			stage.roughnessFactor = rubber ? RUBBER_ROUGHNESS : 1;
-			stage.metallicFactor = 0;
-			if (own.colour) {
-				stage.baseColorMap = await ownTexture(own.colour, paint ? "over" : "colour");
-				if (own.alpha !== "opaque" && own.colour.name.toLowerCase().endsWith(".png")) stage.opacityMap = await ownTexture(own.colour, "opacity");
-			}
-		} else {
-			// (rough and not metal unless its maps say: BeamNG's default shines like glass)
-			stage.roughnessFactor = 1;
-			stage.metallicFactor = 0;
-			if (e.colour) {
-				stage.baseColorMap = await colourTexture(e.colour, stem);
-				// (BeamNG takes what shows through from its own map, not the colour's alpha)
-				if (e.alpha === "mask" || e.alpha === "blend") stage.opacityMap = await opacityTexture(e.colour, stem);
-			}
-			if (e.normal) stage.normalMap = await pngTexture(e.normal, stem);
-			if (e.roughness) stage.roughnessMap = await pngTexture(e.roughness, stem);
-		}
+		} else if (own) await ownStage(stage, own, paint, rubber);
+		else await libStage(stage, e, stem);
 		const mat: Record<string, unknown> = {
 			name: key,
 			mapTo: key,
@@ -397,18 +728,7 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 			version: 1.5,
 			Stages: [stage, {}, {}, {}],
 		};
-		if (paint) {
-			// (cut out where it is thinner than half, as BeamNG's own painted lines: drawn with the floor, not sorted with the rubber over it, which drawn blended
-			// would be over it one frame and under it the next)
-			Object.assign(mat, { alphaTest: true, alphaRef: PAINT_ALPHA_REF, castShadows: false });
-		} else {
-			if (e.alpha === "mask") Object.assign(mat, { alphaTest: true, alphaRef: 100 });
-			if (e.alpha === "blend" || hidden) mat.translucent = true;
-		}
-		// (the rubber blended over the paint and the floor, casting no shadow on what is millimetres under it, writing no depth: its marks over one another, at one
-		// height, of one colour, the same drawn either way round; in the shadows that fall on the floor as it is, as BeamNG's own marks on a road: else lit by the
-		// sun under a car's shadow)
-		if (rubber) Object.assign(mat, { castShadows: false, translucentZWrite: false, translucentRecvShadows: true });
+		drawnAs(mat, e, hidden, paint, rubber);
 		// (a mesh's material names its ground in groundType, or BeamNG drives it as asphalt)
 		if (kind) mat.groundType = groundType(kind);
 		materials[key] = mat;
@@ -417,9 +737,10 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	/** A start lamp's glow through its own glass (its model's own picture, else its library material's); none: the plain lamp's. */
 	const lampOf = async (m: TrackMesh, stem: string): Promise<string> => {
 		const pic = m.own?.colour;
-		const colour = m.own ? undefined : m.material ? lib[m.material]?.colour : undefined;
+		const colour = !m.own && m.material ? lib[m.material]?.colour : undefined;
 		if (!m.material || (!pic && !colour)) return "velopark_lamp";
-		const key = ident(`velopark_lamp_${m.material}${pic ? `_own_${pic.name}` : ""}`);
+		const ownPart = pic ? `_own_${pic.name}` : "";
+		const key = ident(`velopark_lamp_${m.material}${ownPart}`);
 		if (!(key in materials)) {
 			const white = `/levels/${LEVEL}/art/shapes/${SHAPES}/white.png`;
 			const map = pic ? await ownTexture(pic) : await colourTexture(colour as string, stem);
@@ -431,17 +752,7 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	// ---- the shapes of each model the layout loads
 	const libBytes = await files.read(`${project}/source/materials.json`);
 	const surfBytes = (await exists(`${project}/source/surfaces.json`)) ? await files.read(`${project}/source/surfaces.json`) : new Uint8Array(0);
-	const statics: {
-		/** the model it is of */
-		stem: string;
-		name: string;
-		shapeName: string;
-		collisionType: string;
-		/** what decals are laid on (by default its collision, if it has one) */
-		decalType?: string;
-		position?: V3;
-		extra?: Record<string, unknown>;
-	}[] = [];
+	const statics: LevelStatic[] = [];
 	const ground: Float64Array[] = [];
 	const roadMap: number[] = [];
 	const meshesOf = new Map<string, TrackMesh[]>();
@@ -449,96 +760,71 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	const lamps = new Map<string, string[]>();
 	const gantries: ReturnType<typeof gantry>[] = [];
 	const forestModel = stems.find((s) => s.endsWith("_trees"));
-	const forestFile = forestModel ? `${models}/${forestModel}.json` : null;
-	const forestData =
-		forestFile && (await exists(forestFile)) ? (await readJson<{ trees: [string, number, number, number, number, number][] }>(forestFile)).trees : null;
+	const forestTrees = async (): Promise<ForestTree[] | null> => {
+		const forestFile = forestModel ? `${models}/${forestModel}.json` : null;
+		return forestFile && (await exists(forestFile)) ? (await readJson<{ trees: ForestTree[] }>(forestFile)).trees : null;
+	};
+	const forestData = await forestTrees();
 	const shapeName = (f: string) => `/levels/${LEVEL}/art/shapes/${f}`;
 	const madeBefore = await filesUnder(files, shapes).catch(() => [] as string[]);
-	for (const stem of stems) {
-		const glb = `${models}/${stem}.glb`;
-		if (!(await exists(glb))) continue;
-		const raw = await files.read(glb);
-		const h = await digestOf([raw, libBytes, surfBytes]);
-		const fresh = state[stem] !== h;
-		const ms = trackModel(raw);
-		meshesOf.set(stem, ms);
-		hashes.push(h);
-		const parts: Record<"solid" | "seen", DaeMesh[]> = { solid: [], seen: [] };
-		/** what vehicles hit: the solid meshes and the walls, each as near its own as its ground needs */
-		const hits: Solid[] = [];
-		const seen: [TrackMesh, DaeMesh][] = [];
-		// (BeamNG's forest stands every tree of the trees' model)
-		if (!(forestData && stem === forestModel))
-			for (const m of ms) {
-				const arrays = meshArrays(m);
-				if (!arrays) continue;
-				const kind = groundOf(m, lib);
-				if (kind && !m.visible) {
-					const mesh = { name: m.name, material: await material(m.material, kind, true, stem, m.own), ...arrays };
-					hits.push({ mesh, error: ROAD_ERROR });
-				} else if (kind) {
-					const mesh = { name: m.name, material: await material(m.material, kind, false, stem, m.own), ...arrays };
-					parts.solid.push(mesh);
-					hits.push({ mesh, error: ROADS.has(kind) ? ROAD_ERROR : GROUND_ERROR });
-					const T = new Float64Array(arrays.F.length * 3);
-					for (let k = 0; k < arrays.F.length; k++)
-						T.set((arrays.P as Float64Array).subarray((arrays.F[k] as number) * 3, (arrays.F[k] as number) * 3 + 3), k * 3);
-					ground.push(T);
-					if (ROADS.has(kind)) for (let k = 0; k < T.length; k += 3) roadMap.push(T[k] as number, T[k + 1] as number);
-				} else if (!m.visible) continue;
-				else if (LAMPS.test(m.name) || FLAGS.test(m.name)) {
-					// (the gantry's lamps: shapes of their own, which the level's Lua lights)
-					const { mid } = bounds(arrays.P);
-					const f = `${stem}_${m.name}.dae`;
-					const path = `${shapes}/${f}`;
-					const glow = LAMPS.test(m.name) ? await lampOf(m, stem) : "velopark_lamp";
-					if (fresh || !(await exists(path)))
-						await put(
-							path,
-							writeDae([{ name: m.name, material: glow, ...arrays, P: shifted(arrays.P, mid) }], {
-								sizes: [1],
-							}),
-						);
-					else keep(path);
-					statics.push({
-						stem,
-						name: f.slice(0, -4),
-						shapeName: shapeName(f),
-						collisionType: "None",
-						position: mid,
-						extra: { useInstanceRenderData: true, instanceColor: [0, 0, 0, 1] },
-					});
-					lamps.set(stem, [...(lamps.get(stem) ?? []), m.name]);
-				} else seen.push([m, { name: m.name, material: await material(m.material, null, false, stem, m.own), ...arrays }]);
-			}
-		// (the meshes drawn only far, each with the near mesh it takes over from: a shape of their own)
-		const swaps: [number, DaeMesh, DaeMesh][] = [];
-		const used = new Set<DaeMesh>();
-		for (const [far, fm] of seen) {
-			if (far.draw[0] <= 0) continue;
-			const fc = bounds(fm.P).mid;
-			const near = seen.find(
-				([m, x]) =>
-					m.draw[0] <= 0 &&
-					m.draw[1] === far.draw[0] &&
-					m.material === far.material &&
-					!used.has(x) &&
-					Math.hypot(...(bounds(x.P).mid.map((v, i) => v - (fc[i] as number)) as V3)) < 0.5,
-			);
-			if (near) {
-				swaps.push([far.draw[0], near[1], fm]);
-				used.add(near[1]);
-				used.add(fm);
-			}
+	/** A shape written as it is made now (its model changed). */
+	const writeShape = async (path: string, make: () => string) => await put(path, make());
+	/** A shape kept as it is (its model as it was), written where it is gone. */
+	const keepShape = async (path: string, make: () => string) => {
+		if (await exists(path)) keep(path);
+		else await put(path, make());
+	};
+	/** A mesh vehicles drive on or hit: drawn where it is seen, the floor under the starts, a road of the map of each start where its ground is one. */
+	const groundMesh = async (stem: string, m: TrackMesh, kind: string, arrays: MeshArrays, solid: DaeMesh[], hits: Solid[]) => {
+		if (!m.visible) {
+			const mesh = { name: m.name, material: await material(m.material, kind, true, stem, m.own), ...arrays };
+			hits.push({ mesh, error: ROAD_ERROR });
+			return;
 		}
-		// (the far-only ones with no near one left out: they would be drawn over what is near)
-		parts.seen = seen.filter(([m, x]) => m.draw[0] <= 0 && !used.has(x)).map(([, x]) => x);
+		const mesh = { name: m.name, material: await material(m.material, kind, false, stem, m.own), ...arrays };
+		solid.push(mesh);
+		hits.push({ mesh, error: ROADS.has(kind) ? ROAD_ERROR : GROUND_ERROR });
+		const T = triangles(arrays);
+		ground.push(T);
+		if (ROADS.has(kind)) for (let k = 0; k < T.length; k += 3) roadMap.push(T[k] as number, T[k + 1] as number);
+	};
+	/** A gantry's lamp or flag: a shape of its own, which the level's Lua lights. */
+	const lampShape = async (stem: string, m: TrackMesh, arrays: MeshArrays, fresh: boolean) => {
+		// (the gantry's lamps: shapes of their own, which the level's Lua lights)
+		const { mid } = bounds(arrays.P);
+		const f = `${stem}_${m.name}.dae`;
+		const glow = LAMPS.test(m.name) ? await lampOf(m, stem) : "velopark_lamp";
+		await (fresh ? writeShape : keepShape)(`${shapes}/${f}`, () =>
+			writeDae([{ name: m.name, material: glow, ...arrays, P: shifted(arrays.P, mid) }], { sizes: [1] }),
+		);
+		statics.push({
+			stem,
+			name: f.slice(0, -4),
+			shapeName: shapeName(f),
+			collisionType: "None",
+			position: mid,
+			extra: { useInstanceRenderData: true, instanceColor: [0, 0, 0, 1] },
+		});
+		lamps.set(stem, [...(lamps.get(stem) ?? []), m.name]);
+	};
+	/** A model's meshes each made the level's: driven on or hit, a lamp's or a flag's shape, or only seen. */
+	const sortMeshes = async (stem: string, ms: TrackMesh[], fresh: boolean, solid: DaeMesh[], hits: Solid[], seen: [TrackMesh, DaeMesh][]) => {
+		for (const m of ms) {
+			const arrays = meshArrays(m);
+			if (!arrays) continue;
+			const kind = groundOf(m, lib);
+			if (kind) await groundMesh(stem, m, kind, arrays, solid, hits);
+			else if (!m.visible) continue;
+			else if (LAMPS.test(m.name) || FLAGS.test(m.name)) await lampShape(stem, m, arrays, fresh);
+			else seen.push([m, { name: m.name, material: await material(m.material, null, false, stem, m.own), ...arrays }]);
+		}
+	};
+	/** A model's solid meshes and those only seen, a shape each. */
+	const writeParts = async (stem: string, parts: Record<"solid" | "seen", DaeMesh[]>, fresh: boolean) => {
 		for (const [part, list] of Object.entries(parts) as ["solid" | "seen", DaeMesh[]][]) {
 			if (!list.length) continue;
 			const f = `${stem}_${part}.dae`;
-			const path = `${shapes}/${f}`;
-			if (fresh || !(await exists(path))) await put(path, writeDae(list));
-			else keep(path);
+			await (fresh ? writeShape : keepShape)(`${shapes}/${f}`, () => writeDae(list));
 			statics.push({
 				stem,
 				name: `${stem}_${part}`,
@@ -551,98 +837,113 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 				`  ${stem.padEnd(28)} ${part.padEnd(5)} ${String(list.length).padStart(4)} meshes, ${String(list.reduce((a, x) => a + x.F.length / 3, 0)).padStart(7)} triangles${fresh ? "" : ", as before"}`,
 			);
 		}
-		// (what vehicles hit: shapes of their own, drawn not at all, as BeamNG's own invisible collision is)
-		if (hits.length) {
-			const prefix = `${stem}_collision_`;
-			const tileNo = (f: string) => (f.startsWith(prefix) && /^\d+\.dae$/.test(f.slice(prefix.length)) ? Number.parseInt(f.slice(prefix.length), 10) : -1);
-			let names = madeBefore.filter((f) => tileNo(f) >= 0).sort((a, b) => tileNo(a) - tileNo(b));
-			if (fresh || !names.length) {
-				const tiles = collisionTiles(hits);
-				names = tiles.map((_, k) => `${prefix}${k}.dae`);
-				for (const [k, t] of tiles.entries()) await put(`${shapes}/${names[k]}`, writeDae([], { collision: t }));
-				const made = tiles.flat().reduce((a, x) => a + x.F.length / 3, 0);
-				const from = hits.reduce((a, x) => a + x.mesh.F.length / 3, 0);
-				log(`  ${stem.padEnd(28)} hit   ${String(tiles.length).padStart(4)} tiles,  ${String(made).padStart(7)} triangles (of ${from})`);
-			} else for (const f of names) keep(`${shapes}/${f}`);
-			for (const f of names)
-				statics.push({
-					stem,
-					name: f.slice(0, -4),
-					shapeName: shapeName(f),
-					collisionType: "Collision Mesh",
-					decalType: "None",
-					extra: { isRenderEnabled: false },
-				});
-		}
+	};
+	/** What vehicles hit of a model: shapes of their own, drawn not at all, as BeamNG's own invisible collision is; the tiles of last time where it is as it was. */
+	const writeCollision = async (stem: string, hits: Solid[], fresh: boolean) => {
+		const prefix = `${stem}_collision_`;
+		const tileNo = (f: string) => (f.startsWith(prefix) && /^\d+\.dae$/.test(f.slice(prefix.length)) ? Number.parseInt(f.slice(prefix.length), 10) : -1);
+		let names = madeBefore.filter((f) => tileNo(f) >= 0).sort((a, b) => tileNo(a) - tileNo(b));
+		if (fresh || !names.length) {
+			const tiles = collisionTiles(hits);
+			names = tiles.map((_, k) => `${prefix}${k}.dae`);
+			for (const [k, t] of tiles.entries()) await put(`${shapes}/${names[k]}`, writeDae([], { collision: t }));
+			const made = tiles.flat().reduce((a, x) => a + x.F.length / 3, 0);
+			const from = hits.reduce((a, x) => a + x.mesh.F.length / 3, 0);
+			log(`  ${stem.padEnd(28)} hit   ${String(tiles.length).padStart(4)} tiles,  ${String(made).padStart(7)} triangles (of ${from})`);
+		} else for (const f of names) keep(`${shapes}/${f}`);
+		for (const f of names)
+			statics.push({
+				stem,
+				name: f.slice(0, -4),
+				shapeName: shapeName(f),
+				collisionType: "Collision Mesh",
+				decalType: "None",
+				extra: { isRenderEnabled: false },
+			});
+	};
+	/** A model's meshes drawn near and far: a shape each pair, with both as its detail levels. */
+	const writeLods = async (stem: string, swaps: [number, DaeMesh, DaeMesh][], fresh: boolean) => {
 		for (const [dist, near, far] of swaps) {
-			const all = new Float64Array(near.P.length + far.P.length);
-			all.set(Array.from(near.P), 0);
-			all.set(Array.from(far.P), near.P.length);
-			const { mid } = bounds(all);
-			let radius = 0;
-			for (let i = 0; i < all.length; i += 3)
-				radius = Math.max(radius, Math.hypot((all[i] as number) - mid[0], (all[i + 1] as number) - mid[1], (all[i + 2] as number) - mid[2]));
+			const { mid, radius } = lodBounds(near, far);
 			const f = `${stem}_lod_${ident(near.name)}.dae`;
-			const path = `${shapes}/${f}`;
-			if (fresh || !(await exists(path)))
-				await put(
-					path,
-					writeDae(
-						[
-							{ ...near, P: shifted(near.P, mid) },
-							{ ...far, P: shifted(far.P, mid) },
-						],
-						{ sizes: [Math.max(2, Math.round((radius * SCREEN) / (dist + radius))), 1] },
-					),
-				);
-			else keep(path);
+			await (fresh ? writeShape : keepShape)(`${shapes}/${f}`, () =>
+				writeDae(
+					[
+						{ ...near, P: shifted(near.P, mid) },
+						{ ...far, P: shifted(far.P, mid) },
+					],
+					{ sizes: [Math.max(2, Math.round((radius * SCREEN) / (dist + radius))), 1] },
+				),
+			);
 			statics.push({ stem, name: f.slice(0, -4), shapeName: shapeName(f), collisionType: "None", position: mid });
 		}
 		if (swaps.length)
 			log(
 				`  ${stem.padEnd(28)} lod   ${String(swaps.length).padStart(4)} shapes, near ${swaps.reduce((a, [, n]) => a + n.F.length / 3, 0)}, far ${swaps.reduce((a, [, , f]) => a + f.F.length / 3, 0)} triangles${fresh ? "" : ", as before"}`,
 			);
-		if (ms.some((m) => m.name === BOARD)) {
-			const names = [...(lamps.get(stem) ?? [])].sort(byCodePoint);
-			gantries.push(
-				gantry(
-					stem,
-					ms,
-					toBeamng,
-					LIFT,
-					names
-						.filter((n) => LAMPS.test(n))
-						.sort((a, b) => Number(LAMPS.exec(a)?.[2]) - Number(LAMPS.exec(b)?.[2]))
-						.map((n) => `${stem}_${n}`),
-					names.filter((n) => FLAGS.test(n)).map((n) => `${stem}_${n}`),
-				),
-			);
-		}
+	};
+	/** A model's gantry: its board, its lamps in turn and its flags. */
+	const addGantry = (stem: string, ms: TrackMesh[]) => {
+		const names = [...(lamps.get(stem) ?? [])].sort(byCodePoint);
+		gantries.push(
+			gantry(
+				stem,
+				ms,
+				toBeamng,
+				LIFT,
+				names
+					.filter((n) => LAMPS.test(n))
+					.sort((a, b) => Number(LAMPS.exec(a)?.[2]) - Number(LAMPS.exec(b)?.[2]))
+					.map((n) => `${stem}_${n}`),
+				names.filter((n) => FLAGS.test(n)).map((n) => `${stem}_${n}`),
+			),
+		);
+	};
+	/** A model's shapes (written again only where it changed): what is seen, what vehicles hit, its lamps, its detail levels; and its gantry. */
+	const modelShapes = async (stem: string) => {
+		const glb = `${models}/${stem}.glb`;
+		if (!(await exists(glb))) return;
+		const raw = await files.read(glb);
+		const h = await digestOf([raw, libBytes, surfBytes]);
+		const fresh = state[stem] !== h;
+		const ms = trackModel(raw);
+		meshesOf.set(stem, ms);
+		hashes.push(h);
+		const parts: Record<"solid" | "seen", DaeMesh[]> = { solid: [], seen: [] };
+		/** what vehicles hit: the solid meshes and the walls, each as near its own as its ground needs */
+		const hits: Solid[] = [];
+		const seen: [TrackMesh, DaeMesh][] = [];
+		// (BeamNG's forest stands every tree of the trees' model)
+		if (!(forestData && stem === forestModel)) await sortMeshes(stem, ms, fresh, parts.solid, hits, seen);
+		// (the meshes drawn only far, each with the near mesh it takes over from: a shape of their own)
+		const { swaps, used } = lodSwaps(seen);
+		// (the far-only ones with no near one left out: they would be drawn over what is near)
+		parts.seen = seen.filter(([m, x]) => m.draw[0] <= 0 && !used.has(x)).map(([, x]) => x);
+		await writeParts(stem, parts, fresh);
+		// (what vehicles hit: shapes of their own, drawn not at all, as BeamNG's own invisible collision is)
+		if (hits.length) await writeCollision(stem, hits, fresh);
+		await writeLods(stem, swaps, fresh);
+		if (ms.some((m) => m.name === BOARD)) addGantry(stem, ms);
 		state[stem] = h;
-	}
+	};
+	for (const stem of stems) await modelShapes(stem);
 
 	// ---- grass where the models say it grows, along every layout's racing line
 	const layouts = Object.keys(lists)
 		.filter((lay) => lay in places)
 		.sort(byCodePoint);
-	const aiOf = new Map<string, Uint8Array>();
-	for (const lay of layouts) {
-		const p = `${o.ai}/${lay}/ai/fast_lane.ai`;
-		if (await exists(p)) aiOf.set(lay, await files.read(p));
-	}
-	const grassKey = await digestOf([enc(`${hashes.join(" ")} grass 1`), ...[...aiOf.values()]]);
-	const grassDir = `${shapes}/textures/grass`;
-	const tiles = (await exists(shapes)) ? (await files.list(shapes)).filter((f) => f.startsWith("grass_") && f.endsWith(".dae")) : [];
-	// (made again when what it hangs on changed, or its tiles are gone: none made last time, none to be gone)
-	if (state.grass !== grassKey || (!tiles.length && state.grassTiles !== 0)) {
-		const blades = await bladesTexture();
-		await put(`${grassDir}/blades.png`, blades.png);
-		await put(`${grassDir}/blades_opacity.png`, blades.opacity);
-		const line: [number, number][] = [];
-		for (const b of aiOf.values()) {
-			const ai = readAiFile(b);
-			for (let i = 0; i < ai.points.length; i += 3) line.push([ai.points[i] as number, ai.points[i + 2] as number]);
+	/** Each layout's racing line (the AC build's fast_lane.ai), where it has one. */
+	const fastLanes = async () => {
+		const lanes = new Map<string, Uint8Array>();
+		for (const lay of layouts) {
+			const p = `${o.ai}/${lay}/ai/fast_lane.ai`;
+			if (await exists(p)) lanes.set(lay, await files.read(p));
 		}
+		return lanes;
+	};
+	const aiOf = await fastLanes();
+	/** The library's pictures of the meshes grass grows on, by name (none where it cannot be read). */
+	const grassPhotos = async () => {
 		const photos = new Map<string, Picture | undefined>();
 		for (const ms of meshesOf.values())
 			for (const m of ms) {
@@ -651,6 +952,15 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 				const p = `${project}/source/textures/${c}`;
 				photos.set(c, (await exists(p)) ? await host.decodeRgb(await files.read(p)).catch(() => undefined) : undefined);
 			}
+		return photos;
+	};
+	/** The grass made: its blades' pictures and its clumps' tiles, those no longer made gone. */
+	const makeGrass = async (grassKey: string, grassDir: string, tiles: string[]) => {
+		const blades = await bladesTexture();
+		await put(`${grassDir}/blades.png`, blades.png);
+		await put(`${grassDir}/blades_opacity.png`, blades.opacity);
+		const line = grassLine(aiOf.values());
+		const photos = await grassPhotos();
 		const at = grassPlaces([...meshesOf.values()], lib, (t) => photos.get(t), line);
 		const clumps = grassClumps(at, toBeamng);
 		for (const f of tiles) if (!clumps.has(f.slice("grass_".length, -".dae".length))) await files.remove?.(`${shapes}/${f}`);
@@ -658,37 +968,25 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		state.grass = grassKey;
 		state.grassTiles = clumps.size;
 		log(`  grass: ${at.length} clumps`);
-	} else {
-		keep(`${grassDir}/blades.png`);
-		keep(`${grassDir}/blades_opacity.png`);
-	}
-	for (const f of (await files.list(shapes)).filter((x) => x.startsWith("grass_") && x.endsWith(".dae")).sort(byCodePoint)) {
-		keep(`${shapes}/${f}`);
-		// (the grass: the map's, of no model)
-		statics.push({ stem: "", name: f.slice(0, -4), shapeName: shapeName(f), collisionType: "None" });
-	}
-	materials.velopark_grass = {
-		name: "velopark_grass",
-		mapTo: "velopark_grass",
-		class: "Material",
-		persistentId: uuid5(`${LEVEL}/grass`),
-		version: 1.5,
-		Stages: [
-			{
-				roughnessFactor: 1,
-				metallicFactor: 0,
-				baseColorMap: `/levels/${LEVEL}/art/shapes/textures/grass/blades.png`,
-				opacityMap: `/levels/${LEVEL}/art/shapes/textures/grass/blades_opacity.png`,
-			},
-			{},
-			{},
-			{},
-		],
-		alphaTest: true,
-		alphaRef: 90,
-		doubleSided: true,
-		castShadows: false,
 	};
+	/** The grass, made again when what it hangs on changed, or its tiles are gone (none made last time, none to be gone); its tiles the map's objects. */
+	const grassShapes = async () => {
+		const grassKey = await digestOf([enc(`${hashes.join(" ")} grass 1`), ...aiOf.values()]);
+		const grassDir = `${shapes}/textures/grass`;
+		const tiles = (await exists(shapes)) ? (await files.list(shapes)).filter((f) => f.startsWith("grass_") && f.endsWith(".dae")) : [];
+		if (state.grass !== grassKey || (!tiles.length && state.grassTiles !== 0)) await makeGrass(grassKey, grassDir, tiles);
+		else {
+			keep(`${grassDir}/blades.png`);
+			keep(`${grassDir}/blades_opacity.png`);
+		}
+		for (const f of (await files.list(shapes)).filter((x) => x.startsWith("grass_") && x.endsWith(".dae")).sort(byCodePoint)) {
+			keep(`${shapes}/${f}`);
+			// (the grass: the map's, of no model)
+			statics.push({ stem: "", name: f.slice(0, -4), shapeName: shapeName(f), collisionType: "None" });
+		}
+	};
+	await grassShapes();
+	materials.velopark_grass = grassMaterial(LEVEL);
 
 	// ---- the forest: each tree made once, a shape with its trunk to hit, and the placings that stand it
 	const src: CatalogueSource = {
@@ -697,7 +995,8 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		editorModels: editorModelsOf(project, o.editorModels),
 	};
 	const cat = await catalogue(src).catch(() => ({}) as Awaited<ReturnType<typeof catalogue>>);
-	if (forestData) {
+	/** The forest's trees: each model's shape and item, and the placings that stand them. */
+	const forestShapes = async (trees: ForestTree[]) => {
 		const fshapes = `${shapes}/forest`;
 		const tex = `/levels/${LEVEL}/art/shapes/forest/`;
 		const items: Record<string, unknown> = {};
@@ -733,23 +1032,15 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 			materials[name] = m;
 			return name;
 		};
-		for (const model of [...new Set(forestData.map((t) => t[0]))].sort(byCodePoint)) {
+		/** A tree's shape (its trunk what vehicles hit) and its forest item. */
+		const treeShape = async (model: string) => {
 			const meta = cat[model];
-			if (!meta) continue;
+			if (!meta) return;
 			const meshes: DaeMesh[] = [];
 			const collision: DaeMesh[] = [];
 			let r = 0.3;
 			for (const p of await loadTemplate(src, meta)) {
-				const nv = p.V.length / 11;
-				const P = new Float64Array(nv * 3);
-				const N = new Float64Array(nv * 3);
-				const U = new Float64Array(nv * 2);
-				for (let k = 0; k < nv; k++) {
-					P.set(toBeamng(p.V[k * 11] as number, p.V[k * 11 + 1] as number, p.V[k * 11 + 2] as number), k * 3);
-					N.set(toBeamng(p.V[k * 11 + 3] as number, p.V[k * 11 + 4] as number, p.V[k * 11 + 5] as number), k * 3);
-					U[k * 2] = p.V[k * 11 + 6] as number;
-					U[k * 2 + 1] = 1 - (p.V[k * 11 + 7] as number);
-				}
+				const { P, N, U } = templateArrays(p.V);
 				const F = Array.from(p.F);
 				if (p.part === "hull") {
 					facing(P, N, F);
@@ -758,11 +1049,10 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 						material: await forestMaterial(p.material),
 						P,
 						N,
-						U: new Float64Array(nv * 2),
+						U: new Float64Array((p.V.length / 11) * 2),
 						F,
 					});
-					r = 0;
-					for (let k = 0; k < nv; k++) r = Math.max(r, Math.hypot(p.V[k * 11] as number, p.V[k * 11 + 2] as number));
+					r = trunkRadius(p.V);
 				} else {
 					// (the leaves' cards are both ways round already, each way its own triangles)
 					if (p.part === "bark") facing(P, N, F);
@@ -779,24 +1069,13 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 				shapeFile: `levels/${LEVEL}/art/shapes/forest/${model}.dae`,
 				...FOREST_WIND,
 			};
-		}
+		};
+		for (const model of [...new Set(trees.map((t) => t[0]))].sort(byCodePoint)) await treeShape(model);
 		await put(`${level}/art/forest/managedItemData.json`, JSON.stringify(items, null, 1));
-		const lines = new Map<string, string[]>();
-		for (const [name, x, y, z, yaw, scale] of forestData) {
-			if (!(name in items)) continue;
-			// (its turn about the track's up made BeamNG's about its up; the rotationMatrix lists the axes x, y, z in turn)
-			const c = Math.cos(yaw);
-			const s = Math.sin(yaw);
-			const pos = toBeamng(x, y, z);
-			pos[2] += LIFT;
-			const rot = [c, -s, 0, s, c, 0, 0, 0, 1];
-			const l = lines.get(name) ?? [];
-			l.push(JSON.stringify({ ctxid: 0, pos, rotationMatrix: rot, scale, type: name }));
-			lines.set(name, l);
-		}
-		for (const [name, l] of lines) await put(`${level}/forest/${name}.forest4.json`, `${l.join("\n")}\n`);
-		log(`  forest: ${forestData.length} trees of ${Object.keys(items).length} kinds`);
-	}
+		for (const [name, l] of forestPlacings(trees, items)) await put(`${level}/forest/${name}.forest4.json`, `${l.join("\n")}\n`);
+		log(`  forest: ${trees.length} trees of ${Object.keys(items).length} kinds`);
+	};
+	if (forestData) await forestShapes(forestData);
 
 	// ---- the gantry board's characters and the lamps' glow
 	await put(`${shapes}/${SHAPES}/white.png`, await writePng(new Uint8Array(4 * 4 * 3).fill(255), 4, 4, 3));
@@ -804,37 +1083,20 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	Object.assign(materials, boardMaterials(LEVEL));
 
 	// ---- what the layout no longer loads out
-	for (const f of await filesUnder(files, `${shapes}`).catch(() => [] as string[])) {
-		const path = `${shapes}/${f}`;
-		if ((f.endsWith(".dae") || f.startsWith("textures/")) && !written.has(path)) await files.remove?.(path);
-	}
-	for (const f of Object.keys(texState)) if (!written.has(`${texDir}/${f}`)) delete texState[f];
-	for (const k of Object.keys(state)) if (!["format", "grass", "grassTiles", "textures"].includes(k) && !stems.includes(k)) delete state[k];
+	/** The shapes and textures not written this time gone, and what was written of them last time forgotten. */
+	const sweep = async () => {
+		for (const f of await filesUnder(files, `${shapes}`).catch(() => [] as string[])) {
+			const path = `${shapes}/${f}`;
+			if ((f.endsWith(".dae") || f.startsWith("textures/")) && !written.has(path)) await files.remove?.(path);
+		}
+		for (const f of Object.keys(texState)) if (!written.has(`${texDir}/${f}`)) delete texState[f];
+		for (const k of Object.keys(state)) if (!["format", "grass", "grassTiles", "textures"].includes(k) && !stems.includes(k)) delete state[k];
+	};
+	await sweep();
 	await put(`${shapes}/main.materials.json`, JSON.stringify(materials, null, 1));
 
-	/** A model's shape as the level's object: in the level (its MissionGroup), or in a race's prefab (tag: whose). */
-	const staticItem = (st: (typeof statics)[number], tag: string, parent: string) => {
-		const p = st.position ?? [0, 0, 0];
-		return {
-			class: "TSStatic",
-			name: st.name,
-			persistentId: uuid5(`${tag}/object/${st.name}`),
-			__parent: parent,
-			shapeName: st.shapeName,
-			collisionType: st.collisionType,
-			position: [p[0], p[1], p[2] + LIFT],
-			decalType: st.decalType ?? (st.collisionType !== "None" ? "Collision Mesh" : "None"),
-			...(st.extra ?? {}),
-		};
-	};
-
 	// ---- the starts, the races and the roads
-	const all = new Float64Array(ground.reduce((a, t) => a + t.length, 0));
-	let at0 = 0;
-	for (const t of ground) {
-		all.set(t, at0);
-		at0 += t.length;
-	}
+	const all = joined(ground);
 	const road = new Ground(all);
 	log(`  the ground under the starts: ${all.length / 9} triangles`);
 	const onRoad = (p: V3) => road.on(p);
@@ -844,24 +1106,13 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	const sheet = cardSheet(boardsPlaced.map((ob) => boardText(ob.name, ob.text)));
 	const boardTexture = boardsPlaced.length ? await (o.cards ?? canvasCards)(sheet) : null;
 	// (every layout's start: its picture, its races; the level's spawns those of them listed)
-	const starts: { name: string; title: string; at: V3; fwd: V3 }[] = [];
-	const roads: Record<string, { line: V3[]; sides: [number, number][] | null }> = {};
-	const races: {
-		layout: string;
-		title: string;
-		description: string;
-		author: string;
-		path: RacePath;
-		length: number;
-		trigger: [V3, V3];
-		cones: V3[];
-		boards: Board[];
-		grid: [V3, V3][];
-	}[] = [];
-	const spotAt = (s: { x: number; y: number; z: number }): V3 => toBeamng(s.x, s.y, s.z);
-	for (const lay of layouts) {
+	const starts: LevelStart[] = [];
+	const roads: Record<string, LevelRoad> = {};
+	const races: LevelRace[] = [];
+	/** A layout's start where it has a racing line: its spawn, its road, and its race where it has time gates and is no hot lap. */
+	const layoutStart = async (lay: string) => {
 		const b = aiOf.get(lay);
-		if (!b) continue;
+		if (!b) return;
 		const here = places[lay] as LayoutPlaces;
 		const found = new Map(here.spots.map((s) => [s.name, s]));
 		const { line, sides } = racingLine(b);
@@ -875,39 +1126,33 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		const slots: [V3, V3][] = [];
 		for (let s = placed(found.get("START_0")); s; s = placed(found.get(`START_${slots.length + 1}`))) slots.push(s);
 		const start = placed(startSpot(lay, found));
-		if (!start) continue;
+		if (!start) return;
 		const [at, fwd] = start;
 		const u = await uiOf(lay);
 		const title = layoutTitle(u.name, trackName, lay);
 		starts.push({ name: `spawn_${lay}`, title, at, fwd });
-		const gates: [V3, V3][] = [];
-		while (found.has(`TIME_${gates.length}_L`) && found.has(`TIME_${gates.length}_R`))
-			gates.push([spotAt(found.get(`TIME_${gates.length}_L`) as never), spotAt(found.get(`TIME_${gates.length}_R`) as never)]);
-		if (gates.length && !lay.includes("hotlap")) {
-			const { path, length } = racePath(line, sides, gates, [[at[0] + fwd[0], at[1] + fwd[1], at[2]], fwd], hotlap ?? start, onRoad, LIFT);
-			const { cones, boards } = await physicsObjects(here.objects ?? []);
-			races.push({
-				layout: lay,
-				title: `${trackName} ${title}`,
-				description: u.description ?? "",
-				author: u.author ?? "",
-				path,
-				length,
-				trigger: [[at[0], at[1], at[2] + LIFT], fwd],
-				cones: cones.map((c) => {
-					const p = onRoad([c[0], c[1], c[2] + 0.5]);
-					return [p[0], p[1], p[2] + LIFT];
-				}),
-				boards,
-				grid: slots.map(([a, f]) => [[a[0], a[1], a[2] + LIFT], f]),
-			});
-		}
-	}
-	const listed = o.spawns ?? track.beamng?.spawns;
-	const unknown = (listed ?? []).filter((l) => !(l in lists));
-	if (unknown.length) throw new Error(`beamng.spawns lists ${unknown.join(", ")}, which the track has no layout of`);
-	const spawns = listed ? starts.filter((s) => listed.includes(s.name.slice("spawn_".length))) : starts;
-	if (!spawns.length) throw new Error("the level has no layout to spawn at (none with a start)");
+		const gates = timeGates(found);
+		if (!gates.length || lay.includes("hotlap")) return;
+		const { path, length } = racePath(line, sides, gates, [[at[0] + fwd[0], at[1] + fwd[1], at[2]], fwd], hotlap ?? start, onRoad, LIFT);
+		const { cones, boards } = await physicsObjects(here.objects ?? []);
+		races.push({
+			layout: lay,
+			title: `${trackName} ${title}`,
+			description: u.description ?? "",
+			author: u.author ?? "",
+			path,
+			length,
+			trigger: [[at[0], at[1], at[2] + LIFT], fwd],
+			cones: cones.map((c) => {
+				const p = onRoad([c[0], c[1], c[2] + 0.5]);
+				return [p[0], p[1], p[2] + LIFT];
+			}),
+			boards,
+			grid: slots.map(([a, f]) => [[a[0], a[1], a[2] + LIFT], f]),
+		});
+	};
+	for (const lay of layouts) await layoutStart(lay);
+	const spawns = spawnStarts(o.spawns ?? track.beamng?.spawns, lists, starts);
 	// (it loads at the layout asked for where one can spawn there, else at the first one can)
 	const home = spawns.some((s) => s.name === `spawn_${o.layout}`) ? `spawn_${o.layout}` : (spawns[0] as (typeof spawns)[number]).name;
 
@@ -970,31 +1215,13 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	// (a start's map, where the track cannot be rendered: framed round the layouts' racing lines and a little more, not every road the site has: those far off
 	// cut)
 	const rm = Float32Array.from(roadMap);
-	const frame: [[number, number], [number, number]] = [
-		[Infinity, Infinity],
-		[-Infinity, -Infinity],
-	];
-	const lapPoints = Object.values(roads).flatMap((r) => r.line.flatMap((p) => [p[0], p[1]]));
-	const framed = lapPoints.length ? lapPoints : Array.from(rm);
-	for (let i = 0; i + 1 < framed.length; i += 2) {
-		frame[0][0] = Math.min(frame[0][0], framed[i] as number);
-		frame[0][1] = Math.min(frame[0][1], framed[i + 1] as number);
-		frame[1][0] = Math.max(frame[1][0], framed[i] as number);
-		frame[1][1] = Math.max(frame[1][1], framed[i + 1] as number);
-	}
-	const more = 0.08 * Math.max(frame[1][0] - frame[0][0], frame[1][1] - frame[0][1]);
-	if (lapPoints.length) {
-		frame[0][0] -= more;
-		frame[0][1] -= more;
-		frame[1][0] += more;
-		frame[1][1] += more;
-	}
+	const frame = mapFrame(roads, rm);
 	log(`  ${starts.length} starts (${spawns.length} to spawn at), ${races.length} races`);
 	const previews = new Map<string, Uint8Array>();
-	const layOf = (s: { name: string }) => s.name.slice("spawn_".length);
-	// (each start's picture rendered of the AC build's models: the gantry its lap runs under, else all its lap from above; a layout with no line, its start's
-	// place from just behind it)
-	if (host.render) {
+	/** Each start's picture rendered of the AC build's models: the gantry its lap runs under, else all its lap from above; a layout with no line, its start's
+	 * place from just behind it. */
+	const renderPreviews = async () => {
+		if (!host.render) return;
 		const { scene, drawn } = await trackScene(files, o.ai, starts.map(layOf));
 		const shown = starts.filter((s) => drawn[layOf(s)]?.length);
 		const lines = new Map<string, V3[]>();
@@ -1016,12 +1243,14 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 			previews.set(layOf(s), made[i] as Uint8Array);
 		});
 		log(`  ${shown.length} starts' pictures rendered`);
-	}
-	// (where nothing can render it, a map of where it is, its layout's racing line on it: the roads as runs of the picture's pixels, not their own triangles, a
-	// canvas filling a path of the floor's millions of triangles for ever)
-	const unrendered = starts.filter((s) => !previews.has(layOf(s)));
-	const cover = host.mapPreview && rm.length && unrendered.length ? roadCover(rm, frame) : null;
-	if (host.mapPreview && cover)
+	};
+	await renderPreviews();
+	/** Where nothing can render it, a map of where it is, its layout's racing line on it: the roads as runs of the picture's pixels, not their own triangles, a
+	 * canvas filling a path of the floor's millions of triangles for ever. */
+	const mapPreviews = async () => {
+		const unrendered = starts.filter((s) => !previews.has(layOf(s)));
+		const cover = host.mapPreview && rm.length && unrendered.length ? roadCover(rm, frame) : null;
+		if (!host.mapPreview || !cover) return;
 		for (const s of unrendered) {
 			const lay = layOf(s);
 			previews.set(
@@ -1037,66 +1266,88 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 			);
 			log(`  ${lay}: its map (nothing here renders the track)`);
 		}
-	for (const s of starts) {
-		const at = `${level}/${s.name}_preview.jpg`;
-		const jpg = previews.get(layOf(s));
-		if (jpg && spawns.includes(s)) await put(at, jpg);
-		// (a layout no longer spawned at: its picture from before gone)
-		else if (await exists(at)) await files.remove?.(at);
-	}
+	};
+	await mapPreviews();
+	/** Each spawn's picture beside the level's start of it. */
+	const startPictures = async () => {
+		for (const s of starts) {
+			const at = `${level}/${s.name}_preview.jpg`;
+			const jpg = previews.get(layOf(s));
+			if (jpg && spawns.includes(s)) await put(at, jpg);
+			// (a layout no longer spawned at: its picture from before gone)
+			else if (await exists(at)) await files.remove?.(at);
+		}
+	};
+	await startPictures();
 
 	// (the layouts' racing lines as BeamNG's road network; the paths and pit lanes off them; each race's checkpoints on its own layout's road)
 	const side: Record<string, { line: V3[]; radius: number }> = {};
-	for (const [name, { points, radius }] of Object.entries(o.sidePaths ?? track.beamng?.side_paths ?? {})) {
-		const dense: [number, number][] = [points[0] as [number, number]];
-		for (let i = 0; i + 1 < points.length; i++) {
-			const p = points[i] as [number, number];
-			const q = points[i + 1] as [number, number];
-			const n = Math.max(1, Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1])));
-			for (let k = 1; k <= n; k++) dense.push([p[0] + ((q[0] - p[0]) * k) / n, p[1] + ((q[1] - p[1]) * k) / n]);
+	/** The paths off the laps the map draws as side roads, on the road under them. */
+	const sidePaths = () => {
+		for (const [name, { points, radius }] of Object.entries(o.sidePaths ?? track.beamng?.side_paths ?? {})) {
+			side[name] = {
+				line: densePoints(points).map(([x, z]) => {
+					const p = onRoad(toBeamng(x, 1000, z));
+					return [p[0], p[1], p[2] + WAYPOINT_LIFT] as V3;
+				}),
+				radius,
+			};
 		}
-		side[name] = {
-			line: dense.map(([x, z]) => {
-				const p = onRoad(toBeamng(x, 1000, z));
-				return [p[0], p[1], p[2] + WAYPOINT_LIFT] as V3;
-			}),
-			radius,
-		};
-	}
-	const lanes: V3[][] = [];
-	for (const lay of layouts) {
-		const p = `${o.ai}/${lay}/ai/pit_lane.ai`;
-		if (!(await exists(p))) continue;
-		const { line } = racingLine(await files.read(p));
-		// (layouts sharing pits have lanes alike to a few centimetres)
-		if (lanes.some((l) => l.length === line.length && l.every((q, i) => Math.max(...q.map((v, j) => Math.abs(v - ((line[i] as V3)[j] as number)))) < 0.5)))
-			continue;
-		lanes.push(line);
-		side[`pits_${lay}`] = { line, radius: o.pitRadius?.[lay] ?? track.beamng?.pit_radius?.[lay] ?? PIT_RADIUS };
-	}
+	};
+	sidePaths();
+	/** Each layout's pit lane as a side road, once where layouts share pits. */
+	const pitLanes = async () => {
+		const lanes: V3[][] = [];
+		for (const lay of layouts) {
+			const p = `${o.ai}/${lay}/ai/pit_lane.ai`;
+			if (!(await exists(p))) continue;
+			const { line } = racingLine(await files.read(p));
+			// (layouts sharing pits have lanes alike to a few centimetres)
+			if (lanes.some((l) => sameLane(l, line))) continue;
+			lanes.push(line);
+			side[`pits_${lay}`] = { line, radius: o.pitRadius?.[lay] ?? track.beamng?.pit_radius?.[lay] ?? PIT_RADIUS };
+		}
+	};
+	await pitLanes();
 	const net = roadNetwork(roads, side);
 	routeRaces(races, net.laps, net.waypoints, net.segments, LIFT, log);
 	const date = Math.floor(Date.now() / 1000);
 	const sets: ConeSet[] = [];
 	const gameplay = `${out}/gameplay/missions/${LEVEL}`;
-	for (const top of [`${gameplay}/timeTrial`, `${gameplay}/aiRace`, `${level}/quickrace`])
-		for (const f of await filesUnder(files, top).catch(() => [] as string[])) await files.remove?.(`${top}/${f}`);
-	for (const [k, r] of races.entries()) {
+	await clearFolders(files, [`${gameplay}/timeTrial`, `${gameplay}/aiRace`, `${level}/quickrace`]);
+	/** A race's prefab: its cones and boards (a set of the level's cones prop), and the models only its layout loads; none, null. */
+	const racePrefab = (r: LevelRace): string | null => {
+		const tag = `${LEVEL}/${r.layout}`;
+		const own = statics
+			.filter((st) => ownOf(r.layout).includes(st.stem))
+			.map((st) => `${JSON.stringify(staticItem(st, tag, "SimGroup_"))}\n`)
+			.join("");
+		if (r.cones.length || r.boards.length) {
+			const made = conePrefab(`${LEVEL}/${r.layout}/cones`, r.cones, r.boards);
+			sets.push(made.set);
+			return own + made.prefab;
+		}
+		if (own) return `${own}${JSON.stringify({ name: "SimGroup_", class: "SimGroup", groupPosition: "0 0 0" })}\n`;
+		return null;
+	};
+	/** A race's AI race: against karts, from the layout's grid. */
+	const aiRaceFiles = async (k: number, r: LevelRace, prefab: string | null, jpg: Uint8Array | undefined, thumb: Uint8Array | null) => {
+		const af = `${LEVEL}/aiRace/${String(k + 1).padStart(3, "0")}-${r.layout}`;
+		const a = `${out}/gameplay/missions/${af}`;
+		await put(`${a}/info.json`, JSON.stringify(aiMission(LEVEL, af, r, r.grid.length, date), null, 1));
+		await put(`${a}/race.race.json`, JSON.stringify(aiPath(r.path, r.grid), null, 1));
+		if (prefab) await put(`${a}/deco.prefab.json`, prefab);
+		if (jpg) await put(`${a}/preview.jpg`, jpg);
+		if (thumb) await put(`${a}/thumbnail.jpg`, thumb);
+	};
+	/** A race's time trial, its quick race, and its AI race where its grid has more than one slot. */
+	const raceFiles = async (k: number, r: LevelRace) => {
 		const folder = `${LEVEL}/timeTrial/${String(k + 1).padStart(3, "0")}-${r.layout}`;
 		const d = `${out}/gameplay/missions/${folder}`;
 		await put(`${d}/info.json`, JSON.stringify(mission(LEVEL, folder, r, date), null, 1));
 		await put(`${d}/race.race.json`, JSON.stringify(r.path, null, 1));
 		// (its prefab: its cones, and the models only its layout loads)
-		let prefab: string | null = null;
-		const own = statics
-			.filter((st) => ownOf(r.layout).includes(st.stem))
-			.map((st) => `${JSON.stringify(staticItem(st, `${LEVEL}/${r.layout}`, "SimGroup_"))}\n`)
-			.join("");
-		if (r.cones.length || r.boards.length) {
-			const made = conePrefab(`${LEVEL}/${r.layout}/cones`, r.cones, r.boards);
-			prefab = own + made.prefab;
-			sets.push(made.set);
-		} else if (own) prefab = `${own}${JSON.stringify({ name: "SimGroup_", class: "SimGroup", groupPosition: "0 0 0" })}\n`;
+		const prefab = racePrefab(r);
 		if (prefab) await put(`${d}/mainPrefab.prefab.json`, prefab);
 		const jpg = previews.get(r.layout);
 		let thumb: Uint8Array | null = null;
@@ -1118,17 +1369,9 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		if (prefab) await put(`${level}/quickrace/${r.layout}.prefab.json`, prefab);
 		await put(`${level}/quickrace/${r.layout}.race.json`, JSON.stringify(race, null, 1));
 		if (jpg) await put(`${level}/quickrace/${r.layout}.jpg`, jpg);
-		// (the AI race: against karts, from the layout's grid)
-		if (r.grid.length > 1) {
-			const af = `${LEVEL}/aiRace/${String(k + 1).padStart(3, "0")}-${r.layout}`;
-			const a = `${out}/gameplay/missions/${af}`;
-			await put(`${a}/info.json`, JSON.stringify(aiMission(LEVEL, af, r, r.grid.length, date), null, 1));
-			await put(`${a}/race.race.json`, JSON.stringify(aiPath(r.path, r.grid), null, 1));
-			if (prefab) await put(`${a}/deco.prefab.json`, prefab);
-			if (jpg) await put(`${a}/preview.jpg`, jpg);
-			if (thumb) await put(`${a}/thumbnail.jpg`, thumb);
-		}
-	}
+		if (r.grid.length > 1) await aiRaceFiles(k, r, prefab, jpg, thumb);
+	};
+	for (const [k, r] of races.entries()) await raceFiles(k, r);
 	// (the gantries' boards, each showing the races that start under it, and the Lua that runs them)
 	await put(
 		`${level}/board.json`,
@@ -1141,12 +1384,11 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	);
 	// (the Lua: the editor's, under the level's own names)
 	const lua = `${scriptsOf(editorModelsOf(project, o.editorModels))}/beamng`;
-	for (const top of ["lua", "scripts"])
-		for (const f of await filesUnder(files, `${out}/${top}`).catch(() => [] as string[])) await files.remove?.(`${out}/${top}/${f}`);
+	await clearFolders(files, [`${out}/lua`, `${out}/scripts`]);
 	const made = levelScripts({ board: dec(await files.read(`${lua}/board.lua`)), modScript: dec(await files.read(`${lua}/modScript.lua`)) }, LEVEL, trackName);
 	for (const [f, text] of Object.entries(made)) await put(`${out}/${f}`, text);
 	// (the cones: each layout's one vehicle, a part of the cones prop of the level's own)
-	for (const f of await filesUnder(files, `${out}/vehicles`).catch(() => [] as string[])) await files.remove?.(`${out}/vehicles/${f}`);
+	await clearFolders(files, [`${out}/vehicles`]);
 	for (const [name, data] of coneParts(sets, boardTexture)) await put(`${out}/${name}`, data);
 
 	// ---- the level's objects
@@ -1157,39 +1399,41 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		__parent: "MissionGroup",
 		...kw,
 	});
-	const items: unknown[] = [
-		obj("LevelInfo", "theLevelInfo", {
-			gravity: -9.81,
-			visibleDistance: 1500,
-			canvasClearColor: [0, 0, 0, 255],
-			globalEnviromentMap: "BNG_Sky_02_cubemap",
-		}),
-		obj("TimeOfDay", "tod", { time: 0.1, play: false, dayLength: 1200, azimuthOverride: 0 }),
-		obj("ScatterSky", "sunsky", { position: [0, 0, 0] }),
-	];
-	// (BeamNG's vehicles face their -y; the rotationMatrix lists the axes x, y, z in turn)
-	for (const s of spawns)
-		items.push(
-			obj("SpawnSphere", s.name, {
-				dataBlock: "SpawnSphereMarker",
-				position: [s.at[0], s.at[1], s.at[2] + LIFT + 0.5],
-				rotationMatrix: [-s.fwd[1], s.fwd[0], 0, -s.fwd[0], -s.fwd[1], 0, 0, 0, 1],
-				radius: 1,
+	/** The level's objects: its sky, its spawns, its road's waypoints, its lights, its forest and the shapes of the models every layout loads. */
+	const levelItems = async (): Promise<unknown[]> => {
+		const items: unknown[] = [
+			obj("LevelInfo", "theLevelInfo", {
+				gravity: -9.81,
+				visibleDistance: 1500,
+				canvasClearColor: [0, 0, 0, 255],
+				globalEnviromentMap: "BNG_Sky_02_cubemap",
 			}),
-		);
-	for (const [name, p, r] of net.waypoints as Waypoint[]) items.push(obj("BeamNGWaypoint", name, { position: [p[0], p[1], p[2] + LIFT], scale: [r, r, r] }));
-	items.push(...(await lightObjects(files, project, models, obj)));
-	if (forestData) {
-		const mx = forestData.reduce((a, t) => a + t[1], 0) / forestData.length;
-		const my = forestData.reduce((a, t) => a + t[2], 0) / forestData.length;
-		const mz = forestData.reduce((a, t) => a + t[3], 0) / forestData.length;
-		const mid = toBeamng(mx, my, mz);
-		items.push(
-			obj("Forest", "theForest", { lodReflectScalar: 0.15 }),
-			obj("ForestWindEmitter", "velopark_wind", { position: [mid[0], mid[1], mid[2] + LIFT], strength: 0.15 }),
-		);
-	}
-	for (const st of statics) if (!st.stem || shared.includes(st.stem)) items.push(staticItem(st, LEVEL, "MissionGroup"));
+			obj("TimeOfDay", "tod", { time: 0.1, play: false, dayLength: 1200, azimuthOverride: 0 }),
+			obj("ScatterSky", "sunsky", { position: [0, 0, 0] }),
+		];
+		// (BeamNG's vehicles face their -y; the rotationMatrix lists the axes x, y, z in turn)
+		for (const s of spawns)
+			items.push(
+				obj("SpawnSphere", s.name, {
+					dataBlock: "SpawnSphereMarker",
+					position: [s.at[0], s.at[1], s.at[2] + LIFT + 0.5],
+					rotationMatrix: [-s.fwd[1], s.fwd[0], 0, -s.fwd[0], -s.fwd[1], 0, 0, 0, 1],
+					radius: 1,
+				}),
+			);
+		for (const [name, p, r] of net.waypoints as Waypoint[]) items.push(obj("BeamNGWaypoint", name, { position: [p[0], p[1], p[2] + LIFT], scale: [r, r, r] }));
+		items.push(...(await lightObjects(files, project, models, obj)));
+		if (forestData) {
+			const mid = forestMiddle(forestData);
+			items.push(
+				obj("Forest", "theForest", { lodReflectScalar: 0.15 }),
+				obj("ForestWindEmitter", "velopark_wind", { position: [mid[0], mid[1], mid[2] + LIFT], strength: 0.15 }),
+			);
+		}
+		for (const st of statics) if (!st.stem || shared.includes(st.stem)) items.push(staticItem(st, LEVEL, "MissionGroup"));
+		return items;
+	};
+	const items = await levelItems();
 	await put(
 		`${level}/main/items.level.json`,
 		JSON.stringify({
@@ -1200,32 +1444,36 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 		}),
 	);
 	await put(`${level}/main/MissionGroup/items.level.json`, items.map((i) => `${JSON.stringify(i)}\n`).join(""));
-	const lui = await uiOf(o.layout);
-	const preview = `${ui}/${o.layout}/preview.png`;
-	if (await exists(preview)) await put(`${level}/${LEVEL}_preview.png`, await files.read(preview));
-	await put(
-		`${level}/info.json`,
-		JSON.stringify(
-			{
-				title: trackName,
-				description: lui.description ?? "",
-				authors: lui.author ?? "",
-				previews: [`${LEVEL}_preview.png`],
-				size: [1024, 1024],
-				country: lui.country ?? "",
-				// (a kart track has no road traffic: the road network is for the map and the AI of the cars one picks)
-				supportsTraffic: false,
-				spawnPoints: spawns.map((s) => ({
-					objectname: s.name,
-					translationId: s.title,
-					preview: `${s.name}_preview.jpg`,
-				})),
-				defaultSpawnPointName: home,
-			},
-			null,
-			1,
-		),
-	);
+	/** The level's info: its title, its picture (the layout it loads at's), and its spawns. */
+	const levelInfo = async () => {
+		const lui = await uiOf(o.layout);
+		const preview = `${ui}/${o.layout}/preview.png`;
+		if (await exists(preview)) await put(`${level}/${LEVEL}_preview.png`, await files.read(preview));
+		await put(
+			`${level}/info.json`,
+			JSON.stringify(
+				{
+					title: trackName,
+					description: lui.description ?? "",
+					authors: lui.author ?? "",
+					previews: [`${LEVEL}_preview.png`],
+					size: [1024, 1024],
+					country: lui.country ?? "",
+					// (a kart track has no road traffic: the road network is for the map and the AI of the cars one picks)
+					supportsTraffic: false,
+					spawnPoints: spawns.map((s) => ({
+						objectname: s.name,
+						translationId: s.title,
+						preview: `${s.name}_preview.jpg`,
+					})),
+					defaultSpawnPointName: home,
+				},
+				null,
+				1,
+			),
+		);
+	};
+	await levelInfo();
 	await put(
 		`${level}/map.json`,
 		JSON.stringify(
@@ -1238,38 +1486,36 @@ export async function buildBeamng(files: HostFiles, host: BeamngHost, o: BeamngO
 	);
 	await files.write(stateFile, enc(JSON.stringify(state, null, 1)));
 	const counts = `${Object.keys(materials).length} materials, ${spawns.length} spawns, ${net.waypoints.length} waypoints`;
+	const built = (zip: string | null, size: number): BeamngBuilt => ({
+		level,
+		zip,
+		size,
+		materials: Object.keys(materials).length,
+		starts: starts.length,
+		spawns: spawns.length,
+		waypoints: net.waypoints.length,
+	});
 	if (o.pack === false) {
 		log(`${counts}; level in ${level}`);
-		return {
-			level,
-			zip: null,
-			size: 0,
-			materials: Object.keys(materials).length,
-			starts: starts.length,
-			spawns: spawns.length,
-			waypoints: net.waypoints.length,
-		};
+		return built(null, 0);
 	}
 	// ---- packed: every file dated now (BeamNG keeps the shapes it converted while they are newer than the zip's)
 	const dist = o.dist ?? `${project}/build/dist`;
 	const zipPath = `${dist}/${LEVEL}_beamng.zip`;
 	log(`${counts}; packing ${zipPath.split("/").pop()}`);
+	const zip = await writeZip(await levelEntries(files, out, LEVEL), new Date());
+	await files.write(zipPath, zip);
+	log(`packed ${zipPath} (${(zip.length / 2 ** 20).toFixed(1)} MB)`);
+	return built(zipPath, zip.length);
+}
+
+/** The level's files as the archive's entries: the level, its missions, its Lua and its cones, by their paths in the mod. */
+async function levelEntries(files: HostFiles, out: string, LEVEL: string): Promise<{ name: string; data: Uint8Array }[]> {
 	const entries: { name: string; data: Uint8Array }[] = [];
 	for (const top of [`levels/${LEVEL}`, "gameplay", "lua", "scripts", "vehicles"])
 		for (const f of await filesUnder(files, `${out}/${top}`).catch(() => [] as string[]))
 			entries.push({ name: `${top}/${f}`, data: await files.read(`${out}/${top}/${f}`) });
-	const zip = await writeZip(entries, new Date());
-	await files.write(zipPath, zip);
-	log(`packed ${zipPath} (${(zip.length / 2 ** 20).toFixed(1)} MB)`);
-	return {
-		level,
-		zip: zipPath,
-		size: zip.length,
-		materials: Object.keys(materials).length,
-		starts: starts.length,
-		spawns: spawns.length,
-		waypoints: net.waypoints.length,
-	};
+	return entries;
 }
 
 const plusLift = (p: V3): V3 => [p[0], p[1], p[2] + LIFT];
@@ -1292,30 +1538,39 @@ export function roadCover(T: ArrayLike<number>, frame: [[number, number], [numbe
 		const j0 = Math.max(0, Math.ceil((Math.min(...ys) - y0) / cell - 0.5));
 		const j1 = Math.min(ny - 1, Math.floor((Math.max(...ys) - y0) / cell - 0.5));
 		for (let j = j0; j <= j1; j++) {
-			const yc = y0 + (j + 0.5) * cell;
-			// (where the row's middle crosses the triangle's edges)
-			let lo = Infinity;
-			let hi = -Infinity;
-			for (let e = 0; e < 3; e++) {
-				const [ax, ay, bx, by] = [xs[e] as number, ys[e] as number, xs[(e + 1) % 3] as number, ys[(e + 1) % 3] as number];
-				if ((yc < ay && yc < by) || (yc > ay && yc > by)) continue;
-				if (ay === by) {
-					lo = Math.min(lo, ax, bx);
-					hi = Math.max(hi, ax, bx);
-					continue;
-				}
-				const x = ax + ((yc - ay) * (bx - ax)) / (by - ay);
-				lo = Math.min(lo, x);
-				hi = Math.max(hi, x);
-			}
+			const [lo, hi] = rowSpan(xs, ys, y0 + (j + 0.5) * cell);
 			const i0 = Math.max(0, Math.ceil((lo - x0) / cell - 0.5));
 			const i1 = Math.min(nx - 1, Math.floor((hi - x0) / cell - 0.5));
 			if (i0 <= i1) on.fill(1, j * nx + i0, j * nx + i1 + 1);
 		}
 	}
+	return Float32Array.from(coverRuns(on, nx, ny, [x0, y0], cell));
+}
+
+/** Where a row's middle (yc) crosses a triangle's edges (its corners' xs and ys): the lowest x and the highest (none: Infinity, -Infinity). */
+function rowSpan(xs: number[], ys: number[], yc: number): [number, number] {
+	let lo = Infinity;
+	let hi = -Infinity;
+	for (let e = 0; e < 3; e++) {
+		const [ax, ay, bx, by] = [xs[e] as number, ys[e] as number, xs[(e + 1) % 3] as number, ys[(e + 1) % 3] as number];
+		if ((yc < ay && yc < by) || (yc > ay && yc > by)) continue;
+		if (ay === by) {
+			lo = Math.min(lo, ax, bx);
+			hi = Math.max(hi, ax, bx);
+			continue;
+		}
+		const x = ax + ((yc - ay) * (bx - ax)) / (by - ay);
+		lo = Math.min(lo, x);
+		hi = Math.max(hi, x);
+	}
+	return [lo, hi];
+}
+
+/** A grid's cells that are on (nx by ny from x0 y0, cell a side), each run of them along a row one rectangle half a cell over on every side: two triangles,
+ * x y each corner. */
+function coverRuns(on: Uint8Array, nx: number, ny: number, [x0, y0]: [number, number], cell: number): number[] {
 	const out: number[] = [];
 	for (let j = 0; j < ny; j++) {
-		// (each run of cells on along the row one rectangle)
 		let i = 0;
 		while (i < nx) {
 			if (!on[j * nx + i]) {
@@ -1329,19 +1584,30 @@ export function roadCover(T: ArrayLike<number>, frame: [[number, number], [numbe
 			i = k + 1;
 		}
 	}
-	return Float32Array.from(out);
+	return out;
 }
 
 /** A level's folder name as its Lua extension's folder is named (BeamNG's ge extensions: camelCase): techspeed_velopark as techspeedVelopark. */
-export const extensionFolder = (level: string): string => level.toLowerCase().replace(/[^a-z0-9]+([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+export const extensionFolder = (level: string): string => {
+	// (each run of what is no lower case letter or digit dropped where a letter or digit follows it, that one upper case)
+	let out = "";
+	let run = "";
+	for (const ch of level.toLowerCase()) {
+		if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9")) {
+			out += run ? ch.toUpperCase() : ch;
+			run = "";
+		} else run += ch;
+	}
+	return out + run;
+};
 
 /** The level's Lua (the editor's scripts/beamng: the gantry board's extension and the mod's script that loads it) under the level's own names, by their paths
  * in the mod: lua/ge/extensions/<its camelCase>/board.lua, the extension <its camelCase>_board, and scripts/<level>/modScript.lua; {{track}}, {{level}} and
  * {{extension}} in them filled. */
 export function levelScripts(scripts: { board: string; modScript: string }, level: string, track: string): Record<string, string> {
 	const folder = extensionFolder(level);
-	const fill = (s: string) =>
-		s.replace(/\{\{(track|level|extension)\}\}/g, (_, k: string) => (k === "track" ? track : k === "level" ? level : `${folder}_board`));
+	const fills: Record<string, string> = { track, level, extension: `${folder}_board` };
+	const fill = (s: string) => s.replace(/\{\{(track|level|extension)\}\}/g, (_, k: string) => fills[k] as string);
 	return {
 		[`lua/ge/extensions/${folder}/board.lua`]: fill(scripts.board),
 		[`scripts/${level}/modScript.lua`]: fill(scripts.modScript),

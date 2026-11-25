@@ -38,13 +38,12 @@ export function placeSource(host: PlaceHost, project: string, folder: string): P
 		glob: async (pattern) => {
 			const cut = pattern.lastIndexOf("/");
 			const dir = cut < 0 ? "." : pattern.slice(0, cut);
-			const re = new RegExp(
-				`^${pattern
-					.slice(cut + 1)
-					.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-					.replace(/\*/g, "[^/]*")
-					.replace(/\?/g, ".")}$`,
-			);
+			const body = pattern
+				.slice(cut + 1)
+				.replaceAll(/[.+^${}()|[\]\\]/g, String.raw`\$&`)
+				.replaceAll("*", "[^/]*")
+				.replaceAll("?", ".");
+			const re = new RegExp(`^${body}$`);
 			if (!(await host.files.exists(at(dir)))) return [];
 			return (await host.files.list(at(dir)))
 				.filter((n) => re.test(n))
