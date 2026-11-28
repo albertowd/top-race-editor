@@ -6,7 +6,7 @@
 //
 // The numbers are written as the Python writes them: a float of the files by %g, an integer as it is.
 
-import type { Kx, MaterialLibrary } from "./gltf";
+import { type GltfDoc, groundByMaterial, type Kx, type MaterialLibrary } from "./gltf";
 import { byCodePoint } from "./order";
 import type { HostFiles } from "./placehost";
 import { dumpPyJson, type PyJson, PyNumber, plain, readPyJson } from "./pyjson";
@@ -310,12 +310,13 @@ export async function grassMeshes(files: HostFiles, models: string, library: Mat
 	for (const f of (await files.list(models)).filter((n) => n.endsWith(".glb")).sort(byCodePoint)) {
 		const b = await files.read(`${models}/${f}`);
 		const n = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(12, true);
-		const g = JSON.parse(new TextDecoder().decode(b.subarray(20, 20 + n))) as {
+		const g = JSON.parse(new TextDecoder().decode(b.subarray(20, 20 + n))) as GltfDoc & {
 			nodes?: { name: string; extras?: { track?: Kx } }[];
 		};
 		for (const node of g.nodes ?? []) {
 			const track = node.extras?.track ?? {};
-			if (track.grass && library.nodeIn) out.push(library.nodeIn(node.name, track, {})[0]);
+			// (named as the model's node is: its ground its material's)
+			if (track.grass && library.nodeIn) out.push(library.nodeIn(node.name, groundByMaterial({ doc: g, library }, node, track), {})[0]);
 		}
 	}
 	return out;

@@ -92,6 +92,10 @@ export function readLibrary(doc: LibraryDoc, surfaces: Surfaces = {}): MaterialL
 		put: () => {},
 		nodeOut: (name, x) => nodeOut(surfaces, name, x),
 		nodeIn: (name, track, x) => nodeIn(surfaces, name, track, x),
+		surfaceOf: (material) => {
+			const s = doc.materials?.[material]?.surface;
+			return typeof s === "string" && s in surfaces ? s : undefined;
+		},
 	};
 }
 

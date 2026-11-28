@@ -409,10 +409,11 @@ interface AcModels {
 	log: (line: string) => void;
 }
 
-/** What a build's models are made into the game with besides: the library's bytes and each picture's AC settings (for their signature), where their DDS are
- * kept, and how they are made. */
+/** What a build's models are made into the game with besides: the library's bytes, its grounds' (surfaces.json: AC's name prefixes) and each picture's AC
+ * settings (for their signature), where their DDS are kept, and how they are made. */
 interface AcMaking extends AcModels {
 	libBytes: Uint8Array;
+	surfBytes: Uint8Array;
 	acTextures: Record<string, TextureAc>;
 	cache: string;
 	ddsOf: (name: string, data: Uint8Array, textures: Record<string, TextureAc>) => Promise<Uint8Array>;
@@ -552,6 +553,7 @@ async function makeModel(m: AcMaking, stem: string, k: Kn5, state: Record<string
 	const sig = await digestOf([
 		await m.files.read(`${m.models}/${stem}.glb`),
 		m.libBytes,
+		m.surfBytes,
 		new TextEncoder().encode(JSON.stringify(m.placed[stem] ?? null)),
 		new TextEncoder().encode(JSON.stringify({ pool: POOL, slots: k.materials.map((x) => x.textures.map((s) => s.name)) })),
 		...k.textures.flatMap((t) => [new TextEncoder().encode(t.name), t.data]),
@@ -733,6 +735,9 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
 	const stateFile = `${project}/build/ac/models.editor.json`;
 	const state = await stateOf(files, stateFile, opts.everything);
 	const libBytes = await files.read(libFile);
+	// (the grounds name each mesh AC drives on: a change to them makes every model again)
+	const surfFile = `${project}/source/surfaces.json`;
+	const surfBytes = (await files.exists(surfFile)) ? await files.read(surfFile) : new Uint8Array(0);
 	const src: CatalogueSource = {
 		read: (f) => files.read(f),
 		exists: (f) => files.exists(f),
@@ -747,6 +752,7 @@ export async function buildAc(files: HostFiles, opts: AcBuildOptions): Promise<A
 	const making: AcMaking = {
 		...m,
 		libBytes,
+		surfBytes,
 		acTextures: rubberAsDds(loaded, textures),
 		cache: `${project}/build/cache/dds`,
 		ddsOf: opts.dds ?? ((name: string, data: Uint8Array, t: Record<string, TextureAc>) => acDds(name, data, t)),

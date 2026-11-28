@@ -238,6 +238,8 @@ export interface MaterialLibrary {
 	nodeOut?(name: string, x: Kx): [string, Kx, Kx];
 	/** a mesh as the tools have it, from how it is kept: AC's name and flags */
 	nodeIn?(name: string, track: Kx, x: Kx): [string, Kx];
+	/** the kind of ground a material is driven as (its surface in the library), if it has one */
+	surfaceOf?(material: string): string | undefined;
 }
 
 /** A kn5 material as a glTF one (its kn5 data in its extras; with a library, its name only, an editor's model's own its data with it too), and its kn5 data.
@@ -924,12 +926,28 @@ function meshNodes(c: GltfIn, g: GltfNode, name: string, x: Kx, local: number[])
 	return out;
 }
 
+/** What a mesh driven on is, its ground its material's where that has one (a rumble's paint, a road's tarmac: so a kerb's tarmac bed is asphalt), as every
+ * game drives it; its own where its materials have none, or differ. A wall's material is never a ground: a surface made of it keeps its own. */
+export function groundByMaterial(c: { doc: GltfDoc; library?: MaterialLibrary }, g: GltfNode, track: Kx): Kx {
+	const surfaceOf = c.library?.surfaceOf;
+	if (track.role !== "surface" || !surfaceOf || g.mesh === undefined) return track;
+	const grounds = new Set(
+		(c.doc.meshes?.[g.mesh]?.primitives ?? []).map((p) => {
+			const m = c.doc.materials?.[p.material ?? -1];
+			return m ? surfaceOf((m.name ?? "").replace(BLENDER_COPY, "")) : undefined;
+		}),
+	);
+	const [ground] = grounds;
+	return grounds.size === 1 && ground && ground !== "wall" && ground !== track.surface ? { ...track, surface: ground } : track;
+}
+
 /** A glTF node and those under it as kn5 nodes: a mesh's (with a dummy for the nodes under it), an empty mesh kept as a node, or a dummy. */
 function nodesIn(c: GltfIn, i: number): Kn5Node[] {
 	const g = c.doc.nodes?.[i] ?? {};
 	let name = (g.name ?? `node${i}`).replace(BLENDER_COPY, "");
 	let x = kn5Of(g);
-	const track = (g.extras as { track?: Kx } | undefined)?.track;
+	const own = (g.extras as { track?: Kx } | undefined)?.track;
+	const track = own && groundByMaterial(c, g, own);
 	// (AC's name and flags, from what the mesh is)
 	if (track && c.library?.nodeIn) [name, x] = c.library.nodeIn(name, track, x);
 	const local = nodeMatrix(g);
