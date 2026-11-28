@@ -45,6 +45,43 @@ describe("the roads’ surface made imperfect", () => {
 		expect(r(...towards(1.5))).toBeGreaterThan(inside);
 	});
 
+	it("leaves a bend’s inside as it is where a road built after it starts on its middle, with no step there", () => {
+		// (a road going out from the bend's middle, half way round, as a road running into another starts: under it there)
+		const mid: P2 = [15 * Math.sin(Math.PI / 4), 15 - 15 * Math.cos(Math.PI / 4)];
+		const away: P2 = [Math.SQRT1_2, -Math.SQRT1_2];
+		const out: RoadDesc = {
+			name: "O",
+			curve: [node(mid, [0, 0], [away[0] * 4, away[1] * 4]), node([mid[0] + away[0] * 20, mid[1] + away[1] * 20], [-away[0] * 4, -away[1] * 4], [0, 0])],
+		};
+		const alone = roughnessOf([bend], { camber: 30 }) as (x: number, z: number) => number;
+		const both = roughnessOf([bend, out], { camber: 30 }) as (x: number, z: number) => number;
+		// (round the bend 3 m in from its middle, across where the other road starts)
+		const inside: number[] = [];
+		for (let t = Math.PI / 4 - 0.15; t <= Math.PI / 4 + 0.15; t += 0.005) {
+			const [x, z]: P2 = [12 * Math.sin(t), 15 - 12 * Math.cos(t)];
+			expect(both(x, z)).toBeCloseTo(alone(x, z), 4);
+			inside.push(both(x, z));
+		}
+		expect(Math.min(...inside)).toBeLessThan(-0.01);
+		for (let i = 1; i < inside.length; i++) expect(Math.abs((inside[i] as number) - (inside[i - 1] as number))).toBeLessThan(0.001);
+	});
+
+	it("turns one road’s roughness into the next’s where they meet, never at once", () => {
+		// (a straight running into the bend's inside, square to it, half way round: the bend's inside down, the straight not)
+		const mid: P2 = [15 * Math.sin(Math.PI / 4), 15 - 15 * Math.cos(Math.PI / 4)];
+		const inward: P2 = [-Math.SQRT1_2, Math.SQRT1_2];
+		const start: P2 = [mid[0] + inward[0] * 12, mid[1] + inward[1] * 12];
+		const into: RoadDesc = {
+			name: "I",
+			curve: [node(start, [0, 0], [-inward[0] * 3, -inward[1] * 3]), node(mid, [inward[0] * 3, inward[1] * 3], [0, 0])],
+		};
+		const r = roughnessOf([bend, into], { camber: 30 }) as (x: number, z: number) => number;
+		const h = 0.1;
+		let most = 0;
+		for (let x = 0; x < 15; x += h) for (let z = 0; z < 15; z += h) most = Math.max(most, Math.abs(r(x + h, z) - r(x, z)), Math.abs(r(x, z + h) - r(x, z)));
+		expect(most).toBeLessThan(0.005);
+	});
+
 	it("is kept as the objects are written: its millimetres and its seed; out of range, refused", () => {
 		const base = { version: 3, layouts: {}, objects: [], marks: [] };
 		const out = JSON.parse(

@@ -1,10 +1,11 @@
 // The roads' surface made imperfect all over, as real asphalt is (objects.json's `surface`, millimetres): long waves (8 to 20 m), bumps (1.5 to 4 m) and a
 // ripple (a third to most of a metre: what makes a kart tremble), each noise in the world's own coordinates; and every bend lower on its inside, the tighter
 // the more, down to its inside edge. One function of where a point is (the same in every mesh at a point: no seam opens), full on the roads and easing to
-// nothing a metre past their edges and their free ends (the grass, the far ground as they are).
+// nothing a metre past their edges and their free ends (the grass, the far ground as they are). Where roads meet, a point takes each one's the more the further
+// in it it is, so the one turns into the other; a road's part under one built before it (as a road running into another lies under it) is not read.
 
 import type { SurfaceRoughness } from "../domain/types";
-import { fine, type RoadDesc } from "./roads";
+import { fine, priority, type RoadDesc } from "./roads";
 
 /** Ready-made levels (millimetres): none of it, a little, a used track's, an old one's. */
 export const ROUGH_LEVELS: Record<"light" | "medium" | "heavy", Required<Omit<SurfaceRoughness, "seed" | "map">>> = {
@@ -21,6 +22,9 @@ const BEND = 4;
 const TIGHT = 12;
 /** metres past a road's edge (and its free end) the roughness eases to nothing over */
 const EASE = 1;
+/** metres: a point so much further in one road than in another (from its edges) takes e (2.7) times as much of that one's roughness: where two roads meet,
+ * the one's turns into the other's over a metre or so, never at once */
+const SOFT = 0.5;
 /** metres a cell of the rows' index is */
 const CELL = 4;
 /** metres from a point of the roughness map it counts; how much it may scale the roughness, at least and at most */
@@ -85,8 +89,9 @@ function noise(x: number, z: number, metres: number, seed: number): number {
 }
 
 /** A road's rows as read: middle, its left (unit), its way (unit), its widths left and right, its bend (1/m, + turning left), whether it is a free end's (no
- * road going on from it). */
+ * road going on from it), its road's place in the order the roads are built in (priority's: the first over those after it). */
 interface Row {
+	road: number;
 	x: number;
 	z: number;
 	lx: number;
@@ -105,7 +110,7 @@ function endOf(k: number, last: number, joins: (string | null)[]): Row["end"] {
 	return k === last && !joins[1] ? 1 : 0;
 }
 
-function rowsOf(road: RoadDesc): Row[] {
+function rowsOf(road: RoadDesc, place: number): Row[] {
 	const f = fine(road);
 	const n = f.at.length;
 	if (n < 2) return [];
@@ -133,6 +138,7 @@ function rowsOf(road: RoadDesc): Row[] {
 		const ds = (f.at[b] as number) - (f.at[a] as number);
 		const t = way(i);
 		return {
+			road: place,
 			x: f.mx[i] as number,
 			z: f.mz[i] as number,
 			lx: f.lx[i] as number,
@@ -148,20 +154,52 @@ function rowsOf(road: RoadDesc): Row[] {
 	});
 }
 
-/** The nearest of the rows to (x, z) in the cells within three of its own (cells: the rows in each, by its key), or -1 for none. */
-function nearestRow(rows: Row[], cells: Map<string, number[]>, x: number, z: number): number {
+/** Where (x, z) is to a row: across it (+ to its left), its road's width on that side, how far out of its road (by its edge, its free end or the row: the
+ * rows beyond it cut away under another road, or the road going on into another; less than 0 inside it), how far past it (0 inside it). */
+function placed(r: Row, x: number, z: number): { o: number; w: number; out: number; past: number } {
+	const dx = x - r.x;
+	const dz = z - r.z;
+	const o = dx * r.lx + dz * r.lz;
+	const a = dx * r.tx + dz * r.tz;
+	const w = o >= 0 ? r.wl : r.wr;
+	const reach = r.end !== 0 && Math.sign(a) === r.end ? ROW : 2 * ROW;
+	const out = Math.max(Math.abs(o) - w, Math.abs(a) - reach);
+	return { o, w, out, past: Math.max(0, out) };
+}
+
+/** The rows in each cell, by its key. */
+function cellsOf(rows: Row[]): Map<string, number[]> {
+	const cells = new Map<string, number[]>();
+	rows.forEach((r, i) => {
+		const key = `${Math.floor(r.x / CELL)},${Math.floor(r.z / CELL)}`;
+		const l = cells.get(key);
+		if (l) l.push(i);
+		else cells.set(key, [i]);
+	});
+	return cells;
+}
+
+/** Each road's nearest row to (x, z) among the rows in the cells within three of its own (cells: the rows in each, by its key); of the roads built before
+ * place only, where given. */
+function nearestByRoad(rows: Row[], cells: Map<string, number[]>, x: number, z: number, before = Infinity): number[] {
 	const ci = Math.floor(x / CELL);
 	const cj = Math.floor(z / CELL);
-	let best = -1;
-	let bd = Infinity;
+	const nearest = new Map<number, [number, number]>();
 	for (let di = -3; di <= 3; di++)
 		for (let dj = -3; dj <= 3; dj++)
 			for (const i of cells.get(`${ci + di},${cj + dj}`) ?? []) {
 				const r = rows[i] as Row;
+				if (r.road >= before) continue;
 				const d = (r.x - x) ** 2 + (r.z - z) ** 2;
-				if (d < bd) [bd, best] = [d, i];
+				const n = nearest.get(r.road);
+				if (!n || d < n[1]) nearest.set(r.road, [i, d]);
 			}
-	return best;
+	return [...nearest.values()].map(([i]) => i);
+}
+
+/** Whether a row's middle is on a road built before its own (by that road's nearest row). */
+function onEarlier(rows: Row[], cells: Map<string, number[]>, row: Row): boolean {
+	return nearestByRoad(rows, cells, row.x, row.z, row.road).some((i) => placed(rows[i] as Row, row.x, row.z).past === 0);
 }
 
 /** The roughness of the roads described (run-offs left out: they go with their road), in metres at (x, z); null where the track has none. */
@@ -173,39 +211,42 @@ export function roughnessOf(roads: RoadDesc[], s: SurfaceRoughness | undefined):
 	if (!(waves || bumps || ripple || camber)) return null;
 	const seed = s?.seed ?? 1;
 	const rough = mapOf(s?.map);
-	const rows: Row[] = roads.filter((r) => !r.along).flatMap(rowsOf);
-	const cells = new Map<string, number[]>();
-	rows.forEach((r, i) => {
-		const key = `${Math.floor(r.x / CELL)},${Math.floor(r.z / CELL)}`;
-		const l = cells.get(key);
-		if (l) l.push(i);
-		else cells.set(key, [i]);
-	});
+	const order = priority(Object.fromEntries(roads.map((r) => [r.name, r])));
+	const read: Row[] = roads.filter((r) => !r.along).flatMap((r) => rowsOf(r, order.indexOf(r.name)));
+	// (a road's rows on a road built before it out: it is cut away under that one, as a road running into another is, and its bend is not the floor's there)
+	const readCells = cellsOf(read);
+	const rows = read.filter((r) => !onEarlier(read, readCells, r));
+	const cells = cellsOf(rows);
 	return (x, z) => {
-		// (the road under it: the nearest row within reach, and where across and along it the point is)
-		const best = nearestRow(rows, cells, x, z);
-		if (best < 0) return 0;
-		const r = rows[best] as Row;
-		const dx = x - r.x;
-		const dz = z - r.z;
-		const o = dx * r.lx + dz * r.lz;
-		const a = dx * r.tx + dz * r.tz;
-		const w = o >= 0 ? r.wl : r.wr;
-		const past = Math.max(0, Math.abs(o) - w, r.end !== 0 && Math.sign(a) === r.end ? Math.abs(a) - ROW : 0);
-		if (past >= EASE) return 0;
-		const mask = 1 - past / EASE;
+		// (the roads near it, each by its nearest row, the further in it the more it counts)
+		const near = nearestByRoad(rows, cells, x, z).flatMap((i) => {
+			const r = rows[i] as Row;
+			const p = placed(r, x, z);
+			return p.past < EASE ? [{ r, ...p }] : [];
+		});
+		if (!near.length) return 0;
+		const least = Math.min(...near.map((p) => p.out));
 		// (as rough here as the videos say: the bumps and ripple by it, the long waves by its square root)
 		const k = rough(x, z);
 		const n =
 			Math.sqrt(k) * waves * (noise(x, z, 14, seed) * 0.7 + noise(x, z, 7, seed + 1) * 0.3) +
 			k * bumps * (noise(x, z, 2.6, seed + 2) * 0.65 + noise(x, z, 1.4, seed + 3) * 0.35) +
 			k * ripple * (noise(x, z, 0.5, seed + 4) * 0.6 + noise(x, z, 0.27, seed + 5) * 0.4);
-		// (a bend's inside down: the tighter, the more, the more so the nearer its inside edge)
-		let down = 0;
-		if (camber && r.k !== 0 && Math.sign(o) === Math.sign(r.k)) {
-			const share = Math.min(1, Math.abs(o) / Math.max(w, 0.5));
-			down = camber * Math.min(1, Math.abs(r.k) * TIGHT) * share ** 1.3;
+		let sum = 0;
+		let weights = 0;
+		for (const { r, o, w, out, past } of near) {
+			const mask = 1 - past / EASE;
+			// (a bend's inside down: the tighter, the more, the more so the nearer its inside edge)
+			let down = 0;
+			if (camber && r.k !== 0 && Math.sign(o) === Math.sign(r.k)) {
+				const share = Math.min(1, Math.abs(o) / Math.max(w, 0.5));
+				down = camber * Math.min(1, Math.abs(r.k) * TIGHT) * share ** 1.3;
+			}
+			// (its share: the further in it, the more; none a metre past its edge)
+			const weight = Math.exp(-(out - least) / SOFT) * mask;
+			sum += weight * mask * (n - down);
+			weights += weight;
 		}
-		return mask * (n - down);
+		return weights > 0 ? sum / weights : 0;
 	};
 }
